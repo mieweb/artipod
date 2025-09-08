@@ -330,3 +330,33 @@ This guide provides high-level steps to bootstrap Artipod Artifact Studio on Pro
 
 This guide provides a foundation; refer to official Ceph and Proxmox documentation for detailed configurations and troubleshooting.
 
+---
+
+## Hardware Requirements by User Scale
+
+Based on the workload of 100k users uploading audio recordings at 8kb/s ulaw (e.g., ~1GB/user/month), here are scaled hardware recommendations. Assumptions: 10-20% peak concurrency, CephFS for storage, NVMe+HDD pools with EC. Costs are estimates for hardware only.
+
+### For 1,000 Users
+- **Total Storage:** ~10TB raw (effective ~7TB with EC); 1-2 nodes.
+- **Nodes:** 3 (1-2 storage, 1-2 compute).
+- **Per Node Specs:** 8-16 cores, 64GB RAM, 4x 4TB HDD + 1x 1TB NVMe, 10Gbps NIC.
+- **Network:** 10Gbps aggregate.
+- **Cost Estimate:** $10K-$20K.
+- **Notes:** Minimal setup; use 3 nodes for redundancy.
+
+### For 10,000 Users
+- **Total Storage:** ~100TB raw (effective ~70TB with EC); 5-10 nodes.
+- **Nodes:** 6-8 (4-6 storage, 2-3 compute).
+- **Per Node Specs:** 16-24 cores, 128GB RAM, 8x 8TB HDD + 2x 2TB NVMe, 25Gbps NIC.
+- **Network:** 25-50Gbps aggregate.
+- **Cost Estimate:** $50K-$100K.
+- **Notes:** Scale from 3 nodes; monitor for PG balancing.
+
+### For 100,000 Users
+- **Total Storage:** ~1.5-2PB raw (effective ~1PB with EC); 15-20 nodes.
+- **Nodes:** 20 (10-15 storage, 5-10 compute).
+- **Per Node Specs:** 16-32 cores, 128-256GB RAM, 8-12x 8-12TB HDD + 2-4x 1-2TB NVMe, 25-100Gbps NIC.
+- **Network:** 500Gbps+ aggregate.
+- **Cost Estimate:** $1M-$2M.
+- **Notes:** High concurrency; use erasure coding, redundant switches. Start with 3 nodes and expand.
+
