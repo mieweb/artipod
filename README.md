@@ -154,3 +154,6 @@ OSDs --> MonMgr[MON + MGR]
 ---
 
 **Artipod Artifact Studio** = a unified, secure, multi-tenant environment that feels like a personal studio for each tenant, but scales operationally like a cloud platform.
+
+https://chatgpt.com/share/68be9903-f71c-8004-9621-19505653bd68
+
