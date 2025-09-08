@@ -67,15 +67,13 @@ OSDs --> MonMgr[MON + MGR]
 
 ```mermaid
 graph TD
-AppServer[App Server Node] --> CephFSMount[CephFS Mount: /srv/cephfs]
-AppServer --> RBDMap[RBD Map: /mnt/rbd/t-XXX-db]
-CephFSMount --> CephFSMetadata[CephFS Metadata NVMe]
-CephFSMount --> CephFSDataPools[CephFS Data Pools NVMe + HDD EC]
-RBDMap --> RBDPool[RBD Pool NVMe]
-CephFSMetadata --> OSDs[Ceph Cluster OSDs]
-CephFSDataPools --> OSDs
-RBDPool --> OSDs
-OSDs --> MonMgr[MON + MGR]
+  user_request[User Request] --> load_balancer[Load Balancer]
+  load_balancer --> app_server[App Server]
+  app_server --> node_console_manager[Node Console Manager]
+  node_console_manager --> gocryptfs_mount[gocryptfs Mount]
+  node_console_manager --> rbd_map_mount[RBD Map + Mount]
+  node_console_manager --> docker_run[Docker Run]
+  docker_run --> interactive_shell[Interactive Shell]
 ```
 
 ---
