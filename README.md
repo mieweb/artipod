@@ -10,6 +10,7 @@ Artipod Artifact Studio is designed to provide a **GitHub-like multi-tenant arti
 * **Tenant isolation** with encryption and per-request bind-mounts.
 * **Virtualized interactive consoles** via Docker containers per tenant, presenting a secure command-line experience.
 * **Blob storage** (images, videos, binaries, Git-LFS) backed by Ceph RGW (S3 API).
+* **DuckDB RDB** for fast serverless database performance. 
 * **Balanced performance tiers** through CephFS multiple data pools and RBD NVMe pool.
 
 This approach balances operational simplicity (single CephFS for most tenants) with targeted performance isolation (RBD for DuckDB databases). It minimizes latency by avoiding per-request network mounts and secures tenants with encryption, namespaces, and cephx path-scoped caps.
