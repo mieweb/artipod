@@ -13,6 +13,8 @@ export default function Terminal({ onCommand }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const commandRef = useRef('');
+  const historyRef = useRef<string[]>([]);
+  const historyIndexRef = useRef<number>(0);
 
   useEffect(() => {
     if (!terminalRef.current || xtermRef.current) return;
@@ -60,12 +62,53 @@ export default function Terminal({ onCommand }: TerminalProps) {
     term.onData(async (data) => {
       const code = data.charCodeAt(0);
 
+      // Handle Arrow Keys for History
+      if (data === '\x1b[A') { // Up Arrow
+        if (historyIndexRef.current > 0) {
+          // Clear current line
+          while (commandRef.current.length > 0) {
+            term.write('\b \b');
+            commandRef.current = commandRef.current.slice(0, -1);
+          }
+          
+          historyIndexRef.current--;
+          const prevCmd = historyRef.current[historyIndexRef.current];
+          term.write(prevCmd);
+          commandRef.current = prevCmd;
+        }
+        return;
+      }
+
+      if (data === '\x1b[B') { // Down Arrow
+        if (historyIndexRef.current < historyRef.current.length) {
+          // Clear current line
+          while (commandRef.current.length > 0) {
+            term.write('\b \b');
+            commandRef.current = commandRef.current.slice(0, -1);
+          }
+          
+          historyIndexRef.current++;
+          if (historyIndexRef.current === historyRef.current.length) {
+            commandRef.current = '';
+          } else {
+            const nextCmd = historyRef.current[historyIndexRef.current];
+            term.write(nextCmd);
+            commandRef.current = nextCmd;
+          }
+        }
+        return;
+      }
+
       if (code === 13) { // Enter
         term.write('\r\n');
         const cmd = commandRef.current;
         commandRef.current = '';
         
         if (cmd.trim()) {
+          // Add to history
+          historyRef.current.push(cmd);
+          historyIndexRef.current = historyRef.current.length;
+
           const output = await onCommand(cmd);
           if (output) {
             // Handle newlines properly for xterm

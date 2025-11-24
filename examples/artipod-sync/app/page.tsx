@@ -5,6 +5,8 @@ import dynamicImport from 'next/dynamic';
 import { initFileSystem } from '@/lib/filesystem';
 import { Shell } from '@/lib/shell';
 import Editor from '@/components/Editor';
+import FileTree from '@/components/FileTree';
+import { Terminal as LucideTerminal, FolderTree, FileCode } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
 const Terminal = dynamicImport(() => import('@/components/Terminal'), {
@@ -13,9 +15,12 @@ const Terminal = dynamicImport(() => import('@/components/Terminal'), {
 
 export const dynamic = 'force-dynamic';
 
+type ViewMode = 'terminal' | 'tree' | 'editor';
+
 export default function Home() {
   const [fsReady, setFsReady] = useState(false);
   const [editingFile, setEditingFile] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<ViewMode>('terminal');
   const shellRef = useRef<Shell | null>(null);
 
   useEffect(() => {
@@ -23,6 +28,7 @@ export default function Home() {
       setFsReady(true);
       shellRef.current = new Shell((path) => {
         setEditingFile(path);
+        setActiveView('editor');
       });
     });
   }, []);
@@ -32,22 +38,96 @@ export default function Home() {
     return await shellRef.current.execute(cmd);
   };
 
+  const handleFileSelect = (path: string) => {
+    setEditingFile(path);
+    setActiveView('editor');
+  };
+
+  const handleCloseEditor = () => {
+    setEditingFile(null);
+    setActiveView('terminal');
+  };
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-4 bg-black">
-      <div className="w-full h-[90vh] border border-gray-700 rounded overflow-hidden">
-        {fsReady ? (
-          <Terminal onCommand={handleCommand} />
-        ) : (
-          <div className="text-white p-4">Initializing FileSystem...</div>
+    <main className="flex h-screen flex-col bg-black text-white overflow-hidden">
+      {/* Navigation Bar */}
+      <div className="flex items-center bg-[#2d2d2d] border-b border-gray-700 px-2">
+        <button
+          onClick={() => setActiveView('terminal')}
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            activeView === 'terminal' 
+              ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500' 
+              : 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
+          }`}
+        >
+          <LucideTerminal size={16} />
+          Terminal
+        </button>
+        <button
+          onClick={() => setActiveView('tree')}
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            activeView === 'tree' 
+              ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500' 
+              : 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
+          }`}
+        >
+          <FolderTree size={16} />
+          File Tree
+        </button>
+        <button
+          onClick={() => setActiveView('editor')}
+          disabled={!editingFile}
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            activeView === 'editor' 
+              ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500' 
+              : editingFile 
+                ? 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
+                : 'text-gray-600 cursor-not-allowed'
+          }`}
+        >
+          <FileCode size={16} />
+          Editor {editingFile ? `(${editingFile.split('/').pop()})` : ''}
+        </button>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 relative overflow-hidden bg-[#1e1e1e]">
+        {!fsReady && (
+          <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+            Initializing FileSystem...
+          </div>
+        )}
+
+        {/* Terminal View - Always mounted to preserve state */}
+        <div 
+          className={`absolute inset-0 ${activeView === 'terminal' ? 'z-10' : 'z-0 invisible'}`}
+        >
+          {fsReady && <Terminal onCommand={handleCommand} />}
+        </div>
+
+        {/* File Tree View */}
+        {activeView === 'tree' && (
+          <div className="absolute inset-0 z-10">
+            <FileTree onSelectFile={handleFileSelect} />
+          </div>
+        )}
+
+        {/* Editor View */}
+        {activeView === 'editor' && editingFile && (
+          <div className="absolute inset-0 z-10">
+            <Editor 
+              filepath={editingFile} 
+              onClose={handleCloseEditor} 
+            />
+          </div>
+        )}
+        
+        {activeView === 'editor' && !editingFile && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center text-gray-500">
+            No file open. Select a file from the File Tree or use 'edit' command.
+          </div>
         )}
       </div>
-      
-      {editingFile && (
-        <Editor 
-          filepath={editingFile} 
-          onClose={() => setEditingFile(null)} 
-        />
-      )}
     </main>
   );
 }
