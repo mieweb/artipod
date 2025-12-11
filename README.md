@@ -1,362 +1,302 @@
-# Artipod Artifact Studio — Architecture & Implementation Guide
+# ArtiPod
 
----
+A TypeScript library for managing AI-aware file storage with secure container execution. ArtiPod provides filesystem abstraction through mounts and isolated command execution via Docker containers.
 
-## Executive Summary
+## Overview
 
-Artipod Artifact Studio is designed to provide a **GitHub-like multi-tenant artifact and repo environment** with:
+**ArtiPod** is a top-level container that aggregates multiple **ArtiMounts**, providing a unified interface for managing project files and generating AI context prompts.
 
-* **Hyperconverged Ceph storage** (NVMe + HDD) powering both POSIX (CephFS) and block (RBD) backends.
-* **Tenant isolation** with encryption and per-request bind-mounts.
-* **Virtualized interactive consoles** via Docker containers per tenant, presenting a secure command-line experience.
-* **Blob storage** (images, videos, binaries, recordings, Git-LFS) backed by CephFS subtrees.
-* **[DuckDB RDB](https://www.youtube.com/shorts/LVAA2tw1hms)** for fast serverless database performance. 
-* **Balanced performance tiers** through CephFS multiple data pools and RBD NVMe pool.
+**ArtiMount** is a named storage component representing a filesystem directory with operations for reading, writing, and listing files.
 
-This approach balances operational simplicity (single CephFS for most tenants) with targeted performance isolation (RBD for DuckDB databases). It minimizes latency by avoiding per-request network mounts and secures tenants with encryption, namespaces, and cephx path-scoped caps.
+## Features
 
----
+### Filesystem Management
+- **Multiple Mounts**: Aggregate multiple filesystem directories under a single pod
+- **File Operations**: Read, write, and list files with path safety validation
+- **README Integration**: Automatically extract README content from mounts
+- **Line-based Reading**: Read specific line ranges from files
+- **Directory Listings**: List files with sizes and directory structures
 
-## What is an Artipod?
+### AI Context Generation
+- **Prompt Building**: Generate XML-formatted prompts from all mounts in the pod
+- **README Aggregation**: Collect README files from all mounts
+- **File Trees**: Format file listings as hierarchical trees with size information
+- **Smart Truncation**: Intelligently truncate large directories and limit file counts
+- **Size Limiting**: Optional max size truncation and per-mount file count limits
 
-An **Artipod** is a secure, isolated filesystem-like environment tailored for each tenant (or conversation). It serves as a unified workspace encompassing:
+## Installation
 
-* **Git Repositories:** Version-controlled code and artifacts.
-* **DuckDB Databases:** Fast, serverless relational databases for data processing.
-* **Images, Recordings, Videos, Binaries:** Blob storage for multimedia and executable files, stored in CephFS subtrees.
-* **Git-LFS Objects:** Large file storage integrated with Git.
-
-Each Artipod ensures process isolation, allowing tenants to operate within their dedicated space without interference. Processes running in an Artipod are confined to that tenant's resources, with encryption (via gocryptfs) protecting data at rest and bind-mounts providing secure access.
-
-While owned by a specific tenant, an Artipod can be shared with other tenants by securely distributing the encryption keys. Additionally, if the GUID of an Artipod is known, it can be shared publicly or locked down to only named groups for flexible access control.
-
----
-
-## Multi-Tenant Underlay Design
-
-```mermaid
-graph TD
-AppServer[App Server Node] --> CephFSMount[CephFS Mount: /srv/cephfs]
-AppServer --> RBDMap[RBD Map: /mnt/rbd/t-XXX-db]
-CephFSMount --> CephFSMetadata[CephFS Metadata NVMe]
-CephFSMount --> CephFSDataPools[CephFS Data Pools NVMe + HDD EC]
-RBDMap --> RBDPool[RBD Pool NVMe]
-CephFSMetadata --> OSDs[Ceph Cluster OSDs]
-CephFSDataPools --> OSDs
-RBDPool --> OSDs
-OSDs --> MonMgr[MON + MGR]
+```bash
+npm install artipod
 ```
 
-**Layers:**
+## Usage
 
-* **CephFS:** shared filesystem for repos, worktrees, artifacts, and blobs (images, videos, binaries, recordings, Git-LFS).
-* **RBD:** per-tenant block volumes for DuckDB databases.
-* **Pools:** NVMe for metadata + hot data, HDD EC for warm storage.
+### Basic ArtiMount Operations
 
-**Why:**
+```typescript
+import { ArtiMount } from 'artipod';
 
-* Single FS simplifies ops & namespace for repos and blobs.
-* Multiple data pools enable cost/performance balance.
-* RBD volumes isolate database fsync-heavy workloads.
+// Create a mount
+const mount = new ArtiMount('my-project', '/path/to/project');
+await mount.initialize();
 
----
+// Read a file
+const content = await mount.read('src/index.ts');
 
-## Tenant Virtual Experience
+// Read specific lines
+const lines = await mount.read('config.json', 1, 10);
 
-### In-App
+// Write a file
+await mount.write('output.txt', 'Hello, World!');
 
-* Tenants see only their repos, blobs, and DB.
-* Transparent tiering: hot repos fast, cold repos may restore with a slight delay.
-* Recordings and large files stored directly in CephFS subtrees.
+// Create a folder
+await mount.createFolder('new-directory');
 
-### In Docker Console
+// List all files
+const files = await mount.list();
+// Returns: [{ path: 'src/index.ts', size: 1234 }, ...]
 
-* Tenant runs in a container with:
-
-  * `/workspace/repos` → their CephFS subtree.
-  * `/workspace/db` → their RBD volume (mounted as ext4/xfs).
-* Container is hardened: non-root user, read-only rootfs, tmpfs scratch, no extra caps.
-* Optional gocryptfs decryption ensures the tenant’s plaintext is visible only inside their container.
-
-```mermaid
-graph TD
-  user_request[User Request] --> load_balancer[Load Balancer]
-  load_balancer --> app_server[App Server]
-  app_server --> node_console_manager[Node Console Manager]
-  node_console_manager --> gocryptfs_mount[gocryptfs Mount]
-  node_console_manager --> rbd_map_mount[RBD Map + Mount]
-  node_console_manager --> docker_run[Docker Run]
-  docker_run --> interactive_shell[Interactive Shell]
+// Get README contents
+const readmes = await mount.getReadmeContents();
 ```
 
----
+### ArtiPod - Aggregating Mounts
 
-## Encryption Spec
+```typescript
+import { ArtiPod, ArtiMount } from 'artipod';
 
-* **At-rest:** gocryptfs encrypts tenant repos under `/srv/cephfs/tenants/t-XXX.enc`.
-* **At-host:** decrypted view (`/run/tenants/t-XXX.plain`) mounted only for active sessions.
-* **Keys:** per-tenant, stored in Vault/KMS, short-lived tokens at runtime.
-* **Isolation:** cephx caps scoped to tenant paths; containers bind-mount only their decrypted folder.
-**Why:** ensures CephFS underlay and cluster operators see only ciphertext; only app servers with tenant keys can present plaintext.
+// Create mounts
+const docs = new ArtiMount('docs', '/path/to/docs');
+const src = new ArtiMount('src', '/path/to/src');
 
----
+// Create pod with mounts
+const pod = new ArtiPod([docs, src]);
 
-## Appendix — Technical Links
+// Or add mounts later
+const pod2 = new ArtiPod();
+pod2.addMount(docs);
+pod2.addMount(src);
 
-* **CephFS Multi-MDS:** [https://docs.ceph.com/en/latest/cephfs/](https://docs.ceph.com/en/latest/cephfs/)
-* **RBD Overview:** [https://docs.ceph.com/en/latest/rbd/](https://docs.ceph.com/en/latest/rbd/)
-* **gocryptfs:** [https://github.com/rfjakob/gocryptfs](https://github.com/rfjakob/gocryptfs)
-* **Docker Security:** [https://docs.docker.com/engine/security/](https://docs.docker.com/engine/security/)
-* **Git-LFS:** [https://git-lfs.github.com/](https://git-lfs.github.com/)
+// Build AI context prompt from all mounts in the pod
+const prompt = await pod.buildPrompt({
+  maxSize: 50000,                 // Optional: max characters
+  includeFiles: true,             // Optional: include file listings
+  maxFilesPerMount: 100           // Optional: max files per mount
+});
 
----
+// Result is XML-formatted:
+// <context>
+// <dataSource>
+// <name>docs</name>
+// <readme>
+// ... README content ...
+// </readme>
+// <files>
+// README.md (2.3 KB)
+// guide.md (5.1 KB)
+// examples/
+//   example1.md (1.2 KB)
+//   ...
+// </files>
+// </dataSource>
+// ...
+// </context>
+```
 
-## Diary of Design Considerations
+### Container Execution
 
-### Initial Scaling Concerns
+ArtiPod provides secure, isolated Docker container execution with per-pod configuration:
 
-* Q: Can one Ceph cluster handle hundreds of thousands of users?
-* A: Yes, but avoid pool-per-tenant. Use shared pools + quotas; RGW scales with sharded bucket indexes.
+```typescript
+import { ArtiPod, ArtiMount } from 'artipod';
 
-### File System vs Block Storage
+// Create pod with mounts
+const docs = new ArtiMount('docs', '/path/to/docs');
+const src = new ArtiMount('src', '/path/to/src');
+const pod = new ArtiPod([docs, src]);
 
-* CephFS: good for repos (many small files) but fsyncs jittery.
-* RBD: better for DuckDB (database file with heavy fsync).
-* Decision: CephFS for repos, RBD for DuckDB → **best of both worlds**.
+// Basic usage - just specify Dockerfile, use all defaults
+await pod.startContainer('/path/to/Dockerfile');
 
-### Tenant Isolation
+// Execute commands
+const result = await pod.executeCommand('ls -la /context');
+console.log(result.stdout);
+console.log(result.exitCode);
 
-* Wanted tenants to only see their subtree.
-* Solutions explored: cephx path caps, NFS Ganesha exports, mount namespaces.
-* Decision: single host CephFS mount + per-tenant bind-mount + chroot/pivot → instant, safe isolation.
+// Stop container
+await pod.stopContainer();
+```
 
-### On-Demand vs Persistent Mounts
+**Advanced usage** - Override defaults with custom options:
 
-* Mount/unmount CephFS per request too slow.
-* Decision: single persistent host mount, instant bind mounts for requests.
+```typescript
+// Start container with custom configuration
+await pod.startContainer('/path/to/Dockerfile', {
+  seccompProfilePath: '/path/to/seccomp.json',  // Optional syscall filtering
+  labels: { project: 'myproject', env: 'prod' }, // Custom container labels
+  enableNetwork: true,                           // Enable network access
+  commandTimeout: 60000,                         // 60 second timeout
+  memory: 1024 * 1024 * 1024,                   // 1GB memory limit
+  memorySwap: 1024 * 1024 * 1024,               // 1GB memory+swap (no swap)
+  nanoCpus: 2000000000,                          // 2 CPU cores
+  pidsLimit: 200,                                // Max 200 processes
+  tmpfs: {                                       // Custom tmpfs mounts
+    '/tmp': 'rw,noexec,nosuid,size=200m',
+    '/var/tmp': 'rw,noexec,nosuid,size=200m',
+  },
+});
 
-### Encryption
+// Check container status
+if (pod.hasContainer()) {
+  console.log('Container ID:', pod.getContainerId());
+}
+```
 
-* Goal: ensure underlay cannot read tenant data.
-* Explored: fscrypt, eCryptfs, gocryptfs, CryFS.
-* Decision: **gocryptfs** → fast, filename encryption, supports hardlinks (needed by Git).
+### Application-Level Container Management
 
-### Tenant Console UX
+Applications can discover and clean up containers using utility functions:
 
-* Requirement: give users a CLI-like experience.
-* Explored: direct host access vs container.
-* Decision: Docker containers, hardened (non-root, seccomp, no caps), bind mounts for repos + DB.
+```typescript
+import { findAllContainers, removeContainer } from 'artipod';
 
-### Blob Storage
+// Find all artipod-managed containers
+const containers = await findAllContainers();
 
-* Git-LFS, images, media files, recordings don’t belong in CephFS repos but can be stored in CephFS subtrees.
-* Decision: Store blobs directly in CephFS for simplicity, with tiering to cold pools.
+// Find containers with specific labels
+const projectContainers = await findAllContainers({ project: 'myproject' });
 
-### Why This Hybrid Design?
+// Clean up a specific container
+for (const container of containers) {
+  const info = await container.inspect();
+  console.log('Found container:', info.Id);
+  
+  // Remove if orphaned or no longer needed
+  await removeContainer(container);
+}
+```
 
-* Single CephFS for operational simplicity & repo semantics, including blobs.
-* RBD for performance-sensitive databases.
-* Encryption to enforce zero-knowledge underlay.
-
----
-
-**Artipod Artifact Studio** = a unified, secure, multi-tenant environment that feels like a personal studio for each tenant, but scales operationally like a cloud platform.
-
-https://chatgpt.com/share/68be9903-f71c-8004-9621-19505653bd68
-
----
-
-## Proxmox Implementation Guide
-
-This guide provides high-level steps to bootstrap Artipod Artifact Studio on Proxmox, integrating CephFS, RBD, gocryptfs, and Docker. It starts with a 3-node setup and outlines scaling to 20 nodes.
+## Development
 
 ### Prerequisites
-- 3+ servers with Proxmox VE compatible hardware (NVMe for OSDs, HDD for storage).
-- Network configured for cluster communication.
-- SSH access to all nodes.
 
-### Step 1: Install Proxmox VE on 3 Nodes
-1. Download the latest Proxmox VE ISO from [proxmox.com](https://www.proxmox.com/en/downloads).
-2. Boot each server from the ISO and follow the installation wizard.
-   - Set hostname (e.g., proxmox01, proxmox02, proxmox03).
-   - Configure network interfaces.
-   - Install to local disk.
-3. After installation, update the system:
-   ```
-   apt update && apt upgrade -y
-   ```
-4. Repeat for all 3 nodes.
+- Node.js >= 18.0.0
+- Docker Desktop or Docker Engine (for container features)
 
-### Step 2: Create Proxmox Cluster
-1. On the first node (proxmox01):
-   ```
-   pvecm create artipod-cluster
-   ```
-2. On the second and third nodes:
-   ```
-   pvecm add <IP_of_proxmox01>
-   ```
-   - Follow prompts to join the cluster.
-3. Verify cluster status:
-   ```
-   pvecm status
-   ```
+### Install Dependencies
 
-### Step 3: Install and Configure Ceph
-1. On each node, install Ceph:
-   ```
-   apt install cephadm -y
-   ```
-2. On proxmox01, bootstrap the Ceph cluster:
-   ```
-   cephadm bootstrap --mon-ip <IP_of_proxmox01>
-   ```
-   - This creates the initial monitor and manager.
-3. Add the other nodes to Ceph:
-   ```
-   ceph orch host add proxmox02 <IP_of_proxmox02>
-   ceph orch host add proxmox03 <IP_of_proxmox03>
-   ```
-4. Add OSDs (assuming disks are available):
-   ```
-   ceph orch daemon add osd <host>:<device>
-   ```
-   - Repeat for NVMe and HDD devices across nodes.
+```bash
+npm install
+```
 
-### Step 4: Configure Ceph Pools and Services
-1. Create pools for CephFS:
-   ```
-   ceph osd pool create cephfs_meta 32
-   ceph osd pool create cephfs_data 128
-   ```
-2. Create CephFS filesystem:
-   ```
-   ceph fs new artipod_fs cephfs_meta cephfs_data
-   ```
-3. Create RBD pool:
-   ```
-   ceph osd pool create rbd 128
-   rbd pool init rbd
-   ```
+### Build
 
-### Step 5: Mount CephFS and Set Up Encryption with gocryptfs
-1. On each app server node, install gocryptfs:
-   ```
-   apt install gocryptfs -y
-   ```
-2. Mount CephFS persistently:
-   ```
-   echo "<mon_ips>:/ /srv/cephfs ceph name=admin,secret=<ceph_key> 0 0" >> /etc/fstab
-   mount /srv/cephfs
-   ```
-3. For each tenant (e.g., t-001), create encrypted directory:
-   ```
-   mkdir /srv/cephfs/tenants/t-001.enc
-   gocryptfs -init /srv/cephfs/tenants/t-001.enc
-   ```
-   - Store the master key securely (e.g., in Vault).
-4. Mount decrypted view on-demand:
-   ```
-   gocryptfs /srv/cephfs/tenants/t-001.enc /run/tenants/t-001.plain
-   ```
+```bash
+npm run build
+```
 
-### Step 6: Install and Configure Docker
-1. On app server nodes, install Docker:
-   ```
-   apt install docker.io -y
-   systemctl enable docker
-   systemctl start docker
-   ```
-2. Pull base images for tenant consoles:
-   ```
-   docker pull ubuntu:20.04
-   ```
-3. Run a sample tenant container:
-   ```
-   docker run -it --rm \
-     --mount type=bind,source=/run/tenants/t-001.plain,target=/workspace/repos \
-     --mount type=bind,source=/mnt/rbd/t-001-db,target=/workspace/db \
-     --user 1000:1000 \
-     --cap-drop ALL \
-     ubuntu:20.04 /bin/bash
-   ```
-   - Adjust mounts for RBD (see below).
+### Test
 
-### Step 7: Configure RBD Volumes for Databases
-1. Create RBD image for a tenant DB:
-   ```
-   rbd create --size 10G rbd/t-001-db
-   ```
-2. Map and format on the host:
-   ```
-   rbd map rbd/t-001-db
-   mkfs.ext4 /dev/rbd/rbd/t-001-db
-   mount /dev/rbd/rbd/t-001-db /mnt/rbd/t-001-db
-   ```
-3. Bind-mount into Docker containers as needed.
+```bash
+npm test
+npm run test:watch
+npm run test:coverage
+```
 
-### Scaling to 20 Nodes
-1. **Add Proxmox Nodes:**
-   - Install Proxmox on new servers (nodes 4-20).
-   - Join them to the cluster:
-     ```
-     pvecm add <IP_of_existing_node>
-     ```
+### Lint
 
-2. **Expand Ceph Cluster:**
-   - Add new hosts:
-     ```
-     ceph orch host add proxmox04 <IP_of_proxmox04>
-     ```
-   - Add OSDs from new nodes:
-     ```
-     ceph orch daemon add osd proxmox04:<device>
-     ```
-   - Increase pool PGs if needed:
-     ```
-     ceph osd pool set cephfs_data pg_num 256
-     ```
+```bash
+npm run lint
+npm run lint:fix
+```
 
-3. **Balance Load:**
-   - Ensure monitors and managers are distributed.
+## Examples
 
-4. **Update Mounts and Encryption:**
-   - Ensure new app server nodes have CephFS mounts and gocryptfs set up.
-   - Distribute tenant keys securely.
+A full-stack web demo is available in `examples/web-demo/` showcasing:
+- Filesystem management UI
+- Pod and mount creation
+- File browsing and editing
+- Container management
+- Interactive command execution
 
-5. **Monitor and Optimize:**
-   - Use Ceph dashboard: `ceph mgr module enable dashboard`
-   - Monitor performance and adjust CRUSH rules for data placement.
+See [examples/web-demo/README.md](examples/web-demo/README.md) for setup instructions.
 
-This guide provides a foundation; refer to official Ceph and Proxmox documentation for detailed configurations and troubleshooting.
+## Security
 
----
+ArtiPod containers are hardened with multiple security layers:
 
-## Hardware Requirements by User Scale
+- **Seccomp Profile**: Allowlist-based syscall filtering (optional, see `container/seccomp-profiles/`)
+- **Read-only Filesystem**: Root filesystem is read-only
+- **Resource Limits**: Configurable CPU, Memory, and PID limits (defaults: 1 core, 512MB, 100 PIDs)
+- **Network Isolation**: No network access by default
+- **Unprivileged User**: Runs as non-root `artipod` user
+- **No Capabilities**: All Linux capabilities dropped
+- **IPC Isolation**: Private IPC namespace
+- **Tmpfs Configuration**: Configurable tmpfs mounts for writable directories
 
-Based on the workload of 100k users uploading audio recordings at 8kb/s ulaw (e.g., ~1GB/user/month), here are scaled hardware recommendations. Assumptions: 10-20% peak concurrency, CephFS for storage, NVMe+HDD pools with EC. Costs are estimates for hardware only.
+Blocked syscalls include: kernel module loading, system reboot, filesystem mounting, hardware access, and more. See [container/seccomp-profiles/README.md](container/seccomp-profiles/README.md) for details.
 
-### For 1,000 Users
-- **Total Storage:** ~10TB raw (effective ~7TB with EC); 1-2 nodes.
-- **Nodes:** 3 (1-2 storage, 1-2 compute).
-- **Per Node Specs:** 8-16 cores, 64GB RAM, 4x 4TB HDD + 1x 1TB NVMe, 10Gbps NIC.
-- **Network:** 10Gbps aggregate.
-- **Cost Estimate:** $10K-$20K.
-- **Notes:** Minimal setup; use 3 nodes for redundancy.
+Each pod can use a different Dockerfile and seccomp profile, allowing per-pod customization of the execution environment.
 
-### For 10,000 Users
-- **Total Storage:** ~100TB raw (effective ~70TB with EC); 5-10 nodes.
-- **Nodes:** 6-8 (4-6 storage, 2-3 compute).
-- **Per Node Specs:** 16-24 cores, 128GB RAM, 8x 8TB HDD + 2x 2TB NVMe, 25Gbps NIC.
-- **Network:** 25-50Gbps aggregate.
-- **Cost Estimate:** $50K-$100K.
-- **Notes:** Scale from 3 nodes; monitor for PG balancing.
+## API Reference
 
-### For 100,000 Users
-- **Total Storage:** ~1.5-2PB raw (effective ~1PB with EC); 15-20 nodes.
-- **Nodes:** 20 (10-15 storage, 5-10 compute).
-- **Per Node Specs:** 16-32 cores, 128-256GB RAM, 8-12x 8-12TB HDD + 2-4x 1-2TB NVMe, 25-100Gbps NIC.
-- **Network:** 500Gbps+ aggregate.
-- **Cost Estimate:** $1M-$2M.
-- **Notes:** High concurrency; use erasure coding, redundant switches. Start with 3 nodes and expand.
+### ArtiMount
 
+- `constructor(name: string, rootPath: string)`
+- `initialize(): Promise<void>` - Verify mount exists
+- `getName(): string` - Get mount name
+- `getRootPath(): string` - Get mount root path
+- `read(path: string, startLine?: number, endLine?: number): Promise<string>` - Read file
+- `write(path: string, content: string | Buffer): Promise<void>` - Write file
+- `createFolder(path: string): Promise<void>` - Create directory
+- `list(path?: string): Promise<FileInfo[]>` - List files
+- `listWithDirectories(path?: string): Promise<EntryInfo[]>` - List files and directories
+- `getReadmeContents(): Promise<string[]>` - Get README files
+
+### ArtiPod
+
+- `constructor(mounts?: ArtiMount[])`
+- `addMount(mount: ArtiMount): void` - Add mount to pod
+- `removeMount(name: string): boolean` - Remove mount
+- `getMount(name: string): ArtiMount | undefined` - Get mount by name
+- `getMounts(): ArtiMount[]` - Get all mounts
+- `getMountNames(): string[]` - Get mount names
+- `buildPrompt(options?: BuildPromptOptions): Promise<string>` - Generate AI context
+- `startContainer(dockerfilePath: string, options?: ContainerOptions): Promise<ContainerHandle>` - Start sandboxed container
+- `stopContainer(): Promise<void>` - Stop and remove container
+- `executeCommand(command: string): Promise<CommandResult>` - Execute bash command in container
+- `hasContainer(): boolean` - Check if container is running
+- `getContainerId(): string | undefined` - Get container ID
+
+### Container Utilities
+
+- `findAllContainers(labelFilters?: Record<string, string>, labelPrefix?: string): Promise<ContainerHandle[]>` - Find all artipod-managed containers
+- `removeContainer(container: ContainerHandle): Promise<void>` - Stop and remove a container
+
+### Types
+
+```typescript
+interface ContainerOptions {
+  seccompProfilePath?: string;     // Path to seccomp profile
+  enableNetwork?: boolean;          // Enable network (default: false)
+  commandTimeout?: number;          // Timeout in ms (default: 30000)
+  labelPrefix?: string;             // Label prefix (default: 'artipod')
+  labels?: Record<string, string>;  // Custom container labels
+  memory?: number;                  // Memory limit in bytes (default: 512MB)
+  memorySwap?: number;              // Memory+swap limit (default: same as memory)
+  nanoCpus?: number;                // CPU limit in nano CPUs (default: 1e9)
+  pidsLimit?: number;               // Max processes (default: 100)
+  tmpfs?: Record<string, string>;   // Tmpfs mounts (default: /tmp and /var/tmp)
+}
+
+interface CommandResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  modifiedFiles?: string[];
+}
+```
+
+## License
+
+MIT
