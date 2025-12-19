@@ -27,7 +27,7 @@ A TypeScript library for managing AI-aware file storage with secure container ex
 ## Installation
 
 ```bash
-npm install artipod
+npm install @mieweb/artipod
 ```
 
 ## Usage
@@ -35,7 +35,7 @@ npm install artipod
 ### Basic ArtiMount Operations
 
 ```typescript
-import { ArtiMount } from 'artipod';
+import { ArtiMount } from '@mieweb/artipod';
 
 // Create a mount
 const mount = new ArtiMount('my-project', '/path/to/project');
@@ -109,7 +109,7 @@ const prompt = await pod.buildPrompt({
 ArtiPod provides secure, isolated Docker container execution with per-pod configuration:
 
 ```typescript
-import { ArtiPod, ArtiMount } from 'artipod';
+import { ArtiPod, ArtiMount } from '@mieweb/artipod';
 
 // Create pod with mounts
 const docs = new ArtiMount('docs', '/path/to/docs');
@@ -158,7 +158,7 @@ if (pod.hasContainer()) {
 Applications can discover and clean up containers using utility functions:
 
 ```typescript
-import { findAllContainers, removeContainer } from 'artipod';
+import { findAllContainers, removeContainer } from '@mieweb/artipod';
 
 // Find all artipod-managed containers
 const containers = await findAllContainers();
@@ -212,20 +212,20 @@ npm run lint:fix
 
 ## Examples
 
-A full-stack web demo is available in `examples/web-demo/` showcasing:
+A full-stack web demo showcasing:
 - Filesystem management UI
 - Pod and mount creation
 - File browsing and editing
 - Container management
 - Interactive command execution
 
-See [examples/web-demo/README.md](examples/web-demo/README.md) for setup instructions.
+See the [web demo example](https://github.com/mieweb/artipod/tree/main/examples/web-demo) for setup instructions.
 
 ## Security
 
 ArtiPod containers are hardened with multiple security layers:
 
-- **Seccomp Profile**: Allowlist-based syscall filtering (optional, see `container/seccomp-profiles/`)
+- **Seccomp Profile**: Allowlist-based syscall filtering (optional)
 - **Read-only Filesystem**: Root filesystem is read-only
 - **Resource Limits**: Configurable CPU, Memory, and PID limits (defaults: 1 core, 512MB, 100 PIDs)
 - **Network Isolation**: No network access by default
@@ -234,7 +234,7 @@ ArtiPod containers are hardened with multiple security layers:
 - **IPC Isolation**: Private IPC namespace
 - **Tmpfs Configuration**: Configurable tmpfs mounts for writable directories
 
-Blocked syscalls include: kernel module loading, system reboot, filesystem mounting, hardware access, and more. See [container/seccomp-profiles/README.md](container/seccomp-profiles/README.md) for details.
+Blocked syscalls include: kernel module loading, system reboot, filesystem mounting, hardware access, and more. See the [seccomp profiles documentation](https://github.com/mieweb/artipod/tree/main/container/seccomp-profiles) for details.
 
 Each pod can use a different Dockerfile and seccomp profile, allowing per-pod customization of the execution environment.
 
