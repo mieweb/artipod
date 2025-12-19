@@ -1,12 +1,17 @@
 {
-  "name": "artipod",
+  "name": "@mieweb/artipod",
   "version": "0.1.0",
   "description": "TypeScript module for managing AI-aware file storage with ArtiPods and ArtiMounts",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
-    "dist"
+    "dist",
+    "NPM_README.md"
   ],
+  "readme": "NPM_README.md",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "jest",
