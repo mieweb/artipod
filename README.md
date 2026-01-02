@@ -106,10 +106,17 @@ const prompt = await pod.buildPrompt({
 
 ### Container Execution
 
-ArtiPod provides secure, isolated Docker container execution with per-pod configuration:
+ArtiPod provides secure, isolated container execution with automatic runtime detection. It supports both **Docker** and **Podman**, preferring rootless configurations for improved security:
 
 ```typescript
-import { ArtiPod, ArtiMount } from '@mieweb/artipod';
+import { ArtiPod, ArtiMount, detectRuntime } from '@mieweb/artipod';
+
+// Check available runtime (optional)
+const runtime = await detectRuntime();
+if (runtime) {
+  console.log(`Using ${runtime.type} (${runtime.mode})`);
+  // e.g., "Using podman (rootless)" or "Using docker (rootful)"
+}
 
 // Create pod with mounts
 const docs = new ArtiMount('docs', '/path/to/docs');
@@ -176,14 +183,48 @@ for (const container of containers) {
 }
 ```
 
+### Runtime Detection
+
+ArtiPod automatically detects and uses the available container runtime, with preference for rootless configurations:
+
+**Detection Priority (first available wins):**
+
+1. **Podman rootless** - `$XDG_RUNTIME_DIR/podman/podman.sock`
+2. **Docker rootless** - `$XDG_RUNTIME_DIR/docker.sock`
+3. **Docker Desktop (macOS)** - `~/.docker/run/docker.sock`
+4. **Colima (macOS)** - `~/.colima/default/docker.sock`
+5. **Lima (macOS)** - `~/.lima/default/sock/docker.sock`
+6. **Rancher Desktop (macOS)** - `~/.rd/docker.sock`
+7. **Podman Machine (macOS)** - `~/.local/share/containers/podman/machine/podman.sock`
+8. **Podman rootful** - `/run/podman/podman.sock`
+9. **Docker rootful** - `/var/run/docker.sock`
+
+The `DOCKER_HOST` environment variable is checked first and takes precedence if set.
+
+```typescript
+import { detectRuntime, isRuntimeAvailable, getCachedRuntimeInfo } from '@mieweb/artipod';
+
+// Check if any runtime is available
+if (await isRuntimeAvailable()) {
+  const info = await detectRuntime();
+  console.log(`Runtime: ${info.type}`);     // 'docker' or 'podman'
+  console.log(`Mode: ${info.mode}`);         // 'rootless' or 'rootful'
+  console.log(`Socket: ${info.socketPath}`);
+  console.log(`Version: ${info.version}`);
+}
+```
+
 ## Development
 
 ### Prerequisites
 
 - Node.js >= 18.0.0
-- Docker Desktop or Docker Engine (for container features)
+- Docker or Podman (for container features)
+  - **Recommended:** Podman or Docker in rootless mode
+  - Docker Desktop, Colima, Rancher Desktop, or Lima also work
 
 ### Install Dependencies
+
 
 ```bash
 npm install
@@ -273,6 +314,13 @@ Each pod can use a different Dockerfile and seccomp profile, allowing per-pod cu
 - `findAllContainers(labelFilters?: Record<string, string>, labelPrefix?: string): Promise<ContainerHandle[]>` - Find all artipod-managed containers
 - `removeContainer(container: ContainerHandle): Promise<void>` - Stop and remove a container
 
+### Runtime Detection
+
+- `detectRuntime(): Promise<ContainerRuntimeInfo | null>` - Detect available container runtime
+- `isRuntimeAvailable(): Promise<boolean>` - Check if any runtime is available
+- `getCachedRuntimeInfo(): ContainerRuntimeInfo | null` - Get cached runtime info (no async)
+- `clearRuntimeCache(): void` - Clear cached runtime (for reconnection)
+
 ### Types
 
 ```typescript
@@ -295,8 +343,16 @@ interface CommandResult {
   exitCode: number;
   modifiedFiles?: string[];
 }
+
+interface ContainerRuntimeInfo {
+  type: 'docker' | 'podman';        // Detected runtime type
+  mode: 'rootless' | 'rootful';     // Privilege mode
+  socketPath: string;               // Socket path being used
+  version?: string;                 // Runtime version
+}
 ```
 
 ## License
 
 MIT
+
