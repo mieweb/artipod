@@ -20,3 +20,9 @@ export type {
   ContainerRuntimeType,
   ContainerRuntimeMode,
 } from './containerUtils';
+
+// Tools - vscode-copilot-chat compatible tool implementations
+export * from './tools';
+
+// Prompts - vscode-copilot-chat compatible prompt templates
+export * from './prompts';
