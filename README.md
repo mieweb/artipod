@@ -20,6 +20,13 @@ Look at [ozwell-artipod](https://github.com/mieweb/ozwell-artipod) to understand
 - **Line-based Reading**: Read specific line ranges from files
 - **Directory Listings**: List files with sizes and directory structures
 
+### AI Agent Tools (vscode-copilot-chat Compatible)
+- **Identical Interfaces**: Tools match VS Code Copilot Chat schemas exactly
+- **OpenAI Compatible**: Tool definitions work with function calling APIs
+- **String Replacement**: Precise edits with context-based matching
+- **Apply Patch**: Unified diff format with fuzzy context matching
+- **Prompt Templates**: Pre-built system prompts optimized for models
+
 ### AI Context Generation
 - **Prompt Building**: Generate XML-formatted prompts from all mounts in the pod
 - **README Aggregation**: Collect README files from all mounts
@@ -268,6 +275,97 @@ if (await isRuntimeAvailable()) {
 }
 ```
 
+### AI Agent Tools (vscode-copilot-chat Compatible)
+
+ArtiPod includes a complete set of file editing tools with interfaces identical to VS Code Copilot Chat. This enables AI models trained on VS Code's tool schema to work seamlessly with artipod for markdown editing and file operations.
+
+```typescript
+import { ArtiMount, createToolRegistry, getToolDefinitions } from '@mieweb/artipod';
+
+// Create a mount and tool registry
+const mount = new ArtiMount('project', '/path/to/files');
+await mount.initialize();
+const tools = createToolRegistry(mount);
+
+// Get OpenAI function-calling compatible definitions
+const definitions = tools.getDefinitions();
+// Use these with OpenAI, Anthropic, or other model APIs
+
+// Execute tools by name
+const readResult = await tools.execute('read_file', {
+  filePath: '/path/to/files/README.md',
+  startLine: 1,
+  endLine: 50
+});
+
+const editResult = await tools.execute('replace_string_in_file', {
+  filePath: '/path/to/files/doc.md',
+  oldString: 'old text with context\nline to change\nmore context',
+  newString: 'old text with context\nnew line\nmore context',
+  explanation: 'Update the text'
+});
+```
+
+#### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents with line range support (v1: startLine/endLine, v2: offset/limit) |
+| `create_file` | Create new files with automatic directory creation |
+| `list_dir` | List directory contents with folder indicators |
+| `create_directory` | Create directories recursively (like `mkdir -p`) |
+| `replace_string_in_file` | Replace exact string matches with uniqueness validation |
+| `multi_replace_string_in_file` | Batch replacements across one or more files |
+| `apply_patch` | Apply unified diff-style patches with fuzzy context matching |
+
+#### Using apply_patch
+
+The `apply_patch` tool supports a structured patch format for complex edits:
+
+```typescript
+const patchResult = await tools.execute('apply_patch', {
+  input: `*** Begin Patch
+*** Update File: /path/to/files/example.md
+@@ ## Section Header
+ context line before
+-old line to remove
++new line to add
+ context line after
+*** End Patch`,
+  explanation: 'Update example section'
+});
+```
+
+#### System Prompt Templates
+
+Generate optimized system prompts for AI agents using the extracted vscode-copilot-chat instructions:
+
+```typescript
+import { buildSystemPrompt } from '@mieweb/artipod';
+
+const systemPrompt = buildSystemPrompt({
+  includeReplaceString: true,      // Include replace_string instructions
+  includeApplyPatch: true,         // Include apply_patch format docs
+  includeMarkdownInstructions: true, // Markdown-specific tips
+  workspaceRoot: '/path/to/files',  // For absolute path context
+  customInstructions: 'Focus on editing markdown documentation files.'
+});
+
+// Use systemPrompt with your AI model
+```
+
+Individual instruction constants are also available:
+
+```typescript
+import { 
+  AGENT_INSTRUCTIONS,
+  TOOL_USE_INSTRUCTIONS, 
+  REPLACE_STRING_INSTRUCTIONS,
+  APPLY_PATCH_INSTRUCTIONS,
+  MARKDOWN_EDITING_INSTRUCTIONS 
+} from '@mieweb/artipod';
+```
+
 ## Development
 
 ### Prerequisites
@@ -383,6 +481,29 @@ Each pod can use a different Dockerfile and seccomp profile, allowing per-pod cu
 - `getCachedRuntimeInfo(): ContainerRuntimeInfo | null` - Get cached runtime info (no async)
 - `clearRuntimeCache(): void` - Clear cached runtime (for reconnection)
 
+### ToolRegistry
+
+- `constructor(mount: ArtiMount)` - Create registry with all tools for a mount
+- `register(tool: ToolHandler): void` - Register a custom tool
+- `get(name: ToolName | string): ToolHandler | undefined` - Get tool by name
+- `getAll(): ToolHandler[]` - Get all registered tools
+- `getDefinitions(): ToolDefinition[]` - Get OpenAI-compatible definitions
+- `execute(name: ToolName | string, params: unknown): Promise<ToolResult>` - Execute a tool
+- `has(name: ToolName | string): boolean` - Check if tool exists
+
+### Tool Factory Functions
+
+- `createToolRegistry(mount: ArtiMount): ToolRegistry` - Create full registry
+- `createAllTools(mount: ArtiMount): ToolHandler[]` - Create array of handlers
+- `createCoreTools(mount: ArtiMount): ToolHandler[]` - Create read/write/list tools
+- `createEditTools(mount: ArtiMount): ToolHandler[]` - Create replace string tools
+- `createApplyPatchTool(mount: ArtiMount): ApplyPatchTool` - Create patch tool
+
+### Prompt Builders
+
+- `buildSystemPrompt(options?: SystemPromptOptions): string` - Build complete system prompt
+- `buildReminderPrompt(options?): string` - Build editing reminder
+
 ### Types
 
 ```typescript
@@ -424,6 +545,41 @@ interface ContainerRuntimeInfo {
   mode: 'rootless' | 'rootful';     // Privilege mode
   socketPath: string;               // Socket path being used
   version?: string;                 // Runtime version
+}
+
+// Tool Types
+enum ToolName {
+  ReadFile = 'read_file',
+  CreateFile = 'create_file',
+  ListDirectory = 'list_dir',
+  CreateDirectory = 'create_directory',
+  ReplaceString = 'replace_string_in_file',
+  MultiReplaceString = 'multi_replace_string_in_file',
+  ApplyPatch = 'apply_patch',
+}
+
+interface ToolResult {
+  success: boolean;
+  content?: string;
+  error?: string;
+}
+
+interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: 'object';
+    required: string[];
+    properties: Record<string, { type: string; description: string }>;
+  };
+}
+
+interface SystemPromptOptions {
+  includeReplaceString?: boolean;
+  includeApplyPatch?: boolean;
+  includeMarkdownInstructions?: boolean;
+  workspaceRoot?: string;
+  customInstructions?: string;
 }
 ```
 
