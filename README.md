@@ -8,6 +8,8 @@ A TypeScript library for managing AI-aware file storage with secure container ex
 
 **ArtiMount** is a named storage component representing a filesystem directory with operations for reading, writing, and listing files.
 
+Look at [ozwell-artipod](https://github.com/mieweb/ozwell-artipod) to understand how to get an agent to work on an artipod.
+
 ## Features
 
 ### Filesystem Management
