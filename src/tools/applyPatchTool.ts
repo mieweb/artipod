@@ -41,8 +41,6 @@ export class ApplyPatchTool implements ToolHandler<IApplyPatchParams, EditResult
         };
       }
 
-      const rootPath = this.mount.getRootPath();
-
       // Process the patch - load files and parse
       const commit = await processPatch(
         params.input,

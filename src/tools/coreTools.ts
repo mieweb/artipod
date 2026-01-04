@@ -10,8 +10,6 @@ import {
   ReadFileResult,
   ListDirResult,
   ReadFileParams,
-  IReadFileParamsV1,
-  IReadFileParamsV2,
   ICreateFileParams,
   IListDirParams,
   ICreateDirectoryParams,
