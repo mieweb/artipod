@@ -1,6 +1,13 @@
 export { ArtiPod } from './artipod';
 export { ArtiMount } from './artimount';
-export { findAllContainers, removeContainer } from './containerUtils';
+export { 
+  findAllContainers, 
+  removeContainer,
+  detectRuntime,
+  getCachedRuntimeInfo,
+  clearRuntimeCache,
+  isRuntimeAvailable,
+} from './containerUtils';
 export type {
   ArtiPodConfig,
 } from './types';
@@ -8,4 +15,7 @@ export type {
   ContainerHandle,
   CommandResult,
   ContainerOptions,
+  ContainerRuntimeInfo,
+  ContainerRuntimeType,
+  ContainerRuntimeMode,
 } from './containerUtils';

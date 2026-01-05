@@ -2,6 +2,20 @@ import Docker from 'dockerode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import { getDockerClient } from './containerRuntime';
+
+// Re-export runtime types and functions for convenience
+export { 
+  detectRuntime, 
+  getCachedRuntimeInfo, 
+  clearRuntimeCache,
+  isRuntimeAvailable,
+} from './containerRuntime';
+export type { 
+  ContainerRuntimeInfo, 
+  ContainerRuntimeType, 
+  ContainerRuntimeMode,
+} from './containerRuntime';
 
 /**
  * Handle to a running container instance
@@ -74,7 +88,7 @@ function hashDockerfile(dockerfilePath: string): string {
  * Uses hash-based naming to automatically reuse images with identical Dockerfiles
  */
 async function buildContainerImage(dockerfilePath: string, imageName?: string): Promise<string> {
-  const docker = new Docker();
+  const docker = await getDockerClient();
   const finalImageName = imageName || `artipod:${hashDockerfile(dockerfilePath)}`;
   
   // Check if image already exists
@@ -111,7 +125,7 @@ async function createContainer(
   mounts: string[],
   options?: ContainerOptions
 ): Promise<ContainerHandle> {
-  const docker = new Docker();
+  const docker = await getDockerClient();
   
   // Apply defaults
   const labelPrefix = options?.labelPrefix || 'artipod';
@@ -192,7 +206,7 @@ async function executeCommandInContainer(
   command: string,
   timeout: number = 30000
 ): Promise<CommandResult> {
-  const docker = new Docker();
+  const docker = await getDockerClient();
   
   const exec = await container.exec({
     Cmd: ['/bin/bash', '-c', command],
@@ -319,7 +333,7 @@ export async function findAllContainers(
   labelFilters?: Record<string, string>,
   labelPrefix: string = 'artipod'
 ): Promise<ContainerHandle[]> {
-  const docker = new Docker();
+  const docker = await getDockerClient();
   
   // Build filter with prefix
   const filters: Record<string, string[]> = {
