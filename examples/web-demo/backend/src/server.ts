@@ -148,8 +148,9 @@ app.post('/api/pods', async (req: Request, res: Response) => {
 
     // Add mounts if provided
     for (const mount of mounts) {
-      db.createMount.run(id, mount.name, mount.path);
-      await podManager.addMount(id, mount.name, mount.path);
+      const isReadonly = mount.readonly ? 1 : 0;
+      db.createMount.run(id, mount.name, mount.path, isReadonly);
+      await podManager.addMount(id, mount.name, mount.path, !!mount.readonly);
     }
 
     const pod = db.getPod.get(id);
@@ -230,7 +231,7 @@ app.get('/api/pods/:id/prompt', async (req: Request, res: Response) => {
 app.post('/api/pods/:id/mounts', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, path: mountPath } = req.body;
+    const { name, path: mountPath, readonly = false } = req.body;
 
     if (!name || !mountPath) {
       return res.status(400).json({ error: 'Name and path are required' });
@@ -244,8 +245,9 @@ app.post('/api/pods/:id/mounts', async (req: Request, res: Response) => {
     // Ensure pod is loaded with existing mounts and container before adding new one
     await ensurePodFullyLoaded(id);
 
-    db.createMount.run(id, name, mountPath);
-    await podManager.addMount(id, name, mountPath);
+    const isReadonly = readonly ? 1 : 0;
+    db.createMount.run(id, name, mountPath, isReadonly);
+    await podManager.addMount(id, name, mountPath, !!readonly);
 
     res.json({ success: true });
   } catch (error) {

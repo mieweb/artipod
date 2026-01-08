@@ -21,7 +21,7 @@ class PodManager {
     return pod;
   }
 
-  async ensurePodLoaded(podId: string, mounts: Array<{ mount_name: string; mount_path: string }>, containerData?: { container_id: string; status: string }): Promise<void> {
+  async ensurePodLoaded(podId: string, mounts: Array<{ mount_name: string; mount_path: string; readonly?: number }>, containerData?: { container_id: string; status: string }): Promise<void> {
     // If pod is already in memory, nothing to do
     const existingInstance = this.pods.get(podId);
     if (existingInstance) {
@@ -39,7 +39,8 @@ class PodManager {
     // Restore all mounts
     for (const mount of mounts) {
       const fullPath = path.join(WORKSPACE_ROOT, mount.mount_path);
-      const artiMount = new ArtiMount(mount.mount_name, fullPath);
+      const isReadonly = mount.readonly === 1;
+      const artiMount = new ArtiMount(mount.mount_name, fullPath, isReadonly);
       
       pod.addMount(artiMount);
       podInstance.mounts.set(mount.mount_name, artiMount);
@@ -49,14 +50,14 @@ class PodManager {
     // Would need to store container handle and restore it
   }
 
-  async addMount(podId: string, mountName: string, mountPath: string): Promise<void> {
+  async addMount(podId: string, mountName: string, mountPath: string, readonly: boolean = false): Promise<void> {
     const instance = this.pods.get(podId);
     if (!instance) {
       throw new Error(`Pod ${podId} not found`);
     }
 
     const fullPath = path.join(WORKSPACE_ROOT, mountPath);
-    const mount = new ArtiMount(mountName, fullPath);
+    const mount = new ArtiMount(mountName, fullPath, readonly);
     
     instance.pod.addMount(mount);
     instance.mounts.set(mountName, mount);

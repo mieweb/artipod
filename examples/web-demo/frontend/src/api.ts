@@ -13,6 +13,7 @@ export interface Mount {
   pod_id: string;
   mount_name: string;
   mount_path: string;
+  readonly: boolean;
 }
 
 export interface Container {
@@ -81,7 +82,7 @@ class ApiClient {
     return res.json();
   }
 
-  async createPod(name: string, mounts: { name: string; path: string }[] = []) {
+  async createPod(name: string, mounts: { name: string; path: string; readonly?: boolean }[] = []) {
     const res = await fetch(`${API_BASE}/pods`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -107,11 +108,11 @@ class ApiClient {
     return res.json();
   }
 
-  async addMount(podId: string, name: string, path: string) {
+  async addMount(podId: string, name: string, path: string, readonly: boolean = false) {
     const res = await fetch(`${API_BASE}/pods/${podId}/mounts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, path }),
+      body: JSON.stringify({ name, path, readonly }),
     });
     return res.json();
   }
