@@ -311,6 +311,10 @@ export default function PodPanel({ pod, onDelete }: Props) {
       queryClient.invalidateQueries({ queryKey: ['files', pod.id] });
       setNewItemName('');
       setShowCreateFolder(false);
+      toast.success('Folder created');
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to create folder: ${error.message}`);
     },
   });
 
@@ -322,6 +326,10 @@ export default function PodPanel({ pod, onDelete }: Props) {
       setNewItemName('');
       setFileContent('');
       setShowCreateFile(false);
+      toast.success('File created');
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to create file: ${error.message}`);
     },
   });
 

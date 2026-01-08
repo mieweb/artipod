@@ -128,7 +128,11 @@ class ApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mountName, filePath, content }),
     });
-    return res.json();
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to create file');
+    }
+    return data;
   }
 
   async createFolderInMount(podId: string, mountName: string, folderPath: string) {
@@ -137,7 +141,11 @@ class ApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mountName, folderPath }),
     });
-    return res.json();
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to create folder');
+    }
+    return data;
   }
 
   async getFile(podId: string, mountName: string, filePath: string, startLine?: number, endLine?: number) {
