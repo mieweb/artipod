@@ -42,6 +42,12 @@ try {
 } catch (e) {
   // Column already exists
 }
+// Add readonly column to mounts if it doesn't exist
+try {
+  db.exec(`ALTER TABLE mounts ADD COLUMN readonly INTEGER DEFAULT 0`);
+} catch (e) {
+  // Column already exists
+}
 
 export interface Pod {
   id: string;
@@ -54,6 +60,7 @@ export interface Mount {
   pod_id: string;
   mount_name: string;
   mount_path: string;
+  readonly: number; // SQLite stores booleans as 0/1
 }
 
 export interface Container {
@@ -85,7 +92,7 @@ export const deletePod = db.prepare(`
 
 // Mount operations
 export const createMount = db.prepare(`
-  INSERT INTO mounts (pod_id, mount_name, mount_path) VALUES (?, ?, ?)
+  INSERT INTO mounts (pod_id, mount_name, mount_path, readonly) VALUES (?, ?, ?, ?)
 `);
 
 export const getMountsForPod = db.prepare(`

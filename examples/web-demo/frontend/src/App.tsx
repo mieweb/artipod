@@ -27,7 +27,7 @@ function App() {
   });
 
   const createPodMutation = useMutation({
-    mutationFn: (data: { name: string; mounts: { name: string; path: string }[] }) =>
+    mutationFn: (data: { name: string; mounts: { name: string; path: string; readonly: boolean }[] }) =>
       api.createPod(data.name, data.mounts),
     onSuccess: (newPod) => {
       queryClient.invalidateQueries({ queryKey: ['pods'] });

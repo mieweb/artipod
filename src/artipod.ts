@@ -344,7 +344,8 @@ export class ArtiPod {
     for (const [mountName, mount] of this.mounts) {
       const hostPath = mount.getRootPath();
       const containerPath = `/context/${mountName}`;
-      mounts.push(`${hostPath}:${containerPath}`);
+      const mountSuffix = mount.isReadOnly() ? ':ro' : '';
+      mounts.push(`${hostPath}:${containerPath}${mountSuffix}`);
     }
 
     // Build or reuse image

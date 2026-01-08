@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api';
 
 interface Props {
-  onPodCreated: (data: { name: string; mounts: { name: string; path: string }[] }) => void;
+  onPodCreated: (data: { name: string; mounts: { name: string; path: string; readonly: boolean }[] }) => void;
 }
 
 interface TreeNode {
@@ -132,9 +132,10 @@ export default function FilesystemPanel({ onPodCreated }: Props) {
   const [newItemName, setNewItemName] = useState('');
   const [fileContent, setFileContent] = useState('');
   const [podName, setPodName] = useState('');
-  const [mounts, setMounts] = useState<{ name: string; path: string }[]>([]);
+  const [mounts, setMounts] = useState<{ name: string; path: string; readonly: boolean }[]>([]);
   const [modalMountName, setModalMountName] = useState('');
   const [modalMountPath, setModalMountPath] = useState('');
+  const [modalMountReadonly, setModalMountReadonly] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -496,6 +497,9 @@ export default function FilesystemPanel({ onPodCreated }: Props) {
                 >
                   <div>
                     <strong>{mount.name}</strong>: {mount.path}
+                    {mount.readonly && (
+                      <span style={{ marginLeft: 8, fontSize: 11, color: '#666', background: '#e9ecef', padding: '2px 6px', borderRadius: 3 }}>read-only</span>
+                    )}
                   </div>
                   <button
                     className="btn btn-danger btn-remove-mount"
@@ -529,6 +533,7 @@ export default function FilesystemPanel({ onPodCreated }: Props) {
               setShowMountModal(false);
               setModalMountName('');
               setModalMountPath('');
+              setModalMountReadonly(false);
             }}
             aria-label="Cancel pod creation"
           >
@@ -566,15 +571,31 @@ export default function FilesystemPanel({ onPodCreated }: Props) {
                   style={{ background: '#f8f9fa', cursor: 'not-allowed' }}
                 />
               </div>
+              <div style={{ marginTop: 16 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 'normal' }}>
+                  <input
+                    type="checkbox"
+                    checked={modalMountReadonly}
+                    onChange={(e) => setModalMountReadonly(e.target.checked)}
+                    aria-label="Mount as read-only"
+                    style={{ width: 16, height: 16 }}
+                  />
+                  Read-only mount
+                </label>
+                <p style={{ fontSize: 12, color: '#666', marginTop: 4, marginLeft: 24 }}>
+                  Read-only mounts cannot be written to from the container or API.
+                </p>
+              </div>
               <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
                 <button
                   className="btn btn-success"
                   onClick={() => {
                     if (modalMountName && modalMountPath) {
-                      setMounts([...mounts, { name: modalMountName, path: modalMountPath }]);
+                      setMounts([...mounts, { name: modalMountName, path: modalMountPath, readonly: modalMountReadonly }]);
                       setShowMountModal(false);
                       setModalMountName('');
                       setModalMountPath('');
+                      setModalMountReadonly(false);
                     }
                   }}
                   disabled={!modalMountName}
@@ -588,6 +609,7 @@ export default function FilesystemPanel({ onPodCreated }: Props) {
                     setShowMountModal(false);
                     setModalMountName('');
                     setModalMountPath('');
+                    setModalMountReadonly(false);
                   }}
                   aria-label="Cancel mount addition"
                 >

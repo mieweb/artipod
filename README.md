@@ -14,6 +14,7 @@ Look at [ozwell-artipod](https://github.com/mieweb/ozwell-artipod) to understand
 
 ### Filesystem Management
 - **Multiple Mounts**: Aggregate multiple filesystem directories under a single pod
+- **Read-only Mounts**: Create immutable mounts that prevent modifications
 - **File Operations**: Read, write, and list files with path safety validation
 - **README Integration**: Automatically extract README content from mounts
 - **Line-based Reading**: Read specific line ranges from files
@@ -39,9 +40,13 @@ npm install @mieweb/artipod
 ```typescript
 import { ArtiMount } from '@mieweb/artipod';
 
-// Create a mount
+// Create a writable mount
 const mount = new ArtiMount('my-project', '/path/to/project');
 await mount.initialize();
+
+// Create a read-only mount (prevents write operations)
+const readOnlyMount = new ArtiMount('docs', '/path/to/docs', { readonly: true });
+await readOnlyMount.initialize();
 
 // Read a file
 const content = await mount.read('src/index.ts');
@@ -49,11 +54,18 @@ const content = await mount.read('src/index.ts');
 // Read specific lines
 const lines = await mount.read('config.json', 1, 10);
 
-// Write a file
+// Write a file (only works on writable mounts)
 await mount.write('output.txt', 'Hello, World!');
 
-// Create a folder
+// Create a folder (only works on writable mounts)
 await mount.createFolder('new-directory');
+
+// Read-only mounts will throw errors on write operations
+try {
+  await readOnlyMount.write('file.txt', 'content');
+} catch (error) {
+  // Error: "Cannot write to read-only mount 'docs'"
+}
 
 // List all files
 const files = await mount.list();
@@ -285,13 +297,14 @@ Each pod can use a different Dockerfile and seccomp profile, allowing per-pod cu
 
 ### ArtiMount
 
-- `constructor(name: string, rootPath: string)`
+- `constructor(name: string, rootPath: string, options?: { readonly?: boolean })` - Create a mount (optionally read-only)
 - `initialize(): Promise<void>` - Verify mount exists
 - `getName(): string` - Get mount name
 - `getRootPath(): string` - Get mount root path
+- `isReadonly(): boolean` - Check if mount is read-only
 - `read(path: string, startLine?: number, endLine?: number): Promise<string>` - Read file
-- `write(path: string, content: string | Buffer): Promise<void>` - Write file
-- `createFolder(path: string): Promise<void>` - Create directory
+- `write(path: string, content: string | Buffer): Promise<void>` - Write file (throws on read-only mounts)
+- `createFolder(path: string): Promise<void>` - Create directory (throws on read-only mounts)
 - `list(path?: string): Promise<FileInfo[]>` - List files
 - `listWithDirectories(path?: string): Promise<EntryInfo[]>` - List files and directories
 - `getReadmeContents(): Promise<string[]>` - Get README files

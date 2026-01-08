@@ -7,15 +7,18 @@ import * as path from 'path';
 export class ArtiMount {
   private name: string;
   private rootPath: string;
+  private readonly: boolean;
 
   /**
    * Create a new ArtiMount
    * @param name - Mount name
    * @param rootPath - Filesystem location for the mount
+   * @param readonly - If true, write operations are disabled (default: false)
    */
-  constructor(name: string, rootPath: string) {
+  constructor(name: string, rootPath: string, readonly: boolean = false) {
     this.name = name;
     this.rootPath = path.resolve(rootPath);
+    this.readonly = readonly;
   }
 
   /**
@@ -48,6 +51,13 @@ export class ArtiMount {
    */
   getRootPath(): string {
     return this.rootPath;
+  }
+
+  /**
+   * Check if the mount is read-only
+   */
+  isReadOnly(): boolean {
+    return this.readonly;
   }
 
   /**
@@ -138,11 +148,15 @@ export class ArtiMount {
    * Write a file to the mount
    * @param relativePath - Path relative to mount root
    * @param content - File content (string or Buffer)
+   * @throws Error if mount is read-only
    */
   async write(
     relativePath: string,
     content: string | Buffer
   ): Promise<void> {
+    if (this.readonly) {
+      throw new Error(`Cannot write to read-only mount '${this.name}'`);
+    }
     const fullPath = this._resolve(relativePath);
     const dir = path.dirname(fullPath);
     
@@ -160,8 +174,12 @@ export class ArtiMount {
   /**
    * Create a folder in the mount
    * @param relativePath - Path relative to mount root
+   * @throws Error if mount is read-only
    */
   async createFolder(relativePath: string): Promise<void> {
+    if (this.readonly) {
+      throw new Error(`Cannot create folder in read-only mount '${this.name}'`);
+    }
     const fullPath = this._resolve(relativePath);
     await fs.mkdir(fullPath, { recursive: true });
   }
