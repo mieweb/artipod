@@ -200,5 +200,58 @@ describe('ArtiMount', () => {
     it('should return root path', () => {
       expect(mount.getRootPath()).toBe(testDir);
     });
+
+    it('should return false for isReadOnly by default', () => {
+      expect(mount.isReadOnly()).toBe(false);
+    });
+
+    it('should return true for isReadOnly when created as readonly', () => {
+      const readonlyMount = new ArtiMount('readonly-mount', testDir, true);
+      expect(readonlyMount.isReadOnly()).toBe(true);
+    });
+  });
+
+  describe('read-only mount', () => {
+    let readonlyMount: ArtiMount;
+
+    beforeEach(async () => {
+      readonlyMount = new ArtiMount('readonly-mount', testDir, true);
+      await readonlyMount.initialize();
+    });
+
+    it('should throw error when writing to read-only mount', async () => {
+      await expect(readonlyMount.write('test.txt', 'content')).rejects.toThrow(
+        "Cannot write to read-only mount 'readonly-mount'"
+      );
+    });
+
+    it('should throw error when creating folder in read-only mount', async () => {
+      await expect(readonlyMount.createFolder('subdir')).rejects.toThrow(
+        "Cannot create folder in read-only mount 'readonly-mount'"
+      );
+    });
+
+    it('should allow reading from read-only mount', async () => {
+      // Create a file using a writable mount first
+      const writableMount = new ArtiMount('writable', testDir, false);
+      await writableMount.write('readable.txt', 'test content');
+
+      // Read should work on readonly mount
+      const content = await readonlyMount.read('readable.txt');
+      expect(content).toBe('test content');
+    });
+
+    it('should allow listing files in read-only mount', async () => {
+      // Create files using a writable mount
+      const writableMount = new ArtiMount('writable', testDir, false);
+      await writableMount.write('file1.txt', 'content1');
+      await writableMount.write('file2.txt', 'content2');
+
+      // List should work on readonly mount
+      const files = await readonlyMount.list();
+      const paths = files.map(f => f.path);
+      expect(paths).toContain('file1.txt');
+      expect(paths).toContain('file2.txt');
+    });
   });
 });

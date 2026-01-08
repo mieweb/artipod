@@ -236,4 +236,96 @@ describe('ArtiPod - Container Execution', () => {
       await pod.stopContainer();
     }, 10000);
   });
+
+  describe('read-only mount', () => {
+    let readonlyTestPath: string;
+
+    beforeAll(async () => {
+      // Create a separate directory for readonly tests
+      readonlyTestPath = path.join(process.cwd(), '.test-artipod-readonly');
+      await fs.mkdir(readonlyTestPath, { recursive: true });
+      await fs.chmod(readonlyTestPath, 0o777);
+      
+      // Create a test file that can be read
+      await fs.writeFile(path.join(readonlyTestPath, 'existing.txt'), 'readonly content');
+    });
+
+    afterAll(async () => {
+      try {
+        await fs.rm(readonlyTestPath, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    });
+
+    afterEach(async () => {
+      if (pod?.hasContainer()) {
+        try {
+          await pod.stopContainer();
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    }, 10000);
+
+    it('should mount read-only directory in container', async () => {
+      const mount = new ArtiMount('readonly', readonlyTestPath, true);
+      pod = new ArtiPod([mount]);
+      
+      await pod.startContainer(dockerfilePath, {
+        seccompProfilePath,
+      });
+      
+      // Reading should work
+      const readResult = await pod.executeCommand('cat /context/readonly/existing.txt');
+      expect(readResult.exitCode).toBe(0);
+      expect(readResult.stdout.trim()).toBe('readonly content');
+    }, 10000);
+
+    it('should prevent writing to read-only mount in container', async () => {
+      const mount = new ArtiMount('readonly', readonlyTestPath, true);
+      pod = new ArtiPod([mount]);
+      
+      await pod.startContainer(dockerfilePath, {
+        seccompProfilePath,
+      });
+      
+      // Writing should fail
+      const writeResult = await pod.executeCommand(
+        'sh -c "echo test > /context/readonly/newfile.txt"'
+      );
+      expect(writeResult.exitCode).not.toBe(0);
+    }, 10000);
+
+    it('should allow writing to writable mount alongside read-only mount', async () => {
+      const readonlyMount = new ArtiMount('readonly', readonlyTestPath, true);
+      const writableMount = new ArtiMount('writable', testContextPath, false);
+      pod = new ArtiPod([readonlyMount, writableMount]);
+      
+      await pod.startContainer(dockerfilePath, {
+        seccompProfilePath,
+      });
+      
+      // Reading from readonly should work
+      const readResult = await pod.executeCommand('cat /context/readonly/existing.txt');
+      expect(readResult.exitCode).toBe(0);
+      expect(readResult.stdout.trim()).toBe('readonly content');
+      
+      // Writing to writable should work
+      const writeResult = await pod.executeCommand(
+        'sh -c "echo mixed-test > /context/writable/mixed.txt"'
+      );
+      expect(writeResult.exitCode).toBe(0);
+      
+      // Verify file was written on host
+      const content = await fs.readFile(
+        path.join(testContextPath, 'mixed.txt'),
+        'utf-8'
+      );
+      expect(content.trim()).toBe('mixed-test');
+      
+      // Cleanup
+      await fs.unlink(path.join(testContextPath, 'mixed.txt'));
+    }, 15000);
+  });
 });
