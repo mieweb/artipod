@@ -123,29 +123,47 @@ class ApiClient {
   }
 
   async createFileInMount(podId: string, mountName: string, filePath: string, content: string) {
-    const res = await fetch(`${API_BASE}/pods/${podId}/files`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mountName, filePath, content }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Failed to create file');
+    try {
+      const res = await fetch(`${API_BASE}/pods/${podId}/files`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mountName, filePath, content }),
+      });
+      
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: `HTTP error ${res.status}` }));
+        throw new Error(data.error || 'Failed to create file');
+      }
+      
+      return await res.json();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('fetch')) {
+        throw new Error('Network error: Unable to reach server');
+      }
+      throw error;
     }
-    return data;
   }
 
   async createFolderInMount(podId: string, mountName: string, folderPath: string) {
-    const res = await fetch(`${API_BASE}/pods/${podId}/folders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mountName, folderPath }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Failed to create folder');
+    try {
+      const res = await fetch(`${API_BASE}/pods/${podId}/folders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mountName, folderPath }),
+      });
+      
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: `HTTP error ${res.status}` }));
+        throw new Error(data.error || 'Failed to create folder');
+      }
+      
+      return await res.json();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('fetch')) {
+        throw new Error('Network error: Unable to reach server');
+      }
+      throw error;
     }
-    return data;
   }
 
   async getFile(podId: string, mountName: string, filePath: string, startLine?: number, endLine?: number) {
@@ -176,16 +194,25 @@ class ApiClient {
   }
 
   async executeCommand(podId: string, command: string): Promise<CommandResult> {
-    const res = await fetch(`${API_BASE}/pods/${podId}/container/exec`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Failed to execute command');
+    try {
+      const res = await fetch(`${API_BASE}/pods/${podId}/container/exec`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command }),
+      });
+      
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: `HTTP error ${res.status}` }));
+        throw new Error(data.error || 'Failed to execute command');
+      }
+      
+      return await res.json();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('fetch')) {
+        throw new Error('Network error: Unable to reach server');
+      }
+      throw error;
     }
-    return data;
   }
 
   async stopContainer(podId: string) {
