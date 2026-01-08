@@ -31,13 +31,23 @@ interface TreeNode {
   mount: string; // Which mount this belongs to
   isDirectory: boolean;
   size?: number; // File size in bytes
+  readonly?: boolean; // Whether this mount is read-only
   children?: TreeNode[];
 }
 
-function buildMountTree(filesByMount: Record<string, Array<{ path: string; size: number; isDirectory?: boolean }>>): TreeNode[] {
+function buildMountTree(filesByMount: Record<string, Array<{ path: string; size: number; isDirectory?: boolean }>>, mounts?: Array<{ mount_name: string; readonly: boolean }>): TreeNode[] {
   const mountNodes: TreeNode[] = [];
+  
+  // Build a lookup for mount readonly status
+  const readonlyLookup = new Map<string, boolean>();
+  if (mounts) {
+    for (const mount of mounts) {
+      readonlyLookup.set(mount.mount_name, mount.readonly);
+    }
+  }
 
   for (const [mountName, entries] of Object.entries(filesByMount)) {
+    const isReadonly = readonlyLookup.get(mountName) ?? false;
     // Create a tree structure for this mount
     const root: Map<string, any> = new Map();
     
@@ -76,6 +86,7 @@ function buildMountTree(filesByMount: Record<string, Array<{ path: string; size:
           mount: mountName,
           isDirectory: value.isDirectory,
           size: value.size,
+          readonly: isReadonly,
           children: value.isDirectory && value.children.size > 0 
             ? convertToTreeNodes(value.children, currentPath)
             : undefined
@@ -97,6 +108,7 @@ function buildMountTree(filesByMount: Record<string, Array<{ path: string; size:
       path: '',
       mount: mountName,
       isDirectory: true,
+      readonly: isReadonly,
       children: convertToTreeNodes(root, '')
     });
   }
@@ -162,7 +174,7 @@ function TreeNodeComponent({
           <span className="tree-expand-icon-placeholder">○</span>
         )}
         <span className="tree-node-icon">
-          {level === 0 ? '📌' : node.isDirectory ? '📁' : '📄'}
+          {level === 0 ? (node.readonly ? '👁' : '📌') : node.isDirectory ? '📁' : '📄'}
         </span>
         <span className="tree-node-name">
           {node.name}
@@ -251,8 +263,8 @@ export default function PodPanel({ pod, onDelete }: Props) {
   });
 
   const tree = useMemo(() => {
-    return buildMountTree(files);
-  }, [files]);
+    return buildMountTree(files, pod.mounts);
+  }, [files, pod.mounts]);
 
   const execMutation = useMutation({
     mutationFn: (cmd: string) => api.executeCommand(pod.id, cmd),
@@ -364,6 +376,13 @@ export default function PodPanel({ pod, onDelete }: Props) {
     setSelectedPath(path);
     setSelectedIsDirectory(isDirectory);
   };
+
+  // Check if selected mount is readonly
+  const isSelectedMountReadonly = useMemo(() => {
+    if (!selectedMount || !pod.mounts) return false;
+    const mount = pod.mounts.find(m => m.mount_name === selectedMount);
+    return mount?.readonly ?? false;
+  }, [selectedMount, pod.mounts]);
 
   const handleToggle = (key: string) => {
     setExpandedKeys(prev => {
@@ -618,12 +637,17 @@ export default function PodPanel({ pod, onDelete }: Props) {
                 />
               </div>
               <div className="form-location">
-                <strong>Mount:</strong> {selectedMount || '(none)'}
+                <strong>Mount:</strong> {selectedMount || '(none)'}{isSelectedMountReadonly && ' (read-only)'}
                 <br />
                 <strong>Location:</strong> {selectedPath && selectedIsDirectory ? `${selectedPath}/` : '(root)/'}
                 <br />
                 <strong>Full path:</strong> {selectedPath && selectedIsDirectory ? `${selectedPath}/${newItemName || '...'}` : newItemName || '...'}
               </div>
+              {isSelectedMountReadonly && (
+                <div style={{ padding: '8px 12px', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: 4, marginTop: 12, fontSize: 13 }}>
+                  ⚠️ This mount is <strong>read-only</strong>. Creating folders is not permitted and will fail. This form is available for testing the expected error behavior.
+                </div>
+              )}
               <div className="form-actions">
                 <button
                   className="btn btn-primary"
@@ -661,12 +685,17 @@ export default function PodPanel({ pod, onDelete }: Props) {
                 />
               </div>
               <div className="form-location">
-                <strong>Mount:</strong> {selectedMount || '(none)'}
+                <strong>Mount:</strong> {selectedMount || '(none)'}{isSelectedMountReadonly && ' (read-only)'}
                 <br />
                 <strong>Location:</strong> {selectedPath && selectedIsDirectory ? `${selectedPath}/` : '(root)/'}
                 <br />
                 <strong>Full path:</strong> {selectedPath && selectedIsDirectory ? `${selectedPath}/${newItemName || '...'}` : newItemName || '...'}
               </div>
+              {isSelectedMountReadonly && (
+                <div style={{ padding: '8px 12px', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: 4, marginTop: 12, fontSize: 13 }}>
+                  ⚠️ This mount is <strong>read-only</strong>. Creating files is not permitted and will fail. This form is available for testing the expected error behavior.
+                </div>
+              )}
               <div className="form-group">
                 <label htmlFor="new-file-content">Content</label>
                 <textarea
