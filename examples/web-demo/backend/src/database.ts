@@ -48,11 +48,18 @@ try {
 } catch (e) {
   // Column already exists
 }
+// Add useMainMount column to pods if it doesn't exist
+try {
+  db.exec(`ALTER TABLE pods ADD COLUMN useMainMount INTEGER DEFAULT 1`);
+} catch (e) {
+  // Column already exists
+}
 
 export interface Pod {
   id: string;
   name: string;
   created_at: number;
+  useMainMount: number; // SQLite stores booleans as 0/1
 }
 
 export interface Mount {
@@ -75,7 +82,7 @@ export interface Container {
 
 // Pod operations
 export const createPod = db.prepare(`
-  INSERT INTO pods (id, name, created_at) VALUES (?, ?, ?)
+  INSERT INTO pods (id, name, created_at, useMainMount) VALUES (?, ?, ?, ?)
 `);
 
 export const getPod = db.prepare(`

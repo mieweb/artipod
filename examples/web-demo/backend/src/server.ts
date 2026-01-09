@@ -27,9 +27,13 @@ app.get('/api/health', (_req: Request, res: Response) => {
 
 // Helper function to ensure pod is loaded with mounts
 async function ensurePodFullyLoaded(podId: string): Promise<void> {
+  const pod = db.getPod.get(podId) as db.Pod | undefined;
+  if (!pod) {
+    throw new Error(`Pod ${podId} not found`);
+  }
   const mounts = db.getMountsForPod.all(podId);
   const container = db.getContainerForPod.get(podId) as db.Container | undefined;
-  await podManager.ensurePodLoaded(podId, mounts as db.Mount[], container);
+  await podManager.ensurePodLoaded(podId, mounts as db.Mount[], !!pod.useMainMount, container);
 }
 
 
@@ -135,7 +139,7 @@ app.get('/api/pods', (_req: Request, res: Response) => {
 
 app.post('/api/pods', async (req: Request, res: Response) => {
   try {
-    const { name, mounts = [] } = req.body;
+    const { name, useMainMount = true, mounts = [] } = req.body;
     if (!name) {
       return res.status(400).json({ error: 'Name is required' });
     }
@@ -143,18 +147,26 @@ app.post('/api/pods', async (req: Request, res: Response) => {
     const id = nanoid(10);
     const now = Date.now();
     
-    db.createPod.run(id, name, now);
-    await podManager.createPod(id);
+    db.createPod.run(id, name, now, useMainMount ? 1 : 0);
+    const pod = await podManager.createPod(id, useMainMount);
 
-    // Add mounts if provided
+    // If main mount was auto-created, store it in the database
+    if (useMainMount) {
+      const mainMount = pod.getMount('main');
+      if (mainMount) {
+        db.createMount.run(id, 'main', mainMount.getRootPath(), 0);
+      }
+    }
+
+    // Add user-provided mounts
     for (const mount of mounts) {
       const isReadonly = mount.readonly ? 1 : 0;
       db.createMount.run(id, mount.name, mount.path, isReadonly);
       await podManager.addMount(id, mount.name, mount.path, !!mount.readonly);
     }
 
-    const pod = db.getPod.get(id);
-    res.json(pod);
+    const podData = db.getPod.get(id);
+    res.json(podData);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }

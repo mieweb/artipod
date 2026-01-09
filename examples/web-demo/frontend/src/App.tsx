@@ -27,8 +27,8 @@ function App() {
   });
 
   const createPodMutation = useMutation({
-    mutationFn: (data: { name: string; mounts: { name: string; path: string; readonly: boolean }[] }) =>
-      api.createPod(data.name, data.mounts),
+    mutationFn: (data: { name: string; useMainMount: boolean; mounts: { name: string; path: string; readonly: boolean }[] }) =>
+      api.createPod(data.name, data.useMainMount, data.mounts),
     onSuccess: (newPod) => {
       queryClient.invalidateQueries({ queryKey: ['pods'] });
       // Navigate to the newly created pod

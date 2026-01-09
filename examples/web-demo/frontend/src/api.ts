@@ -82,11 +82,11 @@ class ApiClient {
     return res.json();
   }
 
-  async createPod(name: string, mounts: { name: string; path: string; readonly?: boolean }[] = []) {
+  async createPod(name: string, useMainMount: boolean, mounts: { name: string; path: string; readonly?: boolean }[] = []) {
     const res = await fetch(`${API_BASE}/pods`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, mounts }),
+      body: JSON.stringify({ name, useMainMount, mounts }),
     });
     return res.json();
   }

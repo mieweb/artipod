@@ -36,42 +36,42 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
 
   describe('constructor', () => {
     it('should create empty pod', () => {
-      const pod = new ArtiPod();
+      const pod = new ArtiPod({ useMainMount: false });
       expect(pod.getMountNames()).toEqual([]);
     });
 
     it('should initialize with mounts', async () => {
-      const pod = new ArtiPod([mount1, mount2]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1, mount2] });
       expect(pod.getMountNames()).toEqual(['docs', 'code']);
     });
 
     it('should throw on duplicate mount names', () => {
       const duplicate = new ArtiMount('docs', path.join(testDir, 'docs2'));
-      expect(() => new ArtiPod([mount1, duplicate])).toThrow('Duplicate mount name: docs');
+      expect(() => new ArtiPod({ useMainMount: false, mounts: [mount1, duplicate] })).toThrow('Duplicate mount name: docs');
     });
   });
 
   describe('mount management', () => {
     it('should add mount', () => {
-      const pod = new ArtiPod();
+      const pod = new ArtiPod({ useMainMount: false });
       pod.addMount(mount1);
       expect(pod.getMount('docs')).toBe(mount1);
     });
 
     it('should throw on adding duplicate mount name', () => {
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const duplicate = new ArtiMount('docs', path.join(testDir, 'other'));
       expect(() => pod.addMount(duplicate)).toThrow("Mount with name 'docs' already exists");
     });
 
     it('should throw on invalid mount name with XML characters', () => {
-      const pod = new ArtiPod();
+      const pod = new ArtiPod({ useMainMount: false });
       const invalidMount = new ArtiMount('<invalid>', path.join(testDir, 'invalid'));
       expect(() => pod.addMount(invalidMount)).toThrow('contains invalid characters');
     });
 
     it('should list mounts', () => {
-      const pod = new ArtiPod([mount1, mount2, mount3]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1, mount2, mount3] });
       const names = pod.getMountNames();
       expect(names).toContain('docs');
       expect(names).toContain('code');
@@ -84,7 +84,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('README.md', '# Documentation\n\nThis mount contains docs.');
       await mount2.write('README.md', '# Code\n\nThis mount contains code.');
 
-      const pod = new ArtiPod([mount1, mount2]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1, mount2] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('<context>');
@@ -106,20 +106,20 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('README.md', 'Docs content');
       await mount2.write('README.md', 'Code content');
 
-      const pod = new ArtiPod([mount1, mount2]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1, mount2] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toMatch(/<\/dataSource>\n\n<dataSource>/);
     });
 
     it('should handle empty pod', async () => {
-      const pod = new ArtiPod();
+      const pod = new ArtiPod({ useMainMount: false });
       const prompt = await pod.buildPrompt();
       expect(prompt).toBe('');
     });
 
     it('should include mount with empty README', async () => {
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
       expect(prompt).toContain('<dataSource>');
       expect(prompt).toContain('<name>docs</name>');
@@ -127,7 +127,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
     });
 
     it('should include mount even when README is missing', async () => {
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
       
       expect(prompt).toContain('<dataSource>');
@@ -140,7 +140,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
     it('should read README.md', async () => {
       await mount1.write('README.md', '# Upper case README');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('# Upper case README');
@@ -149,7 +149,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
     it('should read readme.md', async () => {
       await mount1.write('readme.md', '# Lower case README');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('# Lower case README');
@@ -159,7 +159,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       // Note: On case-insensitive file systems (macOS default), README.md and readme.md are the same file
       await mount1.write('README.md', '# Main README');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('# Main README');
@@ -171,7 +171,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       const longContent = 'x'.repeat(1000);
       await mount1.write('README.md', longContent);
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt({ maxSize: 100 });
 
       expect(prompt.length).toBeLessThanOrEqual(116); // 100 + "\n... [TRUNCATED]"
@@ -181,7 +181,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
     it('should not truncate when under maxSize', async () => {
       await mount1.write('README.md', 'Small');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt({ maxSize: 10000 });
 
       expect(prompt).not.toContain('[TRUNCATED]');
@@ -195,7 +195,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount2.write('README.md', 'Code content');
       await mount3.write('README.md', 'Asset content');
 
-      const pod = new ArtiPod([mount1, mount2, mount3]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1, mount2, mount3] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('<context>');
@@ -213,7 +213,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
     it('should produce deterministic output format', async () => {
       await mount1.write('README.md', 'Test');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt1 = await pod.buildPrompt();
       const prompt2 = await pod.buildPrompt();
 
@@ -223,7 +223,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
     it('should handle special characters in README', async () => {
       await mount1.write('README.md', '<tag> & "quotes"');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('<tag>');
@@ -238,7 +238,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('guide.txt', 'Guide content');
       await mount1.write('tutorial.txt', 'Tutorial content');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('<files>');
@@ -252,7 +252,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('root-file.txt', 'Content');
       await mount1.write('subdir/file.txt', 'Subdir content');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       const filesSection = prompt.match(/<files>([\s\S]*?)<\/files>/)?.[1] || '';
@@ -269,7 +269,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('docs/guide.md', 'Guide');
       await mount1.write('src/index.js', 'Code');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('docs/');
@@ -285,7 +285,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('beta/file.txt', 'B');
       await mount1.write('alpha/file.txt', 'A');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       const filesSection = prompt.match(/<files>([\s\S]*?)<\/files>/)?.[1] || '';
@@ -310,7 +310,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
         await mount1.write(`daily-dump/${date}.txt`, 'Data');
       }
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('daily-dump/');
@@ -327,7 +327,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
         await mount1.write(`details/file${i}.txt`, 'Content');
       }
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('details/');
@@ -343,7 +343,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('file4.txt', 'D');
       await mount1.write('file5.txt', 'E');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt({ maxFilesPerMount: 3 });
 
       expect(prompt).toContain('file1.txt');
@@ -357,7 +357,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('README.md', '# Docs');
       await mount1.write('file.txt', 'Content');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt({ includeFiles: false });
 
       expect(prompt).not.toContain('<files>');
@@ -366,7 +366,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
     });
 
     it('should omit files section when mount has no files', async () => {
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('<dataSource>');
@@ -380,7 +380,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('a/b/mid.txt', 'Mid file');
       await mount1.write('a/top.txt', 'Top file');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('a/');
@@ -395,7 +395,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('docs.txt', 'Docs');
       await mount2.write('code.js', 'Code');
 
-      const pod = new ArtiPod([mount1, mount2]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1, mount2] });
       const prompt = await pod.buildPrompt();
 
       // Check mount1 files
@@ -416,7 +416,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount2.write('code2.js', 'B');
       await mount2.write('code3.js', 'C');
 
-      const pod = new ArtiPod([mount1, mount2]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1, mount2] });
       const prompt = await pod.buildPrompt({ maxFilesPerMount: 2 });
 
       // Both mounts should have their own 2-file limit
@@ -429,7 +429,7 @@ describe('ArtiPod - Aggregation and Prompt Building', () => {
       await mount1.write('file_with_underscores.txt', 'B');
       await mount1.write('file.multiple.dots.txt', 'C');
 
-      const pod = new ArtiPod([mount1]);
+      const pod = new ArtiPod({ useMainMount: false, mounts: [mount1] });
       const prompt = await pod.buildPrompt();
 
       expect(prompt).toContain('file-with-dashes.txt');
