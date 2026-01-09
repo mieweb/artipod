@@ -10,6 +10,7 @@ export {
 } from './containerUtils';
 export type {
   ArtiPodConfig,
+  ArtiPodOptions,
 } from './types';
 export type {
   ContainerHandle,

@@ -12,38 +12,72 @@ interface PodInstance {
 class PodManager {
   private pods: Map<string, PodInstance> = new Map();
 
-  async createPod(podId: string): Promise<ArtiPod> {
-    const pod = new ArtiPod([]);
-    this.pods.set(podId, {
+  async createPod(podId: string, useMainMount: boolean = true): Promise<ArtiPod> {
+    // Create workspace directory for this pod
+    const workspaceDir = path.join(WORKSPACE_ROOT, '../pod-workspaces');
+    await fs.mkdir(workspaceDir, { recursive: true });
+    
+    const pod = new ArtiPod({ 
+      id: podId,
+      workspaceDir,
+      useMainMount
+    });
+    
+    await pod.initialize();
+    
+    const podInstance: PodInstance = {
       pod,
       mounts: new Map(),
-    });
+    };
+    
+    // Store reference to main mount if it was auto-created
+    if (useMainMount) {
+      const mainMount = pod.getMount('main');
+      if (mainMount) {
+        podInstance.mounts.set('main', mainMount);
+      }
+    }
+    
+    this.pods.set(podId, podInstance);
     return pod;
   }
 
-  async ensurePodLoaded(podId: string, mounts: Array<{ mount_name: string; mount_path: string; readonly?: number }>, containerData?: { container_id: string; status: string }): Promise<void> {
+  async ensurePodLoaded(podId: string, mounts: Array<{ mount_name: string; mount_path: string; readonly?: number }>, useMainMount: boolean, containerData?: { container_id: string; status: string }): Promise<void> {
     // If pod is already in memory, nothing to do
     const existingInstance = this.pods.get(podId);
     if (existingInstance) {
       return;
     }
 
-    // Create pod instance
-    const pod = new ArtiPod([]);
+    // When reloading an existing pod, provide all mounts explicitly (including main)
+    // Do NOT use useMainMount since we're re-instantiating, not creating new
+    const allMounts: ArtiMount[] = [];
+    for (const mount of mounts) {
+      // For absolute paths, use as-is. For relative paths, resolve against WORKSPACE_ROOT
+      const fullPath = path.isAbsolute(mount.mount_path) 
+        ? mount.mount_path 
+        : path.join(WORKSPACE_ROOT, mount.mount_path);
+      const isReadonly = mount.readonly === 1;
+      allMounts.push(new ArtiMount(mount.mount_name, fullPath, isReadonly));
+    }
+    
+    const pod = new ArtiPod({
+      id: podId,
+      useMainMount: false,  // Don't auto-create; we're providing all mounts explicitly
+      mounts: allMounts
+    });
+    
+    await pod.initialize();
+    
     const podInstance: PodInstance = {
       pod,
       mounts: new Map(),
     };
     this.pods.set(podId, podInstance);
 
-    // Restore all mounts
-    for (const mount of mounts) {
-      const fullPath = path.join(WORKSPACE_ROOT, mount.mount_path);
-      const isReadonly = mount.readonly === 1;
-      const artiMount = new ArtiMount(mount.mount_name, fullPath, isReadonly);
-      
-      pod.addMount(artiMount);
-      podInstance.mounts.set(mount.mount_name, artiMount);
+    // Store mount references
+    for (const mount of allMounts) {
+      podInstance.mounts.set(mount.getName(), mount);
     }
 
     // Note: Container reconnection on restart is not implemented yet

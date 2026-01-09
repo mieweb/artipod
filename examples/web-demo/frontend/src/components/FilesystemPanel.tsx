@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api';
 
 interface Props {
-  onPodCreated: (data: { name: string; mounts: { name: string; path: string; readonly: boolean }[] }) => void;
+  onPodCreated: (data: { name: string; useMainMount: boolean; mounts: { name: string; path: string; readonly: boolean }[] }) => void;
 }
 
 interface TreeNode {
@@ -132,6 +132,7 @@ export default function FilesystemPanel({ onPodCreated }: Props) {
   const [newItemName, setNewItemName] = useState('');
   const [fileContent, setFileContent] = useState('');
   const [podName, setPodName] = useState('');
+  const [useMainMount, setUseMainMount] = useState(true);
   const [mounts, setMounts] = useState<{ name: string; path: string; readonly: boolean }[]>([]);
   const [modalMountName, setModalMountName] = useState('');
   const [modalMountPath, setModalMountPath] = useState('');
@@ -213,8 +214,9 @@ export default function FilesystemPanel({ onPodCreated }: Props) {
 
   const handleCreatePod = () => {
     if (podName) {
-      onPodCreated({ name: podName, mounts });
+      onPodCreated({ name: podName, useMainMount: useMainMount, mounts });
       setPodName('');
+      setUseMainMount(true);
       setMounts([]);
     }
   };
@@ -475,6 +477,24 @@ export default function FilesystemPanel({ onPodCreated }: Props) {
             />
           </div>
 
+          <div className="form-group" style={{ marginTop: 16 }}>
+            <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={useMainMount}
+                onChange={(e) => setUseMainMount(e.target.checked)}
+                aria-label="Include automatic main mount"
+                style={{ width: 16, height: 16 }}
+              />
+              <span>
+                Include automatic main mount
+                <span style={{ fontSize: 12, color: '#666', fontWeight: 'normal', marginLeft: 6 }}>
+                  (writable workspace for pod)
+                </span>
+              </span>
+            </label>
+          </div>
+
           <h4 style={{ marginTop: 20, marginBottom: 10 }}>Mounts</h4>
           {mounts.length === 0 ? (
             <p style={{ color: '#666', fontStyle: 'italic', fontSize: 14 }}>No mounts added yet. Select a folder and click the 📌 button to add a mount.</p>
@@ -529,6 +549,7 @@ export default function FilesystemPanel({ onPodCreated }: Props) {
             onClick={() => {
               setShowCreatePod(false);
               setPodName('');
+              setUseMainMount(true);
               setMounts([]);
               setShowMountModal(false);
               setModalMountName('');

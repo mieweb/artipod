@@ -8,6 +8,10 @@ import {
   executeCommandInContainer,
   stopAndRemoveContainer,
 } from './containerUtils';
+import { ArtiPodOptions } from './types';
+import * as crypto from 'crypto';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 
 interface BuildPromptOptions {
   maxSize?: number;
@@ -26,6 +30,10 @@ export class ArtiPod {
   private container?: ContainerHandle;
   private imageName?: string;
   private commandTimeout: number = 30000;
+  private id: string;
+  private workspaceDir?: string;
+  private useMainMount: boolean;
+  private initialized: boolean = false;
 
   /**
    * Format file size in human-readable format
@@ -38,17 +46,98 @@ export class ArtiPod {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  constructor(mounts?: ArtiMount[]) {
-    if (mounts) {
+  constructor(options?: ArtiPodOptions) {
+    // Generate or use provided ID
+    this.id = options?.id || crypto.randomBytes(16).toString('hex');
+    this.workspaceDir = options?.workspaceDir;
+    this.useMainMount = options?.useMainMount ?? true;
+
+    // Validate that workspaceDir is provided if main mount should be created
+    if (this.useMainMount && !this.workspaceDir) {
+      throw new Error('workspaceDir is required unless useMainMount is false');
+    }
+
+    // Process initial mounts if provided
+    if (options?.mounts) {
       const names = new Set<string>();
-      for (const mount of mounts) {
+      for (const mount of options.mounts) {
         const name = mount.getName();
         if (names.has(name)) {
           throw new Error(`Duplicate mount name: ${name}`);
         }
+        // Prevent collision: if useMainMount is true, a 'main' mount will be auto-created
+        if (name === 'main' && this.useMainMount) {
+          throw new Error(
+            "Cannot provide a mount named 'main' when useMainMount is true. " +
+            "Either set useMainMount to false and provide the main mount explicitly, " +
+            "or omit the main mount and let it be auto-created."
+          );
+        }
         names.add(name);
         this.mounts.set(name, mount);
       }
+    }
+  }
+
+  /**
+   * Get the pod's unique identifier
+   * @returns The pod ID
+   */
+  getId(): string {
+    return this.id;
+  }
+
+  /**
+   * Initialize the pod by creating the main mount and initializing all mounts
+   * This method is idempotent and can be called multiple times safely
+   */
+  async initialize(): Promise<void> {
+    // Return early if already initialized (idempotent)
+    if (this.initialized) {
+      return;
+    }
+
+    // Create and initialize main mount if needed
+    if (this.useMainMount && this.workspaceDir) {
+      const mainMountPath = path.join(this.workspaceDir, `artipod-${this.id}`);
+      
+      // Create directory (recursive: true means no error if exists)
+      await fs.mkdir(mainMountPath, { recursive: true });
+      
+      // Create main mount
+      const mainMount = new ArtiMount('main', mainMountPath, false);
+      await mainMount.initialize();
+      this.mounts.set('main', mainMount);
+    }
+
+    // Initialize all user-provided mounts
+    for (const mount of this.mounts.values()) {
+      // Skip main mount as it's already initialized
+      if (mount.getName() !== 'main') {
+        await mount.initialize();
+      }
+    }
+
+    this.initialized = true;
+  }
+
+  /**
+   * Clean up the main mount directory
+   * Removes the main mount and deletes its directory from the filesystem
+   */
+  async cleanupMainMount(): Promise<void> {
+    const mainMount = this.mounts.get('main');
+    if (!mainMount || !this.useMainMount) {
+      return; // Silent success if no main mount
+    }
+
+    // Remove from mounts map
+    this.mounts.delete('main');
+
+    // Delete the directory
+    if (this.workspaceDir) {
+      const mainMountPath = path.join(this.workspaceDir, `artipod-${this.id}`);
+      await fs.rm(mainMountPath, { recursive: true, force: true });
     }
   }
 
@@ -66,6 +155,10 @@ export class ArtiPod {
     }
     if (name.includes('<') || name.includes('>')) {
       throw new Error(`Mount name '${name}' contains invalid characters (< or >)`);
+    }
+    // Validate 'main' mount name
+    if (name === 'main' && this.useMainMount) {
+      throw new Error("Mount name 'main' is reserved for the auto-generated main mount");
     }
     
     if (this.mounts.has(name)) {

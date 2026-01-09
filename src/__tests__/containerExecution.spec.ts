@@ -47,7 +47,7 @@ describe('ArtiPod - Container Execution', () => {
 
     it('should start a container', async () => {
       const mount = new ArtiMount('test', testContextPath);
-      pod = new ArtiPod([mount]);
+      pod = new ArtiPod({ useMainMount: false, mounts: [mount] });
       
       container = await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
@@ -60,7 +60,7 @@ describe('ArtiPod - Container Execution', () => {
 
     it('should start container with artipod user', async () => {
       const mount = new ArtiMount('test', testContextPath);
-      pod = new ArtiPod([mount]);
+      pod = new ArtiPod({ useMainMount: false, mounts: [mount] });
       
       await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
@@ -75,7 +75,7 @@ describe('ArtiPod - Container Execution', () => {
   describe('executeCommand', () => {
     beforeEach(async () => {
       const mount = new ArtiMount('test', testContextPath);
-      pod = new ArtiPod([mount]);
+      pod = new ArtiPod({ useMainMount: false, mounts: [mount] });
       await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
       });
@@ -141,7 +141,7 @@ describe('ArtiPod - Container Execution', () => {
   describe('stopContainer', () => {
     it('should stop and remove container', async () => {
       const mount = new ArtiMount('test', testContextPath);
-      pod = new ArtiPod([mount]);
+      pod = new ArtiPod({ useMainMount: false, mounts: [mount] });
       
       const container = await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
@@ -162,7 +162,7 @@ describe('ArtiPod - Container Execution', () => {
   describe('context mount', () => {
     beforeEach(async () => {
       const mount = new ArtiMount('test', testContextPath);
-      pod = new ArtiPod([mount]);
+      pod = new ArtiPod({ useMainMount: false, mounts: [mount] });
       await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
       });
@@ -222,7 +222,7 @@ describe('ArtiPod - Container Execution', () => {
   describe('error handling', () => {
     it('should handle command that does not exist', async () => {
       const mount = new ArtiMount('test', testContextPath);
-      pod = new ArtiPod([mount]);
+      pod = new ArtiPod({ useMainMount: false, mounts: [mount] });
       
       await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
@@ -270,7 +270,7 @@ describe('ArtiPod - Container Execution', () => {
 
     it('should mount read-only directory in container', async () => {
       const mount = new ArtiMount('readonly', readonlyTestPath, true);
-      pod = new ArtiPod([mount]);
+      pod = new ArtiPod({ useMainMount: false, mounts: [mount] });
       
       await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
@@ -284,7 +284,7 @@ describe('ArtiPod - Container Execution', () => {
 
     it('should prevent writing to read-only mount in container', async () => {
       const mount = new ArtiMount('readonly', readonlyTestPath, true);
-      pod = new ArtiPod([mount]);
+      pod = new ArtiPod({ useMainMount: false, mounts: [mount] });
       
       await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
@@ -300,7 +300,7 @@ describe('ArtiPod - Container Execution', () => {
     it('should allow writing to writable mount alongside read-only mount', async () => {
       const readonlyMount = new ArtiMount('readonly', readonlyTestPath, true);
       const writableMount = new ArtiMount('writable', testContextPath, false);
-      pod = new ArtiPod([readonlyMount, writableMount]);
+      pod = new ArtiPod({ useMainMount: false, mounts: [readonlyMount, writableMount] });
       
       await pod.startContainer(dockerfilePath, {
         seccompProfilePath,

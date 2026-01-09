@@ -45,7 +45,7 @@ const mount = new ArtiMount('my-project', '/path/to/project');
 await mount.initialize();
 
 // Create a read-only mount (prevents write operations)
-const readOnlyMount = new ArtiMount('docs', '/path/to/docs', { readonly: true });
+const readOnlyMount = new ArtiMount('docs', '/path/to/docs', true);
 await readOnlyMount.initialize();
 
 // Read a file
@@ -78,19 +78,58 @@ const readmes = await mount.getReadmeContents();
 ### ArtiPod - Aggregating Mounts
 
 ```typescript
-import { ArtiPod, ArtiMount } from 'artipod';
+import { ArtiPod, ArtiMount } from '@mieweb/artipod';
 
-// Create mounts
+// Create pod with automatic main mount (writable workspace)
+const pod = new ArtiPod({ 
+  workspaceDir: '/path/to/workspaces' 
+});
+await pod.initialize();
+
+// The pod now has a "main" mount at /path/to/workspaces/artipod-{id}
+const mainMount = pod.getMount('main');
+console.log(pod.getId()); // e.g., "a1b2c3d4e5f6..."
+
+// Create pod with custom ID (useful for persistence)
+const pod2 = new ArtiPod({ 
+  id: 'my-project-123',
+  workspaceDir: '/path/to/workspaces' 
+});
+await pod2.initialize();
+// Creates/reuses /path/to/workspaces/artipod-my-project-123
+
+// IMPORTANT: For persistence, store all mounts (including main) in your database
+// When re-instantiating, provide ALL mounts explicitly:
+const mainMount = new ArtiMount('main', '/path/to/workspaces/artipod-my-project-123');
+const docsMount = new ArtiMount('docs', '/path/to/docs');
+const reloadedPod = new ArtiPod({
+  id: 'my-project-123',
+  useMainMount: false,  // Don't auto-create; providing explicitly
+  mounts: [mainMount, docsMount]
+});
+await reloadedPod.initialize();
+// useMainMount is only for initial creation - when reloading, provide all mounts
+
+// Add additional mounts
 const docs = new ArtiMount('docs', '/path/to/docs');
-const src = new ArtiMount('src', '/path/to/src');
-
-// Create pod with mounts
-const pod = new ArtiPod([docs, src]);
-
-// Or add mounts later
-const pod2 = new ArtiPod();
+await docs.initialize();
 pod2.addMount(docs);
-pod2.addMount(src);
+
+// Create pod without automatic main mount
+const pod3 = new ArtiPod({ useMainMount: false });
+await pod3.initialize();
+// No main mount created, can add your own mounts
+
+// Create pod with initial mounts
+const src = new ArtiMount('src', '/path/to/src');
+const pod4 = new ArtiPod({
+  workspaceDir: '/path/to/workspaces',
+  mounts: [docs, src]  // Will be initialized automatically
+});
+await pod4.initialize();
+
+// Clean up main mount when done
+await pod.cleanupMainMount(); // Removes main mount and deletes directory
 
 // Build AI context prompt from all mounts in the pod
 const prompt = await pod.buildPrompt({
@@ -132,12 +171,13 @@ if (runtime) {
   // e.g., "Using podman (rootless)" or "Using docker (rootful)"
 }
 
-// Create pod with mounts
-const docs = new ArtiMount('docs', '/path/to/docs');
-const src = new ArtiMount('src', '/path/to/src');
-const pod = new ArtiPod([docs, src]);
+// Create pod with automatic main mount
+const pod = new ArtiPod({ 
+  workspaceDir: '/path/to/workspaces' 
+});
+await pod.initialize();
 
-// Basic usage - just specify Dockerfile, use all defaults
+// Basic usage - just specify Dockerfile
 await pod.startContainer('/path/to/Dockerfile');
 
 // Execute commands
@@ -297,11 +337,11 @@ Each pod can use a different Dockerfile and seccomp profile, allowing per-pod cu
 
 ### ArtiMount
 
-- `constructor(name: string, rootPath: string, options?: { readonly?: boolean })` - Create a mount (optionally read-only)
+- `constructor(name: string, rootPath: string, readonly?: boolean)` - Create a mount (optionally read-only, default: false)
 - `initialize(): Promise<void>` - Verify mount exists
 - `getName(): string` - Get mount name
 - `getRootPath(): string` - Get mount root path
-- `isReadonly(): boolean` - Check if mount is read-only
+- `isReadOnly(): boolean` - Check if mount is read-only
 - `read(path: string, startLine?: number, endLine?: number): Promise<string>` - Read file
 - `write(path: string, content: string | Buffer): Promise<void>` - Write file (throws on read-only mounts)
 - `createFolder(path: string): Promise<void>` - Create directory (throws on read-only mounts)
@@ -311,7 +351,14 @@ Each pod can use a different Dockerfile and seccomp profile, allowing per-pod cu
 
 ### ArtiPod
 
-- `constructor(mounts?: ArtiMount[])`
+- `constructor(options?: ArtiPodOptions)` - Create a pod with optional configuration
+  - `id?: string` - Custom pod ID (auto-generated if not provided)
+  - `workspaceDir?: string` - Directory for main mount (required if useMainMount is true)
+  - `useMainMount?: boolean` - Auto-create main mount (default: true)
+  - `mounts?: ArtiMount[]` - Initial mounts to add
+- `initialize(): Promise<void>` - Initialize pod and all mounts (idempotent)
+- `getId(): string` - Get pod's unique identifier
+- `cleanupMainMount(): Promise<void>` - Remove main mount and delete its directory
 - `addMount(mount: ArtiMount): void` - Add mount to pod
 - `removeMount(name: string): boolean` - Remove mount
 - `getMount(name: string): ArtiMount | undefined` - Get mount by name
@@ -339,6 +386,19 @@ Each pod can use a different Dockerfile and seccomp profile, allowing per-pod cu
 ### Types
 
 ```typescript
+interface ArtiPodOptions {
+  id?: string;                      // Unique pod ID (auto-generated if not provided)
+  workspaceDir?: string;            // Base directory for workspaces (required if useMainMount is true)
+  useMainMount?: boolean;         // Auto-create writable 'main' mount (default: true)
+  mounts?: ArtiMount[];             // Initial mounts to add to the pod
+}
+
+interface BuildPromptOptions {
+  maxSize?: number;                 // Max characters in prompt
+  includeFiles?: boolean;           // Include file listings
+  maxFilesPerMount?: number;        // Max files per mount
+}
+
 interface ContainerOptions {
   seccompProfilePath?: string;     // Path to seccomp profile
   enableNetwork?: boolean;          // Enable network (default: false)

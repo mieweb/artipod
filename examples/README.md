@@ -4,6 +4,27 @@ This directory contains example applications demonstrating the ArtiPod library.
 
 ## Available Examples
 
+### [basic](./basic)
+
+A simple TypeScript script demonstrating the core ArtiPod features:
+
+- Automatic "main" mount creation with random IDs
+- Custom pod IDs for persistence
+- Pod initialization and reloading
+- Creating pods without main mounts
+- Adding additional mounts
+- Cleanup operations
+
+**Run it:**
+
+```bash
+# From the repository root
+npm run example:basic
+
+# Or directly
+npx ts-node examples/basic/basic-pod-usage.ts
+```
+
 ### [web-demo](./web-demo)
 
 A full-stack web application with React frontend and Express backend, featuring:
