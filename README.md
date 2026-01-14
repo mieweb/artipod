@@ -277,36 +277,55 @@ if (await isRuntimeAvailable()) {
 
 ### AI Agent Tools (vscode-copilot-chat Compatible)
 
-ArtiPod includes a complete set of file editing tools with interfaces identical to VS Code Copilot Chat. This enables AI models trained on VS Code's tool schema to work seamlessly with artipod for markdown editing and file operations.
+ArtiPod includes two levels of tools with interfaces identical to VS Code Copilot Chat. This enables AI models trained on VS Code's tool schema to work seamlessly with artipod for file operations and container command execution.
+
+#### Tool Registries: Mount-Level vs Pod-Level
+
+**Mount-Level Tools** (`MountToolRegistry`) - File operations on a single mount:
+- Operate on individual ArtiMount instances
+- Provide file reading, editing, and directory operations
+- All file paths are relative to the mount's root directory
+
+**Pod-Level Tools** (`PodToolRegistry`) - Container operations across the pod:
+- Operate on ArtiPod instances (across all mounts)
+- Provide command execution in sandboxed containers
+- Access all mounts at `/context/<mount-name>` in the container
 
 ```typescript
-import { ArtiMount, createToolRegistry, getToolDefinitions } from '@mieweb/artipod';
+import { ArtiMount, ArtiPod, MountToolRegistry, PodToolRegistry } from '@mieweb/artipod';
 
-// Create a mount and tool registry
+// Create mount-level tool registry for file operations
 const mount = new ArtiMount('project', '/path/to/files');
 await mount.initialize();
-const tools = createToolRegistry(mount);
+const mountTools = new MountToolRegistry(mount);
+
+// Create pod-level tool registry for container operations
+const pod = new ArtiPod({ workspaceDir: '/path/to/workspace' });
+await pod.initialize();
+const podTools = new PodToolRegistry(pod);
 
 // Get OpenAI function-calling compatible definitions
-const definitions = tools.getDefinitions();
-// Use these with OpenAI, Anthropic, or other model APIs
+const allDefinitions = [
+  ...mountTools.getDefinitions(),
+  ...podTools.getDefinitions()
+];
 
-// Execute tools by name
-const readResult = await tools.execute('read_file', {
-  filePath: '/path/to/files/README.md',
+// Execute mount-level tool
+const readResult = await mountTools.execute('read_file', {
+  filePath: 'README.md',
   startLine: 1,
   endLine: 50
 });
 
-const editResult = await tools.execute('replace_string_in_file', {
-  filePath: '/path/to/files/doc.md',
-  oldString: 'old text with context\nline to change\nmore context',
-  newString: 'old text with context\nnew line\nmore context',
-  explanation: 'Update the text'
+// Execute pod-level tool (requires container to be started)
+await pod.startContainer();
+const cmdResult = await podTools.execute('run_in_terminal', {
+  command: 'ls -la /context/main',
+  timeout: 5000  // Optional timeout override
 });
 ```
 
-#### Available Tools
+#### Mount-Level Tools
 
 | Tool | Description |
 |------|-------------|
@@ -317,6 +336,42 @@ const editResult = await tools.execute('replace_string_in_file', {
 | `replace_string_in_file` | Replace exact string matches with uniqueness validation |
 | `multi_replace_string_in_file` | Batch replacements across one or more files |
 | `apply_patch` | Apply unified diff-style patches with fuzzy context matching |
+
+#### Pod-Level Tools
+
+| Tool | Description |
+|------|-------------|
+| `run_in_terminal` | Execute bash commands in a sandboxed container environment |
+
+**Container Environment:**
+- **Working directory:** `/context` (all mounts accessible at `/context/<mount-name>`)
+- **Default timeout:** 30 seconds (configurable per-pod)
+- **Maximum timeout:** 5 minutes per command
+- **Resource limits:** 512MB memory, 1 CPU core, 100 process limit
+- **Security:** seccomp sandbox, no new privileges, minimal capabilities
+- **User:** Unprivileged `artipod` user (UID 1000)
+- **Exit code:** Success when `exitCode === 0`, failure otherwise
+
+**Example:**
+```typescript
+await pod.startContainer();
+
+// Simple command
+const result = await podTools.execute('run_in_terminal', {
+  command: 'echo "Hello World"'
+});
+
+// Change directory
+const result2 = await podTools.execute('run_in_terminal', {
+  command: 'cd /context/main && pwd'
+});
+
+// With timeout override
+const result3 = await podTools.execute('run_in_terminal', {
+  command: 'npm install',
+  timeout: 120000  // 2 minutes
+});
+```
 
 #### Using apply_patch
 

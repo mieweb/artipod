@@ -9,9 +9,12 @@ import {
   ReplaceStringTool,
   MultiReplaceStringTool,
   ApplyPatchTool,
-  ToolRegistry,
+  MountToolRegistry,
+  PodToolRegistry,
+  RunTerminalTool,
   ToolName,
 } from '../tools';
+import { ArtiPod } from '../artipod';
 
 describe('Tools', () => {
   let testDir: string;
@@ -520,11 +523,11 @@ describe('Tools', () => {
     });
   });
 
-  describe('ToolRegistry', () => {
-    let registry: ToolRegistry;
+  describe('MountToolRegistry', () => {
+    let registry: MountToolRegistry;
 
     beforeEach(() => {
-      registry = new ToolRegistry(mount);
+      registry = new MountToolRegistry(mount);
     });
 
     it('should register all tools', () => {
@@ -579,4 +582,219 @@ describe('Tools', () => {
       expect(result.error).toContain('not found');
     });
   });
+
+  describe('PodToolRegistry', () => {
+    let pod: ArtiPod;
+    let registry: PodToolRegistry;
+
+    beforeEach(async () => {
+      pod = new ArtiPod({
+        workspaceDir: testDir,
+        useMainMount: true,
+      });
+      await pod.initialize();
+      registry = new PodToolRegistry(pod);
+    });
+
+    afterEach(async () => {
+      if (pod.hasContainer()) {
+        await pod.stopContainer();
+      }
+      await pod.cleanupMainMount();
+    });
+
+    it('should register RunTerminal tool', () => {
+      expect(registry.has(ToolName.RunTerminal)).toBe(true);
+    });
+
+    it('should get tool by name', () => {
+      const tool = registry.get(ToolName.RunTerminal);
+      expect(tool).toBeDefined();
+      expect(tool!.name).toBe(ToolName.RunTerminal);
+    });
+
+    it('should get all tools', () => {
+      const tools = registry.getAll();
+      expect(tools.length).toBe(1);
+    });
+
+    it('should get all definitions', () => {
+      const definitions = registry.getDefinitions();
+      expect(definitions.length).toBe(1);
+      expect(definitions[0].name).toBe('run_in_terminal');
+    });
+  });
+
+  describe('RunTerminalTool', () => {
+    let pod: ArtiPod;
+    let tool: RunTerminalTool;
+    let dockerfilePath: string;
+    let seccompProfilePath: string;
+
+    beforeEach(async () => {
+      // Setup container config paths
+      dockerfilePath = path.join(process.cwd(), 'container', 'Dockerfile');
+      seccompProfilePath = path.join(process.cwd(), 'container', 'seccomp-profiles', 'sandbox.json');
+      
+      pod = new ArtiPod({
+        workspaceDir: testDir,
+        useMainMount: true,
+      });
+      await pod.initialize();
+      tool = new RunTerminalTool(pod);
+    });
+
+    afterEach(async () => {
+      if (pod.hasContainer()) {
+        await pod.stopContainer();
+      }
+      await pod.cleanupMainMount();
+    });
+
+    it('should have correct name and definition', () => {
+      expect(tool.name).toBe(ToolName.RunTerminal);
+      expect(tool.definition).toBeDefined();
+      expect(tool.definition.name).toBe('run_in_terminal');
+    });
+
+    it('should return error when command is empty', async () => {
+      const result = await tool.execute({ command: '' });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Command is required');
+    });
+
+    it('should return error when container is not running', async () => {
+      const result = await tool.execute({ command: 'echo test' });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('No container running');
+    });
+
+    it('should execute simple command successfully', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      const result = await tool.execute({ command: 'echo "Hello World"' });
+
+      expect(result.success).toBe(true);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe('Hello World');
+      expect(result.stderr).toBe('');
+    });
+
+    it('should handle command with non-zero exit code', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      const result = await tool.execute({ command: 'exit 42' });
+
+      expect(result.success).toBe(false);
+      expect(result.exitCode).toBe(42);
+    });
+
+    it('should execute command with stderr', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      const result = await tool.execute({ command: 'echo "error message" >&2' });
+
+      expect(result.success).toBe(true);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.trim()).toBe('error message');
+    });
+
+    it('should execute command in /context directory', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      const result = await tool.execute({ command: 'pwd' });
+
+      expect(result.success).toBe(true);
+      expect(result.stdout.trim()).toBe('/context');
+    });
+
+    it('should change directory with cd command', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      const result = await tool.execute({ command: 'cd /tmp && pwd' });
+
+      expect(result.success).toBe(true);
+      expect(result.stdout.trim()).toBe('/tmp');
+    });
+
+    it('should handle timeout parameter', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      // Test with valid timeout
+      const result = await tool.execute({ 
+        command: 'echo test', 
+        timeout: 5000 
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('should clamp timeout to valid range', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      // Test with timeout below minimum (should be clamped to 1000ms)
+      const result1 = await tool.execute({ 
+        command: 'echo test', 
+        timeout: 100 
+      });
+      expect(result1.success).toBe(true);
+
+      // Test with timeout above maximum (should be clamped to 300000ms)
+      const result2 = await tool.execute({ 
+        command: 'echo test', 
+        timeout: 500000 
+      });
+      expect(result2.success).toBe(true);
+    });
+
+    it('should reject invalid timeout', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      const result = await tool.execute({ 
+        command: 'echo test', 
+        timeout: -1 
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Timeout must be a positive number');
+    });
+
+    it('should handle complex bash commands', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      const result = await tool.execute({ 
+        command: 'for i in 1 2 3; do echo $i; done' 
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.stdout.trim()).toBe('1\n2\n3');
+    });
+
+    it('should access files in main mount', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      // Create a test file in the main mount
+      const mainMount = pod.getMount('main')!;
+      await mainMount.write('test-file.txt', 'test content');
+
+      const result = await tool.execute({ 
+        command: 'cat /context/main/test-file.txt' 
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.stdout.trim()).toBe('test content');
+    });
+
+    it('should leave modifiedFiles undefined', async () => {
+      await pod.startContainer(dockerfilePath, { seccompProfilePath });
+
+      const result = await tool.execute({ command: 'echo test' });
+
+      expect(result.modifiedFiles).toBeUndefined();
+    });
+  });
 });
+

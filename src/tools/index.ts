@@ -17,16 +17,19 @@ import { allToolDefinitions } from './definitions';
 export * from './types';
 export * from './definitions';
 
-// Re-export individual tools
+// Re-export individual mount-level tools
 export { ReadFileTool, CreateFileTool, ListDirTool, CreateDirectoryTool } from './coreTools';
 export { ReplaceStringTool, MultiReplaceStringTool, NoMatchError, MultipleMatchError, NoChangeError } from './editTools';
 export { ApplyPatchTool } from './applyPatchTool';
 export * from './applyPatchParser';
 
+// Re-export pod-level tools
+export { RunTerminalTool, PodToolRegistry, createPodToolRegistry, createPodTools } from './podTools';
+
 /**
- * Tool registry for a mount
+ * Tool registry for mount-level operations (file reading/editing)
  */
-export class ToolRegistry {
+export class MountToolRegistry {
   private tools: Map<string, ToolHandler> = new Map();
 
   constructor(mount: ArtiMount) {
@@ -103,10 +106,10 @@ export class ToolRegistry {
 }
 
 /**
- * Create a tool registry for a mount
+ * Create a mount tool registry for a mount
  */
-export function createToolRegistry(mount: ArtiMount): ToolRegistry {
-  return new ToolRegistry(mount);
+export function createToolRegistry(mount: ArtiMount): MountToolRegistry {
+  return new MountToolRegistry(mount);
 }
 
 /**

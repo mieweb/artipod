@@ -1,10 +1,10 @@
 /**
  * Basic ArtiPod Usage Example
  * 
- * This example demonstrates the new automatic "main" mount feature.
+ * This example demonstrates the automatic "main" mount feature and tool registries.
  */
 
-import { ArtiPod, ArtiMount } from '../../src';
+import { ArtiPod, ArtiMount, MountToolRegistry, PodToolRegistry } from '../../src';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
@@ -101,6 +101,48 @@ async function main() {
   
   await pod4.cleanupMainMount();
   console.log('✓ Cleaned up pod4 main mount');
+  
+  console.log('\n=== Example 5: Tool Registries ===\n');
+  
+  // Create a pod for tool examples
+  const pod5 = new ArtiPod({ workspaceDir });
+  await pod5.initialize();
+  
+  // Create mount-level tool registry (file operations)
+  const mountRegistry = new MountToolRegistry(pod5.getMount('main')!);
+  console.log(`Mount-level tools: ${mountRegistry.getAll().map(t => t.name).join(', ')}`);
+  
+  // Create pod-level tool registry (container operations)
+  const podRegistry = new PodToolRegistry(pod5);
+  console.log(`Pod-level tools: ${podRegistry.getAll().map(t => t.name).join(', ')}\n`);
+  
+  // Example: Use mount tool to create a file
+  console.log('Using mount-level tools...');
+  await mountRegistry.execute('create_file', {
+    filePath: 'tool-test.txt',
+    content: 'Created by create_file tool',
+  });
+  console.log('✓ Created file using create_file tool');
+  
+  // Example: Use pod tool to execute command
+  console.log('\nUsing pod-level tools...');
+  const dockerfilePath = path.join(process.cwd(), 'container', 'Dockerfile');
+  const seccompProfilePath = path.join(process.cwd(), 'container', 'seccomp-profiles', 'sandbox.json');
+  
+  await pod5.startContainer(dockerfilePath, { seccompProfilePath });
+  
+  const result = await podRegistry.execute('run_in_terminal', {
+    command: 'ls -la /context/main',
+  });
+  
+  if (result.success) {
+    console.log('✓ Executed command in container');
+    console.log('Output:', (result as { stdout: string }).stdout);
+  }
+  
+  await pod5.stopContainer();
+  await pod5.cleanupMainMount();
+  console.log('\n✓ Cleaned up pod5');
   
   // Clean up example directories
   await fs.rm(workspaceDir, { recursive: true, force: true });

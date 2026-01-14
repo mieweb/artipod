@@ -325,6 +325,45 @@ export const editToolDefinitions: ToolDefinition[] = [
 ];
 
 /**
+ * run_in_terminal tool definition
+ */
+export const runInTerminalDefinition: ToolDefinition = {
+  name: ToolName.RunTerminal,
+  description: `Execute a bash command in the pod's sandboxed container environment. Commands run in the /context directory where all mounts are accessible at /context/<mount-name>. Use 'cd' commands to change directories as needed.
+
+Container Environment:
+- Working directory: /context (default)
+- Default timeout: 30 seconds
+- Maximum timeout: 5 minutes (300000ms)
+- Resource limits: 512MB memory, 1 CPU core
+- Security: seccomp sandbox, no new privileges, minimal capabilities
+- User: unprivileged 'artipod' user
+
+Success is determined by exit code: exitCode === 0 means success, non-zero means failure.`,
+  inputSchema: {
+    type: 'object',
+    required: ['command'],
+    properties: {
+      command: {
+        type: 'string',
+        description: 'Bash command to execute. Can include pipes, redirects, and other bash features. Use "cd <dir> && <command>" to run commands in specific directories.',
+      },
+      timeout: {
+        type: 'number',
+        description: 'Optional timeout in milliseconds. Overrides the pod\'s default timeout. Will be clamped to range [1000, 300000] (1 second to 5 minutes).',
+      },
+    },
+  },
+};
+
+/**
+ * All container tool definitions
+ */
+export const containerToolDefinitions: ToolDefinition[] = [
+  runInTerminalDefinition,
+];
+
+/**
  * All search tool definitions
  */
 export const searchToolDefinitions: ToolDefinition[] = [
@@ -338,6 +377,7 @@ export const searchToolDefinitions: ToolDefinition[] = [
 export const allToolDefinitions: ToolDefinition[] = [
   ...coreToolDefinitions,
   ...editToolDefinitions,
+  ...containerToolDefinitions,
   ...searchToolDefinitions,
 ];
 

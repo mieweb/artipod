@@ -19,6 +19,9 @@ export enum ToolName {
   MultiReplaceString = 'multi_replace_string_in_file',
   ApplyPatch = 'apply_patch',
 
+  // Container operations (pod-level)
+  RunTerminal = 'run_in_terminal',
+
   // Search operations (optional - can be implemented later)
   FindFiles = 'file_search',
   FindTextInFiles = 'grep_search',
@@ -30,6 +33,7 @@ export enum ToolName {
 export enum ToolCategory {
   Core = 'Core',
   Edit = 'Edit',
+  Container = 'Container',
   Search = 'Search',
 }
 
@@ -44,6 +48,7 @@ export const toolCategories: Record<ToolName, ToolCategory> = {
   [ToolName.ReplaceString]: ToolCategory.Edit,
   [ToolName.MultiReplaceString]: ToolCategory.Edit,
   [ToolName.ApplyPatch]: ToolCategory.Edit,
+  [ToolName.RunTerminal]: ToolCategory.Container,
   [ToolName.FindFiles]: ToolCategory.Search,
   [ToolName.FindTextInFiles]: ToolCategory.Search,
 };
@@ -125,6 +130,14 @@ export interface IMultiReplaceStringParams {
 export interface IApplyPatchParams {
   input: string;
   explanation: string;
+}
+
+/**
+ * run_in_terminal parameters
+ */
+export interface IRunInTerminalParams {
+  command: string;
+  timeout?: number;
 }
 
 /**
