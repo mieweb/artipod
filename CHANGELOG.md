@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-01-15
+
+### Added
+
+- **Tool registries for AI integration**: New tool registry system compatible with OpenAI function calling and vscode-copilot-chat
+  - `MountToolRegistry`: File operation tools (read_file, write_file, create_file, apply_patch, etc.)
+  - `PodToolRegistry`: Container command execution tools
+- **run_in_terminal tool**: Execute bash commands in sandboxed containers with optional timeout override
+  - Commands run in `/context` directory with all mounts accessible at `/context/<mount-name>`
+  - Configurable timeout (1s-5min range, default 30s)
+  - Exit code-based success determination (`exitCode === 0`)
+  - Full bash support (pipes, redirects, cd commands, etc.)
+- **Container environment documentation**: Comprehensive documentation of security sandbox, resource limits, and execution context
+- **Timeout override support**: `ArtiPod.executeCommand()` now accepts optional timeout parameter
+
 ## [0.2.0] - 2026-01-09
 
 ### Added
