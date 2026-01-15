@@ -25,6 +25,33 @@ npm run example:basic
 npx ts-node examples/basic/basic-pod-usage.ts
 ```
 
+### [mcp-server](./mcp-server)
+
+A Model Context Protocol (MCP) server that exposes ArtiPod's AI-aware file operations to VS Code and other MCP clients:
+
+- 8 AI-optimized tools for file operations and command execution
+- Lazy pod initialization on first tool call
+- Ephemeral containers with automatic cleanup
+- Resource providers for pod state and file trees
+- VS Code integration ready
+
+**Quick Start:**
+
+```bash
+cd mcp-server
+npm install
+npm run build
+
+# Configure .env with your workspace directory
+cp .env.example .env
+# Edit .env to set WORKSPACE_DIR
+
+# Test locally (ctrl+c to exit)
+npm start
+```
+
+See [mcp-server/README.md](./mcp-server/README.md) for VS Code integration setup.
+
 ### [web-demo](./web-demo)
 
 A full-stack web application with React frontend and Express backend, featuring:
