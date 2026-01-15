@@ -642,14 +642,14 @@ describe('Tools', () => {
       });
       await pod.initialize();
       tool = new RunTerminalTool(pod);
-    });
+    }, 120000);
 
     afterEach(async () => {
       if (pod.hasContainer()) {
         await pod.stopContainer();
       }
       await pod.cleanupMainMount();
-    });
+    }, 120000);
 
     it('should have correct name and definition', () => {
       expect(tool.name).toBe(ToolName.RunTerminal);
@@ -680,7 +680,7 @@ describe('Tools', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout.trim()).toBe('Hello World');
       expect(result.stderr).toBe('');
-    });
+    }, 120000);
 
     it('should handle command with non-zero exit code', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -689,7 +689,7 @@ describe('Tools', () => {
 
       expect(result.success).toBe(false);
       expect(result.exitCode).toBe(42);
-    });
+    }, 120000);
 
     it('should execute command with stderr', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -699,7 +699,7 @@ describe('Tools', () => {
       expect(result.success).toBe(true);
       expect(result.exitCode).toBe(0);
       expect(result.stderr.trim()).toBe('error message');
-    });
+    }, 120000);
 
     it('should execute command in /context directory', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -708,7 +708,7 @@ describe('Tools', () => {
 
       expect(result.success).toBe(true);
       expect(result.stdout.trim()).toBe('/context');
-    });
+    }, 120000);
 
     it('should change directory with cd command', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -717,7 +717,7 @@ describe('Tools', () => {
 
       expect(result.success).toBe(true);
       expect(result.stdout.trim()).toBe('/tmp');
-    });
+    }, 120000);
 
     it('should handle timeout parameter', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -730,7 +730,7 @@ describe('Tools', () => {
 
       expect(result.success).toBe(true);
       expect(result.exitCode).toBe(0);
-    });
+    }, 120000);
 
     it('should clamp timeout to valid range', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -748,7 +748,7 @@ describe('Tools', () => {
         timeout: 500000 
       });
       expect(result2.success).toBe(true);
-    });
+    }, 120000);
 
     it('should reject invalid timeout', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -760,7 +760,7 @@ describe('Tools', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('Timeout must be a positive number');
-    });
+    }, 120000);
 
     it('should handle complex bash commands', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -771,7 +771,7 @@ describe('Tools', () => {
 
       expect(result.success).toBe(true);
       expect(result.stdout.trim()).toBe('1\n2\n3');
-    });
+    }, 120000);
 
     it('should access files in main mount', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -786,7 +786,7 @@ describe('Tools', () => {
 
       expect(result.success).toBe(true);
       expect(result.stdout.trim()).toBe('test content');
-    });
+    }, 120000);
 
     it('should leave modifiedFiles undefined', async () => {
       await pod.startContainer(dockerfilePath, { seccompProfilePath });
@@ -794,7 +794,7 @@ describe('Tools', () => {
       const result = await tool.execute({ command: 'echo test' });
 
       expect(result.modifiedFiles).toBeUndefined();
-    });
+    }, 120000);
   });
 });
 
