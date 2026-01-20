@@ -20,6 +20,13 @@ Look at [ozwell-artipod](https://github.com/mieweb/ozwell-artipod) to understand
 - **Line-based Reading**: Read specific line ranges from files
 - **Directory Listings**: List files with sizes and directory structures
 
+### AI Agent Tools (vscode-copilot-chat Compatible)
+- **Identical Interfaces**: Tools match VS Code Copilot Chat schemas exactly
+- **OpenAI Compatible**: Tool definitions work with function calling APIs
+- **String Replacement**: Precise edits with context-based matching
+- **Apply Patch**: Unified diff format with fuzzy context matching
+- **Prompt Templates**: Pre-built system prompts optimized for models
+
 ### AI Context Generation
 - **Prompt Building**: Generate XML-formatted prompts from all mounts in the pod
 - **README Aggregation**: Collect README files from all mounts
@@ -268,6 +275,152 @@ if (await isRuntimeAvailable()) {
 }
 ```
 
+### AI Agent Tools (vscode-copilot-chat Compatible)
+
+ArtiPod includes two levels of tools with interfaces identical to VS Code Copilot Chat. This enables AI models trained on VS Code's tool schema to work seamlessly with artipod for file operations and container command execution.
+
+#### Tool Registries: Mount-Level vs Pod-Level
+
+**Mount-Level Tools** (`MountToolRegistry`) - File operations on a single mount:
+- Operate on individual ArtiMount instances
+- Provide file reading, editing, and directory operations
+- All file paths are relative to the mount's root directory
+
+**Pod-Level Tools** (`PodToolRegistry`) - Container operations across the pod:
+- Operate on ArtiPod instances (across all mounts)
+- Provide command execution in sandboxed containers
+- Access all mounts at `/context/<mount-name>` in the container
+
+```typescript
+import { ArtiMount, ArtiPod, MountToolRegistry, PodToolRegistry } from '@mieweb/artipod';
+
+// Create mount-level tool registry for file operations
+const mount = new ArtiMount('project', '/path/to/files');
+await mount.initialize();
+const mountTools = new MountToolRegistry(mount);
+
+// Create pod-level tool registry for container operations
+const pod = new ArtiPod({ workspaceDir: '/path/to/workspace' });
+await pod.initialize();
+const podTools = new PodToolRegistry(pod);
+
+// Get OpenAI function-calling compatible definitions
+const allDefinitions = [
+  ...mountTools.getDefinitions(),
+  ...podTools.getDefinitions()
+];
+
+// Execute mount-level tool
+const readResult = await mountTools.execute('read_file', {
+  filePath: 'README.md',
+  startLine: 1,
+  endLine: 50
+});
+
+// Execute pod-level tool (requires container to be started)
+await pod.startContainer();
+const cmdResult = await podTools.execute('run_in_terminal', {
+  command: 'ls -la /context/main',
+  timeout: 5000  // Optional timeout override
+});
+```
+
+#### Mount-Level Tools
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents with line range support (v1: startLine/endLine, v2: offset/limit) |
+| `create_file` | Create new files with automatic directory creation |
+| `list_dir` | List directory contents with folder indicators |
+| `create_directory` | Create directories recursively (like `mkdir -p`) |
+| `replace_string_in_file` | Replace exact string matches with uniqueness validation |
+| `multi_replace_string_in_file` | Batch replacements across one or more files |
+| `apply_patch` | Apply unified diff-style patches with fuzzy context matching |
+
+#### Pod-Level Tools
+
+| Tool | Description |
+|------|-------------|
+| `run_in_terminal` | Execute bash commands in a sandboxed container environment |
+
+**Container Environment:**
+- **Working directory:** `/context` (all mounts accessible at `/context/<mount-name>`)
+- **Default timeout:** 30 seconds (configurable per-pod)
+- **Maximum timeout:** 5 minutes per command
+- **Resource limits:** 512MB memory, 1 CPU core, 100 process limit
+- **Security:** seccomp sandbox, no new privileges, minimal capabilities
+- **User:** Unprivileged `artipod` user (UID 1000)
+- **Exit code:** Success when `exitCode === 0`, failure otherwise
+
+**Example:**
+```typescript
+await pod.startContainer();
+
+// Simple command
+const result = await podTools.execute('run_in_terminal', {
+  command: 'echo "Hello World"'
+});
+
+// Change directory
+const result2 = await podTools.execute('run_in_terminal', {
+  command: 'cd /context/main && pwd'
+});
+
+// With timeout override
+const result3 = await podTools.execute('run_in_terminal', {
+  command: 'npm install',
+  timeout: 120000  // 2 minutes
+});
+```
+
+#### Using apply_patch
+
+The `apply_patch` tool supports a structured patch format for complex edits:
+
+```typescript
+const patchResult = await tools.execute('apply_patch', {
+  input: `*** Begin Patch
+*** Update File: /path/to/files/example.md
+@@ ## Section Header
+ context line before
+-old line to remove
++new line to add
+ context line after
+*** End Patch`,
+  explanation: 'Update example section'
+});
+```
+
+#### System Prompt Templates
+
+Generate optimized system prompts for AI agents using the extracted vscode-copilot-chat instructions:
+
+```typescript
+import { buildSystemPrompt } from '@mieweb/artipod';
+
+const systemPrompt = buildSystemPrompt({
+  includeReplaceString: true,      // Include replace_string instructions
+  includeApplyPatch: true,         // Include apply_patch format docs
+  includeMarkdownInstructions: true, // Markdown-specific tips
+  workspaceRoot: '/path/to/files',  // For absolute path context
+  customInstructions: 'Focus on editing markdown documentation files.'
+});
+
+// Use systemPrompt with your AI model
+```
+
+Individual instruction constants are also available:
+
+```typescript
+import { 
+  AGENT_INSTRUCTIONS,
+  TOOL_USE_INSTRUCTIONS, 
+  REPLACE_STRING_INSTRUCTIONS,
+  APPLY_PATCH_INSTRUCTIONS,
+  MARKDOWN_EDITING_INSTRUCTIONS 
+} from '@mieweb/artipod';
+```
+
 ## Development
 
 ### Prerequisites
@@ -383,6 +536,29 @@ Each pod can use a different Dockerfile and seccomp profile, allowing per-pod cu
 - `getCachedRuntimeInfo(): ContainerRuntimeInfo | null` - Get cached runtime info (no async)
 - `clearRuntimeCache(): void` - Clear cached runtime (for reconnection)
 
+### ToolRegistry
+
+- `constructor(mount: ArtiMount)` - Create registry with all tools for a mount
+- `register(tool: ToolHandler): void` - Register a custom tool
+- `get(name: ToolName | string): ToolHandler | undefined` - Get tool by name
+- `getAll(): ToolHandler[]` - Get all registered tools
+- `getDefinitions(): ToolDefinition[]` - Get OpenAI-compatible definitions
+- `execute(name: ToolName | string, params: unknown): Promise<ToolResult>` - Execute a tool
+- `has(name: ToolName | string): boolean` - Check if tool exists
+
+### Tool Factory Functions
+
+- `createToolRegistry(mount: ArtiMount): ToolRegistry` - Create full registry
+- `createAllTools(mount: ArtiMount): ToolHandler[]` - Create array of handlers
+- `createCoreTools(mount: ArtiMount): ToolHandler[]` - Create read/write/list tools
+- `createEditTools(mount: ArtiMount): ToolHandler[]` - Create replace string tools
+- `createApplyPatchTool(mount: ArtiMount): ApplyPatchTool` - Create patch tool
+
+### Prompt Builders
+
+- `buildSystemPrompt(options?: SystemPromptOptions): string` - Build complete system prompt
+- `buildReminderPrompt(options?): string` - Build editing reminder
+
 ### Types
 
 ```typescript
@@ -424,6 +600,41 @@ interface ContainerRuntimeInfo {
   mode: 'rootless' | 'rootful';     // Privilege mode
   socketPath: string;               // Socket path being used
   version?: string;                 // Runtime version
+}
+
+// Tool Types
+enum ToolName {
+  ReadFile = 'read_file',
+  CreateFile = 'create_file',
+  ListDirectory = 'list_dir',
+  CreateDirectory = 'create_directory',
+  ReplaceString = 'replace_string_in_file',
+  MultiReplaceString = 'multi_replace_string_in_file',
+  ApplyPatch = 'apply_patch',
+}
+
+interface ToolResult {
+  success: boolean;
+  content?: string;
+  error?: string;
+}
+
+interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: 'object';
+    required: string[];
+    properties: Record<string, { type: string; description: string }>;
+  };
+}
+
+interface SystemPromptOptions {
+  includeReplaceString?: boolean;
+  includeApplyPatch?: boolean;
+  includeMarkdownInstructions?: boolean;
+  workspaceRoot?: string;
+  customInstructions?: string;
 }
 ```
 

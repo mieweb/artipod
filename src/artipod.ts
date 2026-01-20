@@ -468,14 +468,16 @@ export class ArtiPod {
   /**
    * Execute a bash command in the pod's container
    * @param command - Bash command to execute
+   * @param timeout - Optional timeout in milliseconds (overrides default commandTimeout)
    * @returns Command execution result
    */
-  async executeCommand(command: string): Promise<CommandResult> {
+  async executeCommand(command: string, timeout?: number): Promise<CommandResult> {
     if (!this.container) {
       throw new Error('No running container for this pod');
     }
 
-    return await executeCommandInContainer(this.container, command, this.commandTimeout);
+    const effectiveTimeout = timeout ?? this.commandTimeout;
+    return await executeCommandInContainer(this.container, command, effectiveTimeout);
   }
 
   /**
