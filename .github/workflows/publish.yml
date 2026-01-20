@@ -17,14 +17,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 18 for build
         uses: actions/setup-node@v4
         with:
-          node-version: 18
-          registry-url: https://registry.npmjs.org
-        env:
-          NODE_AUTH_TOKEN: ""
-          NPM_TOKEN: ""
+          node-version: '18'
 
       - name: Install dependencies
         run: npm ci
@@ -35,25 +31,11 @@ jobs:
       - name: Build
         run: npm run build
 
-      # --- New debug + cleanup step ---
-      - name: Inspect and remove temporary .npmrc
-        run: |
-          echo "Checking for _temp/.npmrc..."
-          if [ -f /home/runner/work/_temp/.npmrc ]; then
-            echo "_temp/.npmrc exists! Contents:"
-            cat /home/runner/work/_temp/.npmrc
-            rm -f /home/runner/work/_temp/.npmrc
-            echo "Removed _temp/.npmrc"
-          else
-            echo "_temp/.npmrc does not exist"
-          fi
-
-      - name: Verify npm env is clean
-        run: env | grep -E 'NPM|NODE_AUTH' || echo "No npm env vars"
+      - name: Setup Node.js 24 for publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Publish to npm
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ""
-          NPM_TOKEN: ""
-          NPM_CONFIG_USERCONFIG: ""
