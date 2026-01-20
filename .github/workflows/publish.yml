@@ -16,6 +16,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Remove npm auth from env
+        run: |
+          unset NODE_AUTH_TOKEN
+          unset NPM_TOKEN
+
+      - name: Verify clean env
+        run: env | grep -E 'NPM|NODE_AUTH' || echo "No npm env vars"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -25,13 +33,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Debug npm auth
-        run: npm config list
-
-      - name: Check for npm-related env vars
-        run: |
-          env | grep -E 'NPM|NODE_AUTH' || echo "No npm env vars"
 
       - name: Run tests
         run: npm test
