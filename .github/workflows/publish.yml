@@ -29,6 +29,10 @@ jobs:
       - name: Debug npm auth
         run: npm config list
 
+      - name: Check for npm-related env vars
+        run: |
+          env | grep -E 'NPM|NODE_AUTH' || echo "No npm env vars"
+
       - name: Run tests
         run: npm test
 
