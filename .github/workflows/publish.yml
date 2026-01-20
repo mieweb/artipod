@@ -13,17 +13,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
 
-    env:
-      NODE_AUTH_TOKEN: ""
-      NPM_TOKEN: ""
-      NPM_CONFIG_USERCONFIG: ""
-
     steps:
-      - name: Identify token source
-        run: |
-          echo "NODE_AUTH_TOKEN present at job start"
-          echo "Value length: ${#NODE_AUTH_TOKEN}"
-
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -63,3 +53,7 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ""
+          NPM_TOKEN: ""
+          NPM_CONFIG_USERCONFIG: ""
