@@ -12,17 +12,20 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+
+    env:
+      NODE_AUTH_TOKEN: ""
+      NPM_TOKEN: ""
+      NPM_CONFIG_USERCONFIG: ""
+    
     steps:
+      - name: Identify token source
+        run: |
+          echo "NODE_AUTH_TOKEN present at job start"
+          echo "Value length: ${#NODE_AUTH_TOKEN}"
+
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Remove npm auth from env
-        run: |
-          unset NODE_AUTH_TOKEN
-          unset NPM_TOKEN
-
-      - name: Verify clean env
-        run: env | grep -E 'NPM|NODE_AUTH' || echo "No npm env vars"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
