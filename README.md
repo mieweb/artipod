@@ -40,6 +40,241 @@ Look at [ozwell-artipod](https://github.com/mieweb/ozwell-artipod) to understand
 npm install @mieweb/artipod
 ```
 
+
+# 🧭 Executive Summary (Non-Technical)
+
+
+We are building a **next-generation digital workspace for healthcare workflows** that behaves like a living, versioned record of everything that happens during a patient encounter.
+
+Instead of storing patient data as static records, our system:
+- Tracks every step (front desk, nurse, doctor, checkout) as a **timeline of changes**
+- Allows multiple roles to contribute safely and transparently
+- Maintains a **complete history** of what happened, by whom, and when
+- Ensures data can be **reconstructed, audited, and verified at any point**
+
+Under the hood, we use proven technologies from modern cloud computing to:
+- Keep systems fast and scalable
+- Avoid duplicating large amounts of data
+- Securely manage sensitive information
+- Enable reproducibility and auditability
+
+👉 In simple terms:  
+**It’s like combining Google Docs version history, GitHub, and a medical record—inside a secure, portable system.**
+
+---
+
+# ⚙️ Technical TL;DR
+
+We introduce two core concepts:
+
+### **Artimount**
+A **mountable, versioned filesystem** stored using OCI (container registry) that may:
+- Be read-only or read-write
+- Contain a live Git repository (`.git`) for structured history
+- Be independently versioned and snapshotted
+
+### **Artipod**
+A **composition manifest** that defines:
+- A base OS (e.g., Debian)
+- Multiple Artimounts mounted at specific paths (`/app`, `/workspace/patient1`, etc.)
+- Mount modes (read-only vs read-write)
+
+### Runtime Flow
+- `artipod up`:
+  - Pulls OCI artifacts
+  - Assembles filesystem mounts locally
+  - Launches a container (via Docker)
+- `artipod snapshot`:
+  - Captures changes in writable mounts
+  - Commits to Git (for history)
+  - Publishes compacted OCI layers (for runtime efficiency)
+
+### Key Design Principles
+- **OCI = distribution + runtime snapshots**
+- **Git = human-readable history + workflow events**
+- **Separation of concerns**:
+  - OS, app, extensions, and patient data evolve independently
+
+---
+
+# 🧩 Problem We Are Solving
+
+## Current State
+Healthcare systems today:
+- Store data as **static records**
+- Lose context of **how data changed over time**
+- Make auditing difficult
+- Struggle with:
+  - multi-user workflows
+  - reproducibility
+  - large file management (images, scans)
+
+## Pain Points
+- No clear “timeline” of a patient encounter
+- Difficult to track who changed what and why
+- Large files (DICOM, PDFs) handled inefficiently
+- Systems tightly coupled (OS, app, data all bundled)
+
+## Our Solution
+We treat everything as a **versioned workspace**:
+
+- Each patient encounter is a **living filesystem**
+- Each action becomes a **commit in history**
+- Each system component is **independently versioned**
+- Large data is handled efficiently without duplication
+
+👉 Result:
+- Full audit trail
+- Better collaboration
+- Faster systems
+- More reliable data reconstruction
+
+---
+
+# 🏗️ Technology Background (Simplified)
+
+## What is OCI / Docker (in plain terms)?
+
+
+
+Modern cloud systems use **containers** to package software.
+
+- [Docker](chatgpt://generic-entity?number=0) packages apps into reusable units
+- [Open Container Initiative](chatgpt://generic-entity?number=1) defines how they are stored and shared
+- Registries (like Docker Hub) store these packages
+
+These packages are:
+- Built from **layers** (efficient storage)
+- Pulled on demand
+- Run anywhere (cloud, local, etc.)
+
+---
+
+## What we add on top
+
+We extend this model:
+
+### Instead of one container → many mountable components
+
+| Traditional Docker | Our System |
+|------------------|-----------|
+| One image | Multiple Artimounts |
+| Static filesystem | Composed filesystem |
+| Rebuild to change | Incremental snapshots |
+| Limited history | Full Git history |
+
+---
+
+## Why this works in any cloud
+
+Because we rely on:
+- Standard OCI registries
+- Standard container runtimes
+- Standard storage systems
+
+This means:
+- Works on AWS, Azure, GCP, on-prem
+- No custom infrastructure required
+- Leverages existing cloud scalability
+
+---
+
+# 🧠 Key Concepts (Simple Analogies)
+
+- **Artimount** = a “folder with memory”  
+- **Artipod** = a “blueprint of folders assembled together”  
+- **Git inside mounts** = “version history of actions”  
+- **OCI layers** = “fast shipping containers for data”  
+- **Snapshot** = “save state of everything right now”  
+
+---
+
+# ❓ FAQ
+
+## 1. Why not just use a database?
+Databases store the latest state well, but:
+- they don’t naturally capture **full change history**
+- they struggle with **large files**
+- they don’t provide **reproducible environments**
+
+We combine:
+- filesystem (flexibility)
+- Git (history)
+- OCI (distribution)
+
+---
+
+## 2. Is this secure for healthcare data?
+Yes, because:
+- data can be encrypted at rest and in transit
+- access is controlled at mount and registry levels
+- audit trails are inherent (via Git history)
+
+Additional compliance layers (HIPAA, etc.) can be added on top.
+
+---
+
+## 3. What happens when data gets very large?
+We use:
+- Git LFS for medium binaries
+- OCI artifacts for large datasets
+- deduplication via OCI layers
+
+So data is:
+- not duplicated unnecessarily
+- stored efficiently
+
+---
+
+## 4. Can multiple people work at once?
+Yes—with constraints:
+- workflows are typically sequential (front desk → nurse → doctor)
+- commits represent each step
+- concurrency is controlled at the application layer
+
+---
+
+## 5. What happens during “compaction”?
+- OCI layers are flattened to keep performance high
+- Git history remains intact
+- system stays fast without losing history
+
+---
+
+## 6. Does this replace Docker or Kubernetes?
+No.
+
+It **builds on top of them**:
+- Docker runs the container
+- OCI stores the data
+- Artipod orchestrates how everything fits together
+
+---
+
+## 7. Why is Git inside the container?
+Because:
+- the application itself records meaningful actions
+- each step in a workflow becomes a commit
+- history is visible, portable, and auditable
+
+---
+
+## 8. What makes this different?
+Most systems separate:
+- app logic
+- data
+- history
+
+We unify them into:
+👉 a **versioned, portable, composable workspace**
+
+---
+
+# 🧾 One-Line Summary
+
+**We are building a system where applications, data, and workflows are all versioned, composable, and portable—using OCI for infrastructure and Git for human-readable history.**
+
+
 ## Usage
 
 ### Basic ArtiMount Operations
