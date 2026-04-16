@@ -135,7 +135,8 @@ We treat everything as a **versioned workspace**:
 
 ## What is OCI / Docker (in plain terms)?
 
-
+Here is a OpenAI room that explains how we got here: 
+https://chatgpt.com/gg/v/69deb6062688819dafb3286acd4342ee?token=cHr9WJJYexilf--EkshQEQ
 
 Modern cloud systems use **containers** to package software.
 
