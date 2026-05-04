@@ -44,7 +44,7 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
-    "dockerode": "^4.0.9"
+    "dockerode": "^5.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
