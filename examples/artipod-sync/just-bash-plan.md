@@ -119,6 +119,8 @@ components/
 
 ### Phase 1 — ZenFsAdapter + Bash terminal (the core swap)
 
+> **Status: DONE.** 1a [lib/sandbox/zenfs-adapter.ts](lib/sandbox/zenfs-adapter.ts) (full IFileSystem incl. `readdirWithFileTypes`, node-shaped errors passed through) · 1b [lib/sandbox/git-command.ts](lib/sandbox/git-command.ts) (https-only URL guard) + [lib/sandbox/edit-command.ts](lib/sandbox/edit-command.ts) · 1c [lib/sandbox/index.ts](lib/sandbox/index.ts) (`createSandbox`; cwd via `result.env.PWD`, full-env replay with `replaceEnv`, `shopt -s expand_aliases` prelude so alias replay works) · 1d Terminal/page rewired, `lib/shell.ts` → `.attic/`. Contract + session tests green (21). Bundle: first-load 109 kB; just-bash rides in a lazy chunk (~323 kB gz) loaded after fsReady.
+
 **1a. Implement `lib/sandbox/zenfs-adapter.ts`**
 
 Implement just-bash's `IFileSystem` (see `../just-bash/packages/just-bash/src/fs/interface.ts` — implement the *whole* interface incl. `symlink`, `readlink`, `realpath`, `chmod`, `appendFile`, `mv`, `cp`). Mapping is mostly 1:1 onto `fs.promises`:

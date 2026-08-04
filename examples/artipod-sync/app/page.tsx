@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import dynamicImport from 'next/dynamic';
 import { initFileSystem } from '@/lib/filesystem';
-import { Shell } from '@/lib/shell';
+import type { Sandbox } from '@/lib/sandbox/types';
 import Editor from '@/components/Editor';
 import FileTree from '@/components/FileTree';
 import { Terminal as LucideTerminal, FolderTree, FileCode } from 'lucide-react';
@@ -21,22 +21,40 @@ export default function Home() {
   const [fsReady, setFsReady] = useState(false);
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewMode>('terminal');
-  const shellRef = useRef<Shell | null>(null);
+  const sandboxRef = useRef<Sandbox | null>(null);
 
   useEffect(() => {
-    initFileSystem().then(() => {
-      setFsReady(true);
-      shellRef.current = new Shell((path) => {
-        setEditingFile(path);
-        setActiveView('editor');
+    let cancelled = false;
+    (async () => {
+      await initFileSystem();
+      // just-bash is loaded lazily so it stays out of the first-load bundle
+      const [{ createSandbox }, { fs }] = await Promise.all([
+        import('@/lib/sandbox'),
+        import('@/lib/filesystem'),
+      ]);
+      if (cancelled) return;
+      sandboxRef.current = createSandbox({
+        zfs: fs,
+        onEdit: (path) => {
+          setEditingFile(path);
+          setActiveView('editor');
+        },
       });
-    });
+      setFsReady(true);
+    })().catch((e) => console.error('Sandbox init failed:', e));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleCommand = async (cmd: string) => {
-    if (!shellRef.current) return 'FileSystem not ready';
-    return await shellRef.current.execute(cmd);
+    if (!sandboxRef.current) {
+      return { stdout: '', stderr: 'FileSystem not ready\n', exitCode: 1 };
+    }
+    return sandboxRef.current.exec(cmd);
   };
+
+  const getPrompt = () => sandboxRef.current?.getCwd() ?? '';
 
   const handleFileSelect = (path: string) => {
     setEditingFile(path);
@@ -102,11 +120,11 @@ export default function Home() {
         <div 
           className={`absolute inset-0 ${activeView === 'terminal' ? 'z-10' : 'z-0 invisible'}`}
         >
-          {fsReady && <Terminal onCommand={handleCommand} />}
+          {fsReady && <Terminal onCommand={handleCommand} getPrompt={getPrompt} />}
         </div>
 
         {/* File Tree View */}
-        {activeView === 'tree' && (
+        {fsReady && activeView === 'tree' && (
           <div className="absolute inset-0 z-10">
             <FileTree onSelectFile={handleFileSelect} />
           </div>
