@@ -13,7 +13,7 @@
  * Framework-free: no React, no Next, no window. Works in browser and Node.
  */
 import { Bash } from 'just-bash/browser';
-import type { CustomCommand } from 'just-bash/browser';
+import type { BashOptions, CustomCommand } from 'just-bash/browser';
 import { createGitOps } from '../git';
 import { makeEditCommand } from './edit-command';
 import { makeGitCommand } from './git-command';
@@ -34,6 +34,9 @@ export interface CreateSandboxOptions {
   cwd?: string;
   /** Additional custom commands (server may add more; agents reuse as-is). */
   extraCommands?: CustomCommand[];
+  /** Tighter limits for server / agent use (defaults are sane for humans). */
+  executionLimits?: BashOptions['executionLimits'];
+  executionLimitProfile?: BashOptions['executionLimitProfile'];
 }
 
 const DEFAULT_CWD = '/repo';
@@ -46,6 +49,8 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     fs: adapter,
     cwd: initialCwd,
     env: { HOME: initialCwd, USER: 'user', TERM: 'xterm-256color' },
+    executionLimits: opts.executionLimits,
+    executionLimitProfile: opts.executionLimitProfile,
     customCommands: [
       // git shares the sandbox's zfs — shell view and git view stay coherent
       makeGitCommand(createGitOps(() => opts.zfs)),
