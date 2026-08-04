@@ -5,6 +5,7 @@ import type { Sandbox } from '@/lib/sandbox/types';
 import type { ChatMessage } from '@/lib/agent/types';
 import type { LocalModelClient } from '@/lib/agent/local/client';
 import { CURATED_MODELS, DEFAULT_LOCAL_MODEL, type LocalModelInfo } from '@/lib/agent/local/model-registry';
+import { formatBytes, listCachedModels, type CachedModel } from '@/lib/agent/local/model-cache';
 import { Send, Square } from 'lucide-react';
 
 interface AgentPanelProps {
@@ -73,6 +74,7 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [localModels, setLocalModels] = useState<LocalModelInfo[]>(CURATED_MODELS);
+  const [cachedModels, setCachedModels] = useState<Map<string, CachedModel>>(new Map());
   const [webGpuOk, setWebGpuOk] = useState(true);
   const [progress, setProgress] = useState('');
   const historyRef = useRef<ChatMessage[]>([{ role: 'system', content: SYSTEM_PROMPT }]);
@@ -88,6 +90,7 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
     import('@/lib/agent/local/model-registry').then(({ listLocalModels }) =>
       listLocalModels().then(setLocalModels).catch(() => undefined),
     );
+    listCachedModels().then(setCachedModels).catch(() => undefined);
     return () => localClientRef.current?.client.dispose();
   }, []);
 
@@ -205,6 +208,9 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
       setRunning(false);
       setProgress('');
       abortRef.current = null;
+      if (config.provider === 'local') {
+        listCachedModels().then(setCachedModels).catch(() => undefined); // a download may have completed
+      }
     }
   };
 
@@ -253,12 +259,20 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
                   onChange={(e) => saveConfig({ ...config, localModel: e.target.value })}
                   className="rounded bg-[#1e1e1e] border border-gray-600 px-2 py-1"
                 >
-                  {localModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                      {m.approxSize ? ` · ${m.approxSize}` : ''}
-                    </option>
-                  ))}
+                  {localModels.map((m) => {
+                    const cached = cachedModels.get(m.id);
+                    const suffix = cached?.hasWeights
+                      ? ` — ✓ downloaded (${formatBytes(cached.bytes)})`
+                      : m.approxSize
+                        ? ` · ${m.approxSize} download`
+                        : '';
+                    return (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                        {suffix}
+                      </option>
+                    );
+                  })}
                 </select>
               </label>
               <p className="sm:col-span-3 text-[11px] leading-snug text-gray-500">

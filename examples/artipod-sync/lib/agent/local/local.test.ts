@@ -5,6 +5,32 @@
 import { describe, expect, it } from 'vitest';
 import { parseGeneration } from './parse-tool-calls';
 import { CURATED_MODELS, listLocalModels, modelInfo } from './model-registry';
+import { formatBytes, modelIdFromCacheKey } from './model-cache';
+
+describe('model cache key mapping', () => {
+  it('maps HF resolve URLs back to repo ids', () => {
+    expect(
+      modelIdFromCacheKey('https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct/resolve/main/onnx/model_q4.onnx'),
+    ).toBe('onnx-community/Qwen2.5-0.5B-Instruct');
+    expect(
+      modelIdFromCacheKey('https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct/resolve/main/tokenizer.json'),
+    ).toBe('onnx-community/Qwen2.5-0.5B-Instruct');
+  });
+
+  it('ignores runtime assets and junk', () => {
+    expect(
+      modelIdFromCacheKey('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0/dist/ort-wasm.wasm'),
+    ).toBeNull();
+    expect(modelIdFromCacheKey('not a url')).toBeNull();
+    expect(modelIdFromCacheKey('https://huggingface.co/onnx-community')).toBeNull();
+  });
+
+  it('formats sizes for the picker', () => {
+    expect(formatBytes(1_800_000_000)).toBe('1.8 GB');
+    expect(formatBytes(786_000_000)).toBe('786 MB');
+    expect(formatBytes(7_000)).toBe('7 kB');
+  });
+});
 
 describe('parseGeneration', () => {
   it('extracts Qwen-style <tool_call> blocks', () => {
