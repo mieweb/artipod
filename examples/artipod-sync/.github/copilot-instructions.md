@@ -40,6 +40,7 @@
 - **Styling**: Tailwind CSS
 - **State/Logic**: Client-side heavy (ZenFS, isomorphic-git).
 - **Constraint**: NO backend server for git operations. All logic must run in the browser.
+- **Git networking**: the only server involvement is the CORS proxy at `/api/git` (browser default; `NEXT_PUBLIC_GIT_CORS_PROXY` overrides). The public `cors.isomorphic-git.org` is dead — never default to it.
 
 ## Deployment Environments
 
@@ -49,6 +50,7 @@
 - **Port**: Always serve on port 3000 (`npm run dev -p 3500` is for local development only).
 - **Public URL**: A load balancer outside the container maps `https://artipod-bash.os.mieweb.org` to port 3000.
 - **Process manager**: systemd unit `artipod-sync` (source of truth: `deploy/artipod-sync.service`). Deploy with `npm ci && npm run build && sudo systemctl restart artipod-sync`; logs via `journalctl -u artipod-sync -f`.
+- **Never run `npm run dev` here while the service is live**: `next dev` overwrites `.next`, so the running release build 500s on its own chunks and the page hangs at "Initializing FileSystem...". Recover with `npm run build && sudo systemctl restart artipod-sync`.
 - **Implication**: Generated links, callbacks, and CORS/redirect origins should use the public HTTPS URL, not `localhost:3000`.
 
 ## HTML & CSS Guidelines
