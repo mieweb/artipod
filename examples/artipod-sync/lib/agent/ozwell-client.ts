@@ -40,7 +40,8 @@ export class OzwellClient {
       apiKey: config.apiKey,
       defaultModel: config.defaultModel ?? 'gpt-4o-mini',
       timeout: config.timeout ?? 120_000,
-      fetchFn: config.fetchFn ?? fetch,
+      // Wrap: an unbound window.fetch throws "Illegal invocation" in browsers.
+      fetchFn: config.fetchFn ?? ((...args: Parameters<typeof fetch>) => fetch(...args)),
     };
   }
 
