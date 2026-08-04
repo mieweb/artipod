@@ -18,6 +18,7 @@ import { createGitOps } from '../git';
 import { makeEditCommand } from './edit-command';
 import { makeGitCommand } from './git-command';
 import { makeNotesCommand } from './notes-command';
+import { makeStorageCommands } from './storage-command';
 import type { CompletionResult, Sandbox, SandboxExecOptions, ZenFsLike } from './types';
 import { ZenFsAdapter } from './zenfs-adapter';
 
@@ -56,6 +57,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       makeGitCommand(createGitOps(() => opts.zfs)),
       makeEditCommand(opts.onEdit),
       makeNotesCommand(),
+      ...makeStorageCommands(() => opts.zfs),
       ...(opts.extraCommands ?? []),
     ],
   });

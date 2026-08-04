@@ -21,7 +21,7 @@ const LOCK_NAME = 'artipod-sync-fs';
 const IDB_STORE = 'browser-git-fs';
 const MIGRATE_MOUNT = '/__migrate';
 /** Sandbox subtree inside OPFS — siblings (artipod-models/) stay invisible to agents. */
-const OPFS_FS_DIR = 'artipod-fs';
+export const OPFS_FS_DIR = 'artipod-fs';
 export const OPFS_MODELS_DIR = 'artipod-models';
 
 export function loadBackendPref(): StorageBackend | null {
@@ -240,13 +240,41 @@ export interface StorageUsage {
   usage: number;
   quota: number;
   persisted: boolean;
+  /** Chromium-only per-backend split (`indexedDB`, `fileSystem`, `caches`, ...). */
+  details: Record<string, number>;
 }
 
 export async function getStorageUsage(): Promise<StorageUsage | null> {
   if (typeof navigator === 'undefined' || !navigator.storage?.estimate) return null;
-  const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+  const estimate = (await navigator.storage.estimate()) as StorageEstimate & {
+    usageDetails?: Record<string, number>;
+  };
+  const { usage = 0, quota = 0 } = estimate;
   const persisted = (await navigator.storage.persisted?.()) ?? false;
-  return { usage, quota, persisted };
+  return { usage, quota, persisted, details: estimate.usageDetails ?? {} };
+}
+
+/** Apparent bytes under a top-level OPFS directory, or null when unavailable. */
+export async function opfsDirBytes(name: string): Promise<number | null> {
+  try {
+    if (typeof navigator === 'undefined' || !navigator.storage?.getDirectory) return null;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(name); // no create: absent means "no such device"
+    return await sumDirBytes(dir);
+  } catch {
+    return null;
+  }
+}
+
+async function sumDirBytes(dir: FileSystemDirectoryHandle): Promise<number> {
+  let bytes = 0;
+  for (const [, handle] of await listEntries(dir)) {
+    bytes +=
+      handle.kind === 'file'
+        ? (await (handle as FileSystemFileHandle).getFile()).size
+        : await sumDirBytes(handle as FileSystemDirectoryHandle);
+  }
+  return bytes;
 }
 
 export async function requestPersistence(): Promise<boolean> {

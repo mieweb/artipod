@@ -23,6 +23,16 @@ node:zlib and are unavailable in the browser; plain 'tar' works.
 Extras:
   edit <file>      open the Monaco editor
   git <sub>        clone/status/diff/files (isomorphic-git; https:// only)
+  df [-hTv] [--scan]
+                   storage usage. Size/Avail exist only on the 'origin' row:
+                   the browser gives ONE quota to the whole origin, shared by
+                   IndexedDB and OPFS, so per-device capacity is '-'. Used is
+                   a browser estimate (Chromium only); --scan walks the tree
+                   for exact bytes.
+  mount, findmnt, lsblk [-f], fdisk -l, diskutil list
+                   the same storage facts in other shapes. The origin quota
+                   is the 'disk'; IndexedDB and OPFS are its partitions.
+                   Each takes --help.
   help             list all available commands
   history          shell history (mirrors the terminal's arrow-key history)
   Tab              complete commands, aliases and paths
