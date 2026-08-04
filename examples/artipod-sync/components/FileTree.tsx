@@ -57,7 +57,8 @@ export default function FileTree({ onSelectFile }: FileTreeProps) {
   }), [refreshKey]);
 
   return (
-    <div className="h-full w-full bg-[#1e1e1e] text-white p-2 overflow-auto">
+    // rct-dark: react-complex-tree's dark theme vars (arrow/focus/hover colors)
+    <div className="rct-dark h-full w-full bg-[#1e1e1e] text-white p-2 overflow-auto">
       <div className="flex justify-between items-center mb-2">
         <h3 className="font-bold">File Explorer</h3>
         <button 

@@ -275,7 +275,7 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
                   })}
                 </select>
               </label>
-              <p className="sm:col-span-3 text-[11px] leading-snug text-gray-500">
+              <p className="sm:col-span-3 text-[11px] leading-snug text-gray-400">
                 Weights download once from the Hugging Face Hub and are cached in this
                 browser&apos;s origin-private file system under artipod-models/ — a sibling of the
                 sandbox mount (artipod-fs/), so agent tool calls cannot read or delete them. No
@@ -324,7 +324,7 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
                 />
                 <span className="text-gray-400">
                   Remember API key in this browser
-                  <span id="agent-key-storage-note" className="block text-[11px] leading-snug text-gray-500">
+                  <span id="agent-key-storage-note" className="block text-[11px] leading-snug text-gray-400">
                     Off (default): the key is held only in this tab&apos;s memory and is forgotten when
                     you close or reload the page. On: it is saved as plaintext in this browser&apos;s
                     localStorage for this site only. In both cases the key is never written to the
@@ -340,7 +340,7 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
 
       <div ref={scrollRef} className="flex-1 space-y-2 overflow-auto p-3 text-sm" aria-live="polite">
         {items.length === 0 && (
-          <p className="text-gray-500">
+          <p className="text-gray-400">
             Ask for something like: “clone https://github.com/isomorphic-git/lightning-fs and summarize
             the README, then count the JS files”. Tool calls appear here and in the terminal.
           </p>
@@ -357,7 +357,7 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
                     ? 'px-3 font-mono text-xs text-gray-400'
                     : item.kind === 'error'
                       ? 'px-3 text-xs text-red-400'
-                      : 'px-3 text-xs text-gray-500'
+                      : 'px-3 text-xs text-gray-400'
             }
           >
             {item.text}

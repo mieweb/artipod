@@ -70,7 +70,7 @@ export default function Editor({ filepath, onClose }: EditorProps) {
           </button>
           <button 
             onClick={onClose}
-            className="px-3 py-1 text-xs bg-gray-600 rounded hover:bg-gray-500"
+            className="px-3 py-1 text-xs bg-gray-700 rounded hover:bg-gray-600"
           >
             Close
           </button>

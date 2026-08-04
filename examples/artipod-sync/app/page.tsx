@@ -207,7 +207,7 @@ export default function Home() {
         )}
         
         {activeView === 'editor' && !editingFile && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center text-gray-500">
+          <div className="absolute inset-0 z-10 flex items-center justify-center text-gray-400">
             No file open. Select a file from the File Tree or use 'edit' command.
           </div>
         )}
