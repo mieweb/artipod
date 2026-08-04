@@ -58,6 +58,25 @@ export default function Home() {
     };
   }, []);
 
+  // iOS Safari: the keyboard shrinks only the *visual* viewport, so mirror its
+  // height into --app-height and keep the page pinned to the top.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const sync = () => {
+      if (vv.scale !== 1) return; // ignore pinch-zoom
+      document.documentElement.style.setProperty('--app-height', `${vv.height}px`);
+      window.scrollTo(0, 0); // undo Safari's focus-driven page push
+    };
+    sync();
+    vv.addEventListener('resize', sync);
+    vv.addEventListener('scroll', sync);
+    return () => {
+      vv.removeEventListener('resize', sync);
+      vv.removeEventListener('scroll', sync);
+    };
+  }, []);
+
   const handleCommand = async (cmd: string, signal: AbortSignal) => {
     if (!sandboxRef.current) {
       return { stdout: '', stderr: 'FileSystem not ready\n', exitCode: 1 };
@@ -83,7 +102,7 @@ export default function Home() {
   };
 
   return (
-    <main className="flex h-screen flex-col bg-black text-white overflow-hidden">
+    <main className="flex h-[var(--app-height)] flex-col bg-black text-white overflow-hidden pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* Navigation Bar */}
       <div className="flex items-center bg-[#2d2d2d] border-b border-gray-700 px-2">
         <button

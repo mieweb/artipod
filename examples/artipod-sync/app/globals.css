@@ -6,6 +6,22 @@
   --foreground-rgb: 0, 0, 0;
   --background-start-rgb: 214, 219, 220;
   --background-end-rgb: 255, 255, 255;
+  /* JS mirrors visualViewport.height here (keyboard-aware); dvh/vh are fallbacks */
+  --app-height: 100vh;
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --app-height: 100dvh;
+  }
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  /* no rubber-band/pull-to-refresh under the terminal */
+  overscroll-behavior: none;
 }
 
 @media (prefers-color-scheme: dark) {

@@ -244,11 +244,19 @@ export default function Terminal({ onCommand, getPrompt, onComplete, registerWri
       }
     });
 
-    const handleResize = () => fitAddon.fit();
-    window.addEventListener('resize', handleResize);
+    // Observe the container, not the window: the iOS keyboard resizes our
+    // --app-height container without ever firing window.resize.
+    const resizeObserver = new ResizeObserver(() => {
+      try {
+        fitAddon.fit();
+      } catch {
+        // container can be 0-sized mid-transition
+      }
+    });
+    resizeObserver.observe(terminalRef.current);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       term.dispose();
       xtermRef.current = null;
     };
