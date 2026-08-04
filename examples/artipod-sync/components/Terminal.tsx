@@ -28,7 +28,19 @@ interface TerminalProps {
 
 const RED = '\x1b[31m';
 const DIM = '\x1b[2m';
+const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
+
+const REPO_URL = 'https://github.com/horner/artipod-sync';
+
+// figlet -f smslant "artipod-bash"
+const BANNER = [
+  '           __  _              __    __            __',
+  ' ___ _____/ /_(_)__  ___  ___/ /___/ /  ___ ____ / /',
+  '/ _ `/ __/ __/ / _ \\/ _ \\/ _  /___/ _ \\/ _ `(_-</ _ \\',
+  '\\_,_/_/  \\__/_/ .__/\\___/\\_,_/   /_.__/\\_,_/___/_//_/',
+  '             /_/',
+];
 
 /** xterm wants \r\n; sandbox output uses \n. */
 const toCrLf = (s: string) => s.replace(/\r?\n/g, '\r\n');
@@ -97,8 +109,11 @@ export default function Terminal({ onCommand, getPrompt, onComplete, registerWri
       term.write(`\r\n${cwd} $ `);
     };
 
-    term.writeln('Welcome to artipod-sync — bash over ZenFS (just-bash)');
-    term.writeln("Type 'help' for commands, 'notes' for shell semantics. Tab completes; Ctrl+C cancels.");
+    term.writeln('');
+    for (const line of BANNER) term.writeln(`${CYAN}${line}${RESET}`);
+    term.writeln('');
+    term.writeln(`${DIM}bash over ZenFS (just-bash) · ${RESET}${REPO_URL}`);
+    term.writeln(`${DIM}Type 'help' for commands, 'notes' for shell semantics. Tab completes; Ctrl+C cancels.${RESET}`);
     prompt();
 
     let busy = false;
