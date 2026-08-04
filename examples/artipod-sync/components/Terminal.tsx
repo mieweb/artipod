@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 
 export interface TerminalCommandResult {
@@ -86,6 +87,8 @@ export default function Terminal({ onCommand, getPrompt, onComplete, registerWri
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+    // makes URLs (banner repo link, command output) clickable
+    term.loadAddon(new WebLinksAddon((event, uri) => window.open(uri, '_blank', 'noopener,noreferrer')));
 
     try {
       term.open(terminalRef.current);
