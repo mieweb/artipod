@@ -287,11 +287,11 @@ export async function initFileSystem(pref?: StorageBackend) {
 
 Tasks:
 
-- [ ] Feature-detect OPFS: `navigator.storage?.getDirectory` + try/catch (Safari private mode, older Firefox). Fall back to IndexedDB.
-- [ ] Persist the choice in `localStorage`; expose a small settings UI (storage backend + `navigator.storage.estimate()` usage meter + "Request persistence" via `navigator.storage.persist()`).
-- [ ] **Migration**: `migrateStorage(from, to)` — mount source at `/` and target at `/__migrate`, recursive copy, verify file count/bytes, flip the pref, reload. Show progress (repos can be thousands of files).
-- [ ] **Multi-tab guard**: two tabs on the same store will corrupt state (ZenFS instances don't sync). Acquire a Web Lock (`navigator.locks.request('artipod-sync-fs', ...)`) on boot; second tab gets a read-only "already open elsewhere" banner.
-- [ ] Verify the exact ZenFS 2.4/dom 1.2 option names against their docs (`storeName` vs legacy `name` — current code uses `name`).
+- [x] Feature-detect OPFS: `navigator.storage?.getDirectory` + try/catch (Safari private mode, older Firefox). Fall back to IndexedDB. *(`supportsOpfs()` probes a real handle; `initFileSystem('opfs')` silently falls back when unsupported.)*
+- [x] Persist the choice in `localStorage`; expose a small settings UI (storage backend + `navigator.storage.estimate()` usage meter + "Request persistence" via `navigator.storage.persist()`). *(Storage tab → [components/StorageSettings.tsx](components/StorageSettings.tsx). Default remains IndexedDB per §7 risk table; OPFS is opt-in via "Migrate to opfs".)*
+- [x] **Migration**: `migrateStorage(from, to)` — mount source at `/` and target at `/__migrate`, recursive copy, verify file count/bytes, flip the pref, reload. Show progress (repos can be thousands of files). *(Implemented as `migrateStorage(to, onProgress)` — the source is always the live mount; per-file progress + size verification; UI reloads after flip.)*
+- [x] **Multi-tab guard**: two tabs on the same store will corrupt state (ZenFS instances don't sync). Acquire a Web Lock (`navigator.locks.request('artipod-sync-fs', ...)`) on boot; second tab gets a read-only "already open elsewhere" banner.
+- [x] Verify the exact ZenFS 2.4/dom 1.2 option names against their docs (`storeName` vs legacy `name` — current code uses `name`). *(Fixed in Phase 0: the option is `storeName`; `WebAccess` takes `handle`.)*
 
 **Acceptance:** clone on IndexedDB → migrate → everything works on OPFS (and vice versa); reload persistence on both; graceful fallback when OPFS unavailable.
 

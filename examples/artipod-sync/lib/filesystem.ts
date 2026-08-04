@@ -1,22 +1,26 @@
 /**
- * ZenFS bootstrap.
+ * ZenFS bootstrap — thin back-compat wrapper over lib/sandbox/storage.ts
+ * (backend selection, OPFS/IndexedDB/memory, migration, multi-tab guard).
  *
  * Async-only on purpose: the OPFS backend (WebAccess) is async-mixin based,
  * so no existsSync/mkdirSync may be used anywhere in the app.
- * ZenFS is loaded via dynamic import() so nothing Node-incompatible executes
- * during SSR; consumers gate on fsReady / await initFileSystem().
  */
+import type { InitResult, StorageBackend } from './sandbox/storage';
+
 export type ZenFs = (typeof import('@zenfs/core'))['fs'];
 
 /** Live binding, assigned by initFileSystem(). Use only after init resolves. */
 export let fs: ZenFs;
 
-let initPromise: Promise<void> | null = null;
+/** Backend + primary-tab info from the last successful init. */
+export let fsInfo: InitResult | null = null;
 
-export function initFileSystem(): Promise<void> {
-  if (typeof window === 'undefined') return Promise.resolve();
+let initPromise: Promise<InitResult> | null = null;
+
+export function initFileSystem(pref?: StorageBackend): Promise<InitResult | null> {
+  if (typeof window === 'undefined') return Promise.resolve(null);
   if (!initPromise) {
-    initPromise = init().catch((e) => {
+    initPromise = init(pref).catch((e) => {
       initPromise = null; // allow retry after a failed init
       throw e;
     });
@@ -24,27 +28,11 @@ export function initFileSystem(): Promise<void> {
   return initPromise;
 }
 
-async function init(): Promise<void> {
-  const core = await import('@zenfs/core');
-  const { IndexedDB } = await import('@zenfs/dom');
-
-  try {
-    await core.configure({
-      mounts: {
-        // NB: the option is `storeName` (dom 1.2.x); the previous `name` was ignored
-        '/': { backend: IndexedDB, storeName: 'browser-git-fs' },
-      },
-    });
-  } catch (e) {
-    if (!(e instanceof Error) || !e.message.includes('Mount point is already in use')) {
-      throw e;
-    }
-  }
-
-  fs = core.fs;
-
-  if (!(await fs.promises.exists('/repo'))) {
-    await fs.promises.mkdir('/repo');
-  }
-  console.log('FileSystem initialized');
+async function init(pref?: StorageBackend): Promise<InitResult> {
+  const storage = await import('./sandbox/storage');
+  const result = await storage.initFileSystem(pref);
+  fs = (await import('@zenfs/core')).fs;
+  fsInfo = result;
+  console.log(`FileSystem initialized (${result.backend}${result.isPrimaryTab ? '' : ', read-only tab'})`);
+  return result;
 }

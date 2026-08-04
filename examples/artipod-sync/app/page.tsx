@@ -4,9 +4,11 @@ import { useEffect, useState, useRef } from 'react';
 import dynamicImport from 'next/dynamic';
 import { initFileSystem } from '@/lib/filesystem';
 import type { Sandbox } from '@/lib/sandbox/types';
+import type { InitResult } from '@/lib/sandbox/storage';
 import Editor from '@/components/Editor';
 import FileTree from '@/components/FileTree';
-import { Terminal as LucideTerminal, FolderTree, FileCode } from 'lucide-react';
+import StorageSettings from '@/components/StorageSettings';
+import { Terminal as LucideTerminal, FolderTree, FileCode, Settings } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
 const Terminal = dynamicImport(() => import('@/components/Terminal'), {
@@ -15,10 +17,11 @@ const Terminal = dynamicImport(() => import('@/components/Terminal'), {
 
 export const dynamic = 'force-dynamic';
 
-type ViewMode = 'terminal' | 'tree' | 'editor';
+type ViewMode = 'terminal' | 'tree' | 'editor' | 'settings';
 
 export default function Home() {
   const [fsReady, setFsReady] = useState(false);
+  const [fsInfo, setFsInfo] = useState<InitResult | null>(null);
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewMode>('terminal');
   const sandboxRef = useRef<Sandbox | null>(null);
@@ -26,13 +29,14 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      await initFileSystem();
+      const info = await initFileSystem();
       // just-bash is loaded lazily so it stays out of the first-load bundle
       const [{ createSandbox }, { fs }] = await Promise.all([
         import('@/lib/sandbox'),
         import('@/lib/filesystem'),
       ]);
       if (cancelled) return;
+      setFsInfo(info);
       sandboxRef.current = createSandbox({
         zfs: fs,
         onEdit: (path) => {
@@ -111,7 +115,25 @@ export default function Home() {
           <FileCode size={16} />
           Editor {editingFile ? `(${editingFile.split('/').pop()})` : ''}
         </button>
+        <button
+          onClick={() => setActiveView('settings')}
+          className={`ml-auto flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            activeView === 'settings' 
+              ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500' 
+              : 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
+          }`}
+          aria-label="Storage settings"
+        >
+          <Settings size={16} />
+          Storage{fsInfo ? ` (${fsInfo.backend})` : ''}
+        </button>
       </div>
+
+      {fsInfo && !fsInfo.isPrimaryTab && (
+        <div role="alert" className="bg-yellow-900 text-yellow-100 text-sm px-4 py-2">
+          Filesystem already open in another tab — this tab is read-only. Close the other tab and reload.
+        </div>
+      )}
 
       {/* Main Content Area */}
       <div className="flex-1 relative overflow-hidden bg-[#1e1e1e]">
@@ -148,6 +170,13 @@ export default function Home() {
         {activeView === 'editor' && !editingFile && (
           <div className="absolute inset-0 z-10 flex items-center justify-center text-gray-500">
             No file open. Select a file from the File Tree or use 'edit' command.
+          </div>
+        )}
+
+        {/* Storage Settings View */}
+        {activeView === 'settings' && fsInfo && (
+          <div className="absolute inset-0 z-10">
+            <StorageSettings backend={fsInfo.backend} isPrimaryTab={fsInfo.isPrimaryTab} />
           </div>
         )}
       </div>
