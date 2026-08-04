@@ -1,5 +1,7 @@
 # artipod-sync
 
+Playground: https://artipod-bash.os.mieweb.org/
+
 A browser bash + git sandbox: [just-bash](https://github.com/vercel-labs/just-bash) (a full bash interpreter in TypeScript) over a persistent ZenFS filesystem, with isomorphic-git, xterm.js, Monaco, and an LLM agent loop that runs `bash` tool calls inside the same sandbox.
 
 See [just-bash-plan.md](just-bash-plan.md) for the architecture, design decisions, security notes, and phase-by-phase status (the checkboxes there track what is implemented).
@@ -52,3 +54,7 @@ notes                    # shell semantics & limitations
 - **Server**: `lib/server/` + thin route handlers (`/api/exec`, `/api/git/[...path]`).
 
 `lib/sandbox/` and `lib/agent/` are framework-free (no React/Next/window) so they can be extracted for reuse — plan §Phase 6.
+
+## Notes
+
+* Second pass at only-bash was inspired by cloudflare: https://blog.cloudflare.com/cloudflare-computer/ 
