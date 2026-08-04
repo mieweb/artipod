@@ -10,14 +10,17 @@ import { onAuthForUrl, onAuthFailureForUrl } from './git-auth';
  * configurable CORS proxy — self-hostable since Phase 5.
  */
 
+// Browser: the self-hosted /api/git route (the public cors.isomorphic-git.org
+// instance stalls indefinitely). Server: none — fetch there is not CORS-bound.
 const DEFAULT_CORS_PROXY =
-  process.env.NEXT_PUBLIC_GIT_CORS_PROXY || 'https://cors.isomorphic-git.org';
+  process.env.NEXT_PUBLIC_GIT_CORS_PROXY ||
+  (typeof window === 'undefined' ? undefined : '/api/git');
 
-let corsProxy = DEFAULT_CORS_PROXY;
+let corsProxy: string | undefined = DEFAULT_CORS_PROXY;
 export function setCorsProxy(url: string): void {
   corsProxy = url;
 }
-export function getCorsProxy(): string {
+export function getCorsProxy(): string | undefined {
   return corsProxy;
 }
 

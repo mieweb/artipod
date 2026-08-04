@@ -40,7 +40,7 @@ notes                    # shell semantics & limitations
 
 | Env / setting | Purpose |
 |---|---|
-| `NEXT_PUBLIC_GIT_CORS_PROXY` | Git CORS proxy URL (`/api/git` for the self-hosted one; defaults to the public isomorphic-git proxy) |
+| `NEXT_PUBLIC_GIT_CORS_PROXY` | Git CORS proxy URL (defaults to the self-hosted `/api/git` route in the browser; no proxy server-side) |
 | `GIT_PROXY_ALLOWED_HOSTS` | Comma-separated host allowlist for the self-hosted proxy |
 | `EXEC_API_TOKEN` | If set, `POST /api/exec` requires `Authorization: Bearer <token>` |
 | Agent tab | OpenAI-compatible base URL, API key, and model (stored in localStorage) |
