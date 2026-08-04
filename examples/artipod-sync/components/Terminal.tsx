@@ -11,19 +11,36 @@ export interface TerminalCommandResult {
   exitCode: number;
 }
 
+export interface TerminalCompletion {
+  candidates: string[];
+  replaceStart: number;
+}
+
 interface TerminalProps {
-  onCommand: (cmd: string) => Promise<TerminalCommandResult>;
+  onCommand: (cmd: string, signal: AbortSignal) => Promise<TerminalCommandResult>;
   /** Returns the shell cwd for the prompt. */
   getPrompt?: () => string;
+  /** Tab-completion hook (sandbox.complete). */
+  onComplete?: (line: string) => Promise<TerminalCompletion>;
 }
 
 const RED = '\x1b[31m';
+const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 
 /** xterm wants \r\n; sandbox output uses \n. */
 const toCrLf = (s: string) => s.replace(/\r?\n/g, '\r\n');
 
-export default function Terminal({ onCommand, getPrompt }: TerminalProps) {
+/** Longest common prefix of a non-empty candidate list. */
+function commonPrefix(items: string[]): string {
+  let prefix = items[0];
+  for (const item of items.slice(1)) {
+    while (!item.startsWith(prefix)) prefix = prefix.slice(0, -1);
+  }
+  return prefix;
+}
+
+export default function Terminal({ onCommand, getPrompt, onComplete }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const commandRef = useRef('');
@@ -35,6 +52,8 @@ export default function Terminal({ onCommand, getPrompt }: TerminalProps) {
   onCommandRef.current = onCommand;
   const getPromptRef = useRef(getPrompt);
   getPromptRef.current = getPrompt;
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   useEffect(() => {
     if (!terminalRef.current || xtermRef.current) return;
@@ -74,14 +93,64 @@ export default function Terminal({ onCommand, getPrompt }: TerminalProps) {
     };
 
     term.writeln('Welcome to artipod-sync — bash over ZenFS (just-bash)');
-    term.writeln("Type 'help' for shell notes.");
+    term.writeln("Type 'help' for commands, 'notes' for shell semantics. Tab completes; Ctrl+C cancels.");
     prompt();
 
     let busy = false;
+    let abortController: AbortController | null = null;
+    let completing = false;
+
+    const redrawLine = () => {
+      const cwd = getPromptRef.current?.() ?? '';
+      term.write(`${cwd} $ ${commandRef.current}`);
+    };
 
     term.onData(async (data) => {
+      // Ctrl+C first: must work while a command is running.
+      if (data === '\x03') {
+        if (busy) {
+          abortController?.abort();
+        } else {
+          term.write('^C');
+          commandRef.current = '';
+          prompt();
+        }
+        return;
+      }
       if (busy) return; // ignore typing while a command runs
       const code = data.charCodeAt(0);
+
+      if (data === '\t') { // Tab — completion
+        if (!onCompleteRef.current || completing || !commandRef.current) return;
+        completing = true;
+        try {
+          const { candidates, replaceStart } = await onCompleteRef.current(commandRef.current);
+          if (candidates.length === 0) return;
+          const token = commandRef.current.slice(replaceStart);
+          if (candidates.length === 1) {
+            const chosen = candidates[0];
+            const suffix = chosen.endsWith('/') ? '' : ' ';
+            const insert = chosen.slice(token.length) + suffix;
+            commandRef.current += insert;
+            term.write(insert);
+          } else {
+            const lcp = commonPrefix(candidates);
+            if (lcp.length > token.length) {
+              const insert = lcp.slice(token.length);
+              commandRef.current += insert;
+              term.write(insert);
+            } else {
+              const shown = candidates.slice(0, 60);
+              const more = candidates.length - shown.length;
+              term.write(`\r\n${DIM}${shown.join('  ')}${more > 0 ? `  …+${more}` : ''}${RESET}\r\n`);
+              redrawLine();
+            }
+          }
+        } finally {
+          completing = false;
+        }
+        return;
+      }
 
       // Handle Arrow Keys for History
       if (data === '\x1b[A') { // Up Arrow
@@ -126,14 +195,16 @@ export default function Terminal({ onCommand, getPrompt }: TerminalProps) {
           historyIndexRef.current = historyRef.current.length;
 
           busy = true;
+          abortController = new AbortController();
           try {
-            const result = await onCommandRef.current(cmd);
+            const result = await onCommandRef.current(cmd, abortController.signal);
             if (result.stdout) term.write(toCrLf(result.stdout));
             if (result.stderr) term.write(`${RED}${toCrLf(result.stderr)}${RESET}`);
           } catch (e) {
             term.write(`${RED}${toCrLf(String(e))}${RESET}\r\n`);
           } finally {
             busy = false;
+            abortController = null;
           }
         }
         prompt();

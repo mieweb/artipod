@@ -47,11 +47,16 @@ export default function Home() {
     };
   }, []);
 
-  const handleCommand = async (cmd: string) => {
+  const handleCommand = async (cmd: string, signal: AbortSignal) => {
     if (!sandboxRef.current) {
       return { stdout: '', stderr: 'FileSystem not ready\n', exitCode: 1 };
     }
-    return sandboxRef.current.exec(cmd);
+    return sandboxRef.current.exec(cmd, { signal });
+  };
+
+  const handleComplete = async (line: string) => {
+    if (!sandboxRef.current) return { candidates: [], replaceStart: line.length };
+    return sandboxRef.current.complete(line);
   };
 
   const getPrompt = () => sandboxRef.current?.getCwd() ?? '';
@@ -120,7 +125,7 @@ export default function Home() {
         <div 
           className={`absolute inset-0 ${activeView === 'terminal' ? 'z-10' : 'z-0 invisible'}`}
         >
-          {fsReady && <Terminal onCommand={handleCommand} getPrompt={getPrompt} />}
+          {fsReady && <Terminal onCommand={handleCommand} getPrompt={getPrompt} onComplete={handleComplete} />}
         </div>
 
         {/* File Tree View */}

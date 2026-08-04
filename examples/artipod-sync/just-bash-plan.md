@@ -256,11 +256,11 @@ export function createSandbox(opts: { onEdit?: (p: string) => void }): Sandbox {
 
 just-bash ships more interactive-shell machinery than the agent framing suggests. Cheap wins for the human terminal:
 
-- [ ] **Tab completion** — the `compgen` / `complete` / `compopt` builtins exist. Bind Tab in xterm to a hidden `compgen -c/-f/-d "$prefix"` exec and render the candidates. Falls back to `getCommandNames()` (exported from `just-bash/browser`) + adapter `readdir` for path completion.
-- [ ] **History** — keep xterm's arrow-key history (already built) and mirror it into `BASH_HISTORY` env so the `history` builtin works, exactly as upstream's REPL does (`syncHistory()` in `cli/shell.ts`).
-- [ ] **Prompt + stderr styling** — cwd in the prompt via `getCwd()`, stderr in red, honor `clear`.
-- [ ] **Ctrl+C** → `AbortController` into `exec(line, { signal })`.
-- [ ] `help` text documenting the per-line shell semantics and the function-definition limitation.
+- [x] **Tab completion** — the `compgen` / `complete` / `compopt` builtins exist. Bind Tab in xterm to a hidden `compgen -c/-f/-d "$prefix"` exec and render the candidates. Falls back to `getCommandNames()` (exported from `just-bash/browser`) + adapter `readdir` for path completion. *(Implemented as `sandbox.complete()`: `compgen -A command/-A alias/-f/-d` transient execs; dirs get a `/` suffix; longest-common-prefix extension; candidate list rendering in the terminal. `compgen -c` returns nothing in just-bash 3.2 — `-A command` is the working spelling.)*
+- [x] **History** — keep xterm's arrow-key history (already built) and mirror it into `BASH_HISTORY` env so the `history` builtin works, exactly as upstream's REPL does (`syncHistory()` in `cli/shell.ts`). *(BASH_HISTORY is a JSON array; the sandbox records non-transient lines and injects it per exec.)*
+- [x] **Prompt + stderr styling** — cwd in the prompt via `getCwd()`, stderr in red, honor `clear`.
+- [x] **Ctrl+C** → `AbortController` into `exec(line, { signal })`.
+- [x] `help` text documenting the per-line shell semantics and the function-definition limitation. *(just-bash's builtin `help` cannot be shadowed by a custom command, so the notes live in a `notes` command; the banner points at both.)*
 
 **Known human-shell gaps (document, don't fight):** no TTY, so mid-command interactive prompts (`read -p`, `read -s`), pagers (`less`), and editors (`vim`) don't work — `edit` opens Monaco instead. `&` is parsed but there's no real job control (`wait` is a no-op stub). `ls` has no `--color`. Upstream's own KNOWN_LIMITATIONS.md deprioritizes TTY/history features as "interactive, out of scope" — that's the boundary we live inside.
 

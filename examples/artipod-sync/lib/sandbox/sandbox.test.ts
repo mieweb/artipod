@@ -89,3 +89,38 @@ describe('session state reconstruction across exec calls', () => {
     expect(r).toBeTruthy();
   }, 10_000);
 });
+
+describe('human-shell polish (Phase 1.5)', () => {
+  it('mirrors executed lines into the history builtin', async () => {
+    await sandbox.exec('echo one');
+    await sandbox.exec('echo two');
+    const r = await sandbox.exec('history');
+    expect(r.stdout).toMatch(/echo one/);
+    expect(r.stdout).toMatch(/echo two/);
+  });
+
+  it('completes command names and aliases', async () => {
+    const cmds = await sandbox.complete('ech');
+    expect(cmds.candidates).toContain('echo');
+    expect(cmds.replaceStart).toBe(0);
+
+    await sandbox.exec("alias gsx='git status'");
+    const aliases = await sandbox.complete('gs');
+    expect(aliases.candidates).toContain('gsx');
+  });
+
+  it('completes file paths with directory markers', async () => {
+    await zfs.promises.mkdir('/repo/adir');
+    await zfs.promises.writeFile('/repo/afile.txt', 'x');
+    const r = await sandbox.complete('cat a');
+    expect(r.replaceStart).toBe(4);
+    expect(r.candidates).toContain('adir/');
+    expect(r.candidates).toContain('afile.txt');
+  });
+
+  it('completion execs are transient (no history/cwd pollution)', async () => {
+    await sandbox.complete('cat a');
+    const r = await sandbox.exec('history');
+    expect(r.stdout).not.toMatch(/compgen/);
+  });
+});

@@ -16,10 +16,12 @@ import { Bash } from 'just-bash/browser';
 import type { CustomCommand } from 'just-bash/browser';
 import { makeEditCommand } from './edit-command';
 import { makeGitCommand } from './git-command';
-import type { Sandbox, SandboxExecOptions, ZenFsLike } from './types';
+import { makeNotesCommand } from './notes-command';
+import type { CompletionResult, Sandbox, SandboxExecOptions, ZenFsLike } from './types';
 import { ZenFsAdapter } from './zenfs-adapter';
 
-export type { Sandbox, SandboxExecOptions, SandboxExecResult } from './types';
+export type { CompletionResult, Sandbox, SandboxExecOptions, SandboxExecResult } from './types';
+export { SHELL_NOTES } from './notes-command';
 export { ZenFsAdapter } from './zenfs-adapter';
 
 export interface CreateSandboxOptions {
@@ -43,32 +45,83 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     fs: adapter,
     cwd: initialCwd,
     env: { HOME: initialCwd, USER: 'user', TERM: 'xterm-256color' },
-    customCommands: [makeGitCommand(), makeEditCommand(opts.onEdit), ...(opts.extraCommands ?? [])],
+    customCommands: [
+      makeGitCommand(),
+      makeEditCommand(opts.onEdit),
+      makeNotesCommand(),
+      ...(opts.extraCommands ?? []),
+    ],
   });
 
   let cwd = initialCwd;
   // null until the first exec; afterwards the full env of the last line.
   let carriedEnv: Record<string, string> | null = null;
+  // Mirrored into BASH_HISTORY (JSON array) so the `history` builtin works.
+  const history: string[] = [];
 
   // Interactive-shell semantics: aliases only expand with expand_aliases on,
   // and shopt state is not carried in result.env — so prepend it every line.
   const PRELUDE = 'shopt -s expand_aliases\n';
 
-  return {
+  const runLine = (line: string, execOpts?: SandboxExecOptions) =>
+    bash.exec(PRELUDE + line, {
+      cwd,
+      env: { ...(carriedEnv ?? {}), BASH_HISTORY: JSON.stringify(history) },
+      ...(carriedEnv ? { replaceEnv: true } : {}),
+      ...(execOpts?.signal ? { signal: execOpts.signal } : {}),
+    });
+
+  const sandbox: Sandbox = {
     async exec(line: string, execOpts?: SandboxExecOptions) {
-      const r = await bash.exec(PRELUDE + line, {
-        cwd,
-        ...(carriedEnv ? { env: carriedEnv, replaceEnv: true } : {}),
-        ...(execOpts?.signal ? { signal: execOpts.signal } : {}),
-      });
+      if (!execOpts?.transient) history.push(line);
+      const r = await runLine(line, execOpts);
       if (!execOpts?.transient) {
-        if (r.env) carriedEnv = r.env;
+        if (r.env) {
+          const { BASH_HISTORY: _history, ...rest } = r.env;
+          carriedEnv = rest;
+        }
         if (r.env?.PWD) cwd = r.env.PWD;
       }
       return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
     },
+
     getCwd: () => cwd,
     getEnv: () => carriedEnv ?? {},
+
+    async complete(line: string): Promise<CompletionResult> {
+      const tokenMatch = line.match(/[^\s]*$/);
+      const token = tokenMatch ? tokenMatch[0] : '';
+      const replaceStart = line.length - token.length;
+      if (!token) return { candidates: [], replaceStart };
+
+      const before = line.slice(0, replaceStart).trimEnd();
+      const isCommandPos =
+        before === '' || /[|;&(]$|\$\($|&&$|\|\|$/.test(before) || before.endsWith('`');
+
+      const q = shQuote(token);
+      const script =
+        isCommandPos && !token.includes('/')
+          ? `compgen -A command ${q}; compgen -A alias ${q}; compgen -d ${q}`
+          : `compgen -f ${q}; compgen -d ${q}`;
+
+      const r = await this.exec(script, { transient: true });
+      const dirCheck = await this.exec(`compgen -d ${q}`, { transient: true });
+      const dirs = new Set(splitLines(dirCheck.stdout));
+
+      const candidates = Array.from(new Set(splitLines(r.stdout)))
+        .sort()
+        .map((c) => (dirs.has(c) ? `${c}/` : c));
+      return { candidates, replaceStart };
+    },
+
     fs: adapter,
   };
+  return sandbox;
+}
+
+const splitLines = (s: string) => s.split('\n').filter(Boolean);
+
+/** Single-quote a string for safe embedding in a bash line. */
+function shQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
