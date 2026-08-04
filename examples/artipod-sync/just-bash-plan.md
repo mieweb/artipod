@@ -343,12 +343,14 @@ Two server surfaces, same core:
 
 Prereq: Phases 1–4 stable. The goal is that `ui`'s AI components (AIChat/HeyOzwell, MCPToolCall) can hand a sandbox to a model — remote (Ozwell) or on-device (Transformers.js/WebLLM in a Web Worker, per the existing whisperTranscribe worker pattern).
 
-- [ ] Extract `lib/sandbox/` + `lib/agent/` into a package (working name `@artipod/sandbox-web`): no React/Next imports (already enforced), ships ESM, peer-deps on `just-bash`, `@zenfs/core`, `@zenfs/dom`, `isomorphic-git`. artipod-sync becomes its first consumer (path or workspace dep initially — publishing can wait).
-- [ ] **Tool-surface contract**: export the bash/read/write tool definitions in both OpenAI function-call JSON shape (what `ozwellChat.ts` speaks) and an MCP-style descriptor (what `MCPToolCall.tsx` renders). One source of truth, two serializers.
-- [ ] **Worker topology decision** (document, then implement the simple one):
-  - *v1*: model inference in its worker (existing ui pattern), sandbox + loop on the main thread. Tool calls are async anyway; xterm/Monaco/tree keep direct fs access. Simple, matches current PoC.
+> **Status: in-repo prerequisites DONE; the extraction itself is blocked on §8 Q5 (package home).** `lib/sandbox/` + `lib/agent/` are verified framework-free (no React/Next/window imports — grep-audited), the tool-surface contract ships both serializers, and the v1 worker topology is what's implemented. Moving the code into `@artipod/sandbox-web` and writing the `ui` Storybook story are cross-repo tasks for after that decision.
+
+- [ ] Extract `lib/sandbox/` + `lib/agent/` into a package (working name `@artipod/sandbox-web`): no React/Next imports (already enforced), ships ESM, peer-deps on `just-bash`, `@zenfs/core`, `@zenfs/dom`, `isomorphic-git`. artipod-sync becomes its first consumer (path or workspace dep initially — publishing can wait). *(Blocked on §8 Q5: publish here, mieweb monorepo, or fold into mieweb/artipod.)*
+- [x] **Tool-surface contract**: export the bash/read/write tool definitions in both OpenAI function-call JSON shape (what `ozwellChat.ts` speaks) and an MCP-style descriptor (what `MCPToolCall.tsx` renders). One source of truth, two serializers. *(`toOpenAiToolDefinitions` / `toMcpToolDescriptors` in [lib/agent/tools.ts](lib/agent/tools.ts), parity pinned by test.)*
+- [x] **Worker topology decision** (document, then implement the simple one):
+  - *v1*: model inference in its worker (existing ui pattern), sandbox + loop on the main thread. Tool calls are async anyway; xterm/Monaco/tree keep direct fs access. Simple, matches current PoC. **← implemented**
   - *v2 (only if main-thread jank shows)*: sandbox in a dedicated worker, RPC via postMessage; requires ZenFS single-owner rules (same multi-tab problem, same Web Locks solution).
-- [ ] React bindings live in `ui`, not the package: a `useSandbox()` hook + terminal/agent components adapted to mieweb/ui conventions.
+- [ ] React bindings live in `ui`, not the package: a `useSandbox()` hook + terminal/agent components adapted to mieweb/ui conventions. *(Lives in the `ui` repo — after extraction.)*
 
 **Acceptance:** a Storybook story in `ui` runs an AIChat conversation whose tool calls execute in the sandbox, with MCPToolCall rendering each call; artipod-sync consumes the same package with zero behavior change.
 
