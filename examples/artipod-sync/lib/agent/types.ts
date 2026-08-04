@@ -100,6 +100,23 @@ export interface TokenUsage {
   total_tokens: number;
 }
 
+export interface ChatCompletionOptions {
+  model?: string;
+  tools?: ToolDefinition[];
+  toolChoice?: 'auto' | 'none';
+  temperature?: number;
+  maxTokens?: number;
+  signal?: AbortSignal;
+}
+
+/** Anything the loop can talk to: the remote OzwellClient or an in-browser model. */
+export interface ChatCompletionClient {
+  createChatCompletion(
+    messages: ChatMessage[],
+    options?: ChatCompletionOptions,
+  ): Promise<ChatCompletionResponse>;
+}
+
 export interface ToolCallingLoopOptions {
   maxIterations?: number;
   systemPrompt?: string;

@@ -20,6 +20,9 @@ const PREF_KEY = 'artipod-sync-storage-backend';
 const LOCK_NAME = 'artipod-sync-fs';
 const IDB_STORE = 'browser-git-fs';
 const MIGRATE_MOUNT = '/__migrate';
+/** Sandbox subtree inside OPFS — siblings (artipod-models/) stay invisible to agents. */
+const OPFS_FS_DIR = 'artipod-fs';
+export const OPFS_MODELS_DIR = 'artipod-models';
 
 export function loadBackendPref(): StorageBackend | null {
   try {
@@ -51,9 +54,64 @@ async function mountConfigFor(backend: StorageBackend): Promise<MountConfig> {
   if (backend === 'memory') return { backend: InMemory };
   const { IndexedDB, WebAccess } = await import('@zenfs/dom');
   if (backend === 'opfs') {
-    return { backend: WebAccess, handle: await navigator.storage.getDirectory() };
+    return { backend: WebAccess, handle: await opfsSandboxDir() };
   }
   return { backend: IndexedDB, storeName: IDB_STORE };
+}
+
+/**
+ * The sandbox mounts the artipod-fs/ SUBDIRECTORY, not the OPFS root, so
+ * model weights and other host data can live beside it out of agent reach.
+ * Data written by earlier builds (which mounted the root) is moved in once.
+ */
+async function opfsSandboxDir(): Promise<FileSystemDirectoryHandle> {
+  const root = await navigator.storage.getDirectory();
+  const fsDir = await root.getDirectoryHandle(OPFS_FS_DIR, { create: true });
+  await moveLegacyRootEntries(root, fsDir);
+  return fsDir;
+}
+
+const KEEP_AT_ROOT = new Set<string>([OPFS_FS_DIR, OPFS_MODELS_DIR]);
+
+async function listEntries(dir: FileSystemDirectoryHandle): Promise<[string, FileSystemHandle][]> {
+  const out: [string, FileSystemHandle][] = [];
+  const it = (dir as unknown as { entries(): AsyncIterableIterator<[string, FileSystemHandle]> }).entries();
+  while (true) {
+    const { done, value } = await it.next();
+    if (done) break;
+    out.push(value);
+  }
+  return out;
+}
+
+async function copyHandle(
+  source: FileSystemHandle,
+  destParent: FileSystemDirectoryHandle,
+  name: string,
+): Promise<void> {
+  if (source.kind === 'file') {
+    const file = await (source as FileSystemFileHandle).getFile();
+    const target = await destParent.getFileHandle(name, { create: true });
+    const writable = await target.createWritable();
+    await writable.write(file);
+    await writable.close();
+    return;
+  }
+  const destDir = await destParent.getDirectoryHandle(name, { create: true });
+  for (const [childName, child] of await listEntries(source as FileSystemDirectoryHandle)) {
+    await copyHandle(child, destDir, childName);
+  }
+}
+
+async function moveLegacyRootEntries(
+  root: FileSystemDirectoryHandle,
+  fsDir: FileSystemDirectoryHandle,
+): Promise<void> {
+  for (const [name, handle] of await listEntries(root)) {
+    if (KEEP_AT_ROOT.has(name)) continue;
+    await copyHandle(handle, fsDir, name);
+    await root.removeEntry(name, { recursive: true });
+  }
 }
 
 export interface InitResult {

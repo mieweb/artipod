@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "@monaco-editor/react": "^4.7.0",
     "@types/diff": "^7.0.2",
     "@xterm/addon-fit": "^0.10.0",

@@ -22,6 +22,10 @@ const nextConfig = {
                 path: false,
                 zlib: false,
             };
+        } else {
+            // In-browser ONNX inference never runs on the server; stub it so
+            // webpack doesn't chase onnxruntime-node's native binaries.
+            config.resolve.alias['@huggingface/transformers'] = false;
         }
         return config;
     },

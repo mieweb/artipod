@@ -4,11 +4,14 @@
  * later; the loop only needs non-streaming completions.
  */
 import type {
+  ChatCompletionClient,
+  ChatCompletionOptions,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatMessage,
-  ToolDefinition,
 } from './types';
+
+export type { ChatCompletionOptions } from './types';
 
 export interface OzwellClientConfig {
   baseUrl: string;
@@ -20,16 +23,7 @@ export interface OzwellClientConfig {
   fetchFn?: typeof fetch;
 }
 
-export interface ChatCompletionOptions {
-  model?: string;
-  tools?: ToolDefinition[];
-  toolChoice?: 'auto' | 'none';
-  temperature?: number;
-  maxTokens?: number;
-  signal?: AbortSignal;
-}
-
-export class OzwellClient {
+export class OzwellClient implements ChatCompletionClient {
   private readonly config: Required<Omit<OzwellClientConfig, 'fetchFn'>> & {
     fetchFn: typeof fetch;
   };

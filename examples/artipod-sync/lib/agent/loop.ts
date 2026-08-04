@@ -6,8 +6,8 @@
  * 3. Feed tool results back
  * 4. Repeat until a final text response (or maxIterations / abort)
  */
-import { OzwellClient } from './ozwell-client';
 import type {
+  ChatCompletionClient,
   ChatMessage,
   ToolCall,
   ToolCallingLoopOptions,
@@ -23,7 +23,7 @@ export class ToolCallingLoop {
   private readonly toolDefinitions: ToolDefinition[];
 
   constructor(
-    private readonly client: OzwellClient,
+    private readonly client: ChatCompletionClient,
     private readonly tools: Map<string, ToolHandler>,
   ) {
     this.toolDefinitions = Array.from(tools.values()).map((t) => t.definition);
