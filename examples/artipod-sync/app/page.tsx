@@ -8,7 +8,8 @@ import type { InitResult } from '@/lib/sandbox/storage';
 import Editor from '@/components/Editor';
 import FileTree from '@/components/FileTree';
 import StorageSettings from '@/components/StorageSettings';
-import { Terminal as LucideTerminal, FolderTree, FileCode, Settings } from 'lucide-react';
+import AgentPanel from '@/components/AgentPanel';
+import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
 const Terminal = dynamicImport(() => import('@/components/Terminal'), {
@@ -17,7 +18,7 @@ const Terminal = dynamicImport(() => import('@/components/Terminal'), {
 
 export const dynamic = 'force-dynamic';
 
-type ViewMode = 'terminal' | 'tree' | 'editor' | 'settings';
+type ViewMode = 'terminal' | 'tree' | 'editor' | 'settings' | 'agent';
 
 export default function Home() {
   const [fsReady, setFsReady] = useState(false);
@@ -25,6 +26,7 @@ export default function Home() {
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewMode>('terminal');
   const sandboxRef = useRef<Sandbox | null>(null);
+  const termWriteRef = useRef<((text: string) => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,6 +123,17 @@ export default function Home() {
           Editor {editingFile ? `(${editingFile.split('/').pop()})` : ''}
         </button>
         <button
+          onClick={() => setActiveView('agent')}
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            activeView === 'agent' 
+              ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500' 
+              : 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
+          }`}
+        >
+          <Bot size={16} />
+          Agent
+        </button>
+        <button
           onClick={() => setActiveView('settings')}
           className={`ml-auto flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
             activeView === 'settings' 
@@ -152,7 +165,28 @@ export default function Home() {
         <div 
           className={`absolute inset-0 ${activeView === 'terminal' ? 'z-10' : 'z-0 invisible'}`}
         >
-          {fsReady && <Terminal onCommand={handleCommand} getPrompt={getPrompt} onComplete={handleComplete} />}
+          {fsReady && (
+            <Terminal
+              onCommand={handleCommand}
+              getPrompt={getPrompt}
+              onComplete={handleComplete}
+              registerWriter={(write) => {
+                termWriteRef.current = write;
+              }}
+            />
+          )}
+        </div>
+
+        {/* Agent View - Always mounted to preserve chat state */}
+        <div 
+          className={`absolute inset-0 ${activeView === 'agent' ? 'z-10' : 'z-0 invisible'}`}
+        >
+          {fsReady && (
+            <AgentPanel
+              getSandbox={() => sandboxRef.current}
+              echoToTerminal={(text) => termWriteRef.current?.(text)}
+            />
+          )}
         </div>
 
         {/* File Tree View */}

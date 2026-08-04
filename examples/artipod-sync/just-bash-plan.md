@@ -315,14 +315,14 @@ Extend [lib/git.ts](lib/git.ts) + the `git` custom command:
 
 Port the loop from `../ozwell-artipod/src/` (it is already transport-clean OpenAI-compatible `fetch`):
 
-- [ ] `lib/agent/ozwell-client.ts` — trimmed `OzwellClient` (browser `fetch`, streaming optional later). Config: base URL + API key. For dev, any OpenAI-compatible endpoint works (Ozwell, the `ozwellai-api` reference server, OpenAI).
-- [ ] `lib/agent/loop.ts` — `ToolCallingLoop` port: max iterations, `onAssistantMessage`/`onToolCall`/`onToolResult` callbacks.
-- [ ] `lib/agent/tools.ts` — tool definitions + handlers bound to a `Sandbox`:
+- [x] `lib/agent/ozwell-client.ts` — trimmed `OzwellClient` (browser `fetch`, streaming optional later). Config: base URL + API key. For dev, any OpenAI-compatible endpoint works (Ozwell, the `ozwellai-api` reference server, OpenAI). *(Also takes an injectable `fetchFn` for tests and an external `AbortSignal` merged with the timeout.)*
+- [x] `lib/agent/loop.ts` — `ToolCallingLoop` port: max iterations, `onAssistantMessage`/`onToolCall`/`onToolResult` callbacks. *(Plus `signal` abort checks between steps and multi-turn `runWithHistory`.)*
+- [x] `lib/agent/tools.ts` — tool definitions + handlers bound to a `Sandbox`:
   - `bash` — `{ command: string }` → `sandbox.exec`, return `{ stdout, stderr, exitCode }` **truncated** (e.g. 16 KiB head+tail marker) to protect context windows.
   - Optional conveniences: `read_file`, `write_file`, `list_files` (they reduce token burn vs cat/echo round-trips; implement via the adapter directly).
-- [ ] UI: an "Agent" tab (chat panel) beside Terminal; tool calls echo into the terminal (dimmed `$ <command>` + output) so the user sees exactly what the model did. Reuse the `onToolCall` callback for this.
-- [ ] Abort button → `AbortController` through client + loop; also pass a per-exec `signal` to `bash.exec` (just-bash supports cooperative cancellation).
-- [ ] Alternative kept open: Vercel `ai` SDK + `bash-tool` npm (`createBashTool({ sandbox: bash })`, see `../just-bash/examples/bash-agent/agent.ts`) — evaluate for browser compat; the Ozwell port is the primary path since it matches the mieweb stack and MCPToolCall UI conventions.
+- [x] UI: an "Agent" tab (chat panel) beside Terminal; tool calls echo into the terminal (dimmed `$ <command>` + output) so the user sees exactly what the model did. Reuse the `onToolCall` callback for this. *(Endpoint/key/model configurable in the panel, persisted in localStorage.)*
+- [x] Abort button → `AbortController` through client + loop; also pass a per-exec `signal` to `bash.exec` (just-bash supports cooperative cancellation).
+- [x] Alternative kept open: Vercel `ai` SDK + `bash-tool` npm (`createBashTool({ sandbox: bash })`, see `../just-bash/examples/bash-agent/agent.ts`) — evaluate for browser compat; the Ozwell port is the primary path since it matches the mieweb stack and MCPToolCall UI conventions. *(Ozwell port shipped as primary; AI-SDK spike remains optional and unblocked.)*
 
 **Acceptance:** with an API key configured, "clone <repo> and summarize the README, then count TS files" runs multi-step bash tool calls visibly and answers; loop respects max-iterations and abort; a runaway `while true; do :; done` tool call is killed by just-bash execution limits, not by the tab freezing.
 

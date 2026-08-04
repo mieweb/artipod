@@ -22,6 +22,8 @@ interface TerminalProps {
   getPrompt?: () => string;
   /** Tab-completion hook (sandbox.complete). */
   onComplete?: (line: string) => Promise<TerminalCompletion>;
+  /** Hands the host a raw write function (agent tool-call echo). */
+  registerWriter?: (write: (text: string) => void) => void;
 }
 
 const RED = '\x1b[31m';
@@ -40,7 +42,7 @@ function commonPrefix(items: string[]): string {
   return prefix;
 }
 
-export default function Terminal({ onCommand, getPrompt, onComplete }: TerminalProps) {
+export default function Terminal({ onCommand, getPrompt, onComplete, registerWriter }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const commandRef = useRef('');
@@ -54,6 +56,8 @@ export default function Terminal({ onCommand, getPrompt, onComplete }: TerminalP
   getPromptRef.current = getPrompt;
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
+  const registerWriterRef = useRef(registerWriter);
+  registerWriterRef.current = registerWriter;
 
   useEffect(() => {
     if (!terminalRef.current || xtermRef.current) return;
@@ -86,6 +90,7 @@ export default function Terminal({ onCommand, getPrompt, onComplete }: TerminalP
     }, 100);
 
     xtermRef.current = term;
+    registerWriterRef.current?.((text) => term.write(text));
 
     const prompt = () => {
       const cwd = getPromptRef.current?.() ?? '';
