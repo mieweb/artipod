@@ -30,14 +30,23 @@ const DEFAULT_CONFIG: AgentConfig = {
   model: 'gpt-4o-mini',
 };
 
-function loadConfig(): AgentConfig {
+function loadConfig(): { config: AgentConfig; remembered: boolean } {
   try {
     const raw = localStorage.getItem(CONFIG_KEY);
-    if (raw) return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+    if (raw) {
+      const config = { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+      // a stored key means the user opted into persistence earlier
+      return { config, remembered: Boolean(config.apiKey) };
+    }
   } catch {
     // fall through
   }
-  return DEFAULT_CONFIG;
+  return { config: DEFAULT_CONFIG, remembered: false };
+}
+
+function persistConfig(config: AgentConfig, rememberKey: boolean): void {
+  const { apiKey, ...withoutKey } = config;
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(rememberKey ? config : withoutKey));
 }
 
 const SYSTEM_PROMPT = `You are a coding agent operating inside a browser sandbox.
@@ -50,6 +59,7 @@ Keep commands non-interactive (no pagers or prompts).`;
 
 export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelProps) {
   const [config, setConfig] = useState<AgentConfig>(DEFAULT_CONFIG);
+  const [rememberKey, setRememberKey] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [input, setInput] = useState('');
@@ -59,7 +69,9 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setConfig(loadConfig());
+    const loaded = loadConfig();
+    setConfig(loaded.config);
+    setRememberKey(loaded.remembered);
   }, []);
 
   useEffect(() => {
@@ -68,7 +80,12 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
 
   const saveConfig = (next: AgentConfig) => {
     setConfig(next);
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
+    persistConfig(next, rememberKey);
+  };
+
+  const toggleRememberKey = (checked: boolean) => {
+    setRememberKey(checked);
+    persistConfig(config, checked); // off: strips the key from localStorage immediately
   };
 
   const append = (item: DisplayItem) => setItems((prev) => [...prev, item]);
@@ -188,6 +205,25 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
               onChange={(e) => saveConfig({ ...config, model: e.target.value })}
               className="rounded bg-[#1e1e1e] border border-gray-600 px-2 py-1"
             />
+          </label>
+          <label className="flex items-start gap-2 sm:col-span-3">
+            <input
+              type="checkbox"
+              checked={rememberKey}
+              onChange={(e) => toggleRememberKey(e.target.checked)}
+              aria-describedby="agent-key-storage-note"
+              className="mt-0.5"
+            />
+            <span className="text-gray-400">
+              Remember API key in this browser
+              <span id="agent-key-storage-note" className="block text-[11px] leading-snug text-gray-500">
+                Off (default): the key is held only in this tab&apos;s memory and is forgotten when
+                you close or reload the page. On: it is saved as plaintext in this browser&apos;s
+                localStorage for this site only. In both cases the key is never written to the
+                sandbox filesystem (ZenFS), so agent tool calls like bash or read_file cannot see
+                it — only requests to the base URL above carry it.
+              </span>
+            </span>
           </label>
         </form>
       )}
