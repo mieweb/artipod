@@ -62,7 +62,7 @@ export default function StorageSettings({ backend, isPrimaryTab }: StorageSettin
 
       {!isPrimaryTab && (
         <div role="alert" className="mb-4 rounded bg-yellow-900 p-3 text-sm">
-          This filesystem is already open in another tab — this tab is read-only.
+          This filesystem is already open in another tab — migration is disabled here. Close the other tab and reload to switch backends.
         </div>
       )}
 

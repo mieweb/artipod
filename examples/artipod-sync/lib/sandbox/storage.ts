@@ -116,7 +116,7 @@ async function moveLegacyRootEntries(
 
 export interface InitResult {
   backend: StorageBackend;
-  /** False when another tab already owns the filesystem (read-only mode). */
+  /** False when another tab already owns the filesystem. Advisory: writes are not blocked. */
   isPrimaryTab: boolean;
 }
 
@@ -125,7 +125,7 @@ let releaseLock: (() => void) | null = null;
 /**
  * Single-writer guard: two tabs on one store corrupt state (ZenFS instances
  * don't sync). First tab holds a Web Lock until it closes; later tabs see
- * isPrimaryTab=false and should show a read-only banner.
+ * isPrimaryTab=false and warn the user — nothing stops them writing.
  */
 async function acquireSingleWriterLock(): Promise<boolean> {
   if (typeof navigator === 'undefined' || !navigator.locks) return true; // older browsers: no guard

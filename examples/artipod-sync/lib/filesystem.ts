@@ -33,6 +33,6 @@ async function init(pref?: StorageBackend): Promise<InitResult> {
   const result = await storage.initFileSystem(pref);
   fs = (await import('@zenfs/core')).fs;
   fsInfo = result;
-  console.log(`FileSystem initialized (${result.backend}${result.isPrimaryTab ? '' : ', read-only tab'})`);
+  console.log(`FileSystem initialized (${result.backend}${result.isPrimaryTab ? '' : ', secondary tab'})`);
   return result;
 }

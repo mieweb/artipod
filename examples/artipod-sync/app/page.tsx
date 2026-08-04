@@ -168,7 +168,7 @@ export default function Home() {
 
       {fsInfo && !fsInfo.isPrimaryTab && (
         <div role="alert" className="bg-yellow-900 text-yellow-100 text-sm px-4 py-2">
-          Filesystem already open in another tab — this tab is read-only. Close the other tab and reload.
+          Filesystem already open in another tab — tabs don&apos;t share changes and the last write wins. Use one tab at a time.
         </div>
       )}
 
