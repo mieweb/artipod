@@ -299,13 +299,15 @@ Tasks:
 
 Extend [lib/git.ts](lib/git.ts) + the `git` custom command:
 
-- [ ] `git add <path>|.`, `git reset <path>`, `git rm`
-- [ ] `git commit -m "msg"` (author from settings; store name/email in localStorage or a `/etc/gitconfig`-style file in the sandbox)
-- [ ] `git log [--oneline] [-n N]`, `git branch [-a]`, `git checkout <ref|-b name>`
-- [ ] `git fetch` / `git pull` (fast-forward only initially; document merge limitation)
-- [ ] `git push` — needs auth: `onAuth` hook prompting for a PAT (stored per-origin, in memory by default with opt-in localStorage; **never** commit to the sandbox fs where agents can read it — see §8)
-- [ ] `git diff` without args (all modified files), `git diff --staged`
-- [ ] Replace the `git status` porcelain rendering with branch + short-status format
+- [x] `git add <path>|.`, `git reset <path>`, `git rm` *(add `.` stages modifications, additions **and** deletions via statusMatrix)*
+- [x] `git commit -m "msg"` (author from settings; store name/email in localStorage or a `/etc/gitconfig`-style file in the sandbox) *(localStorage via `git config user.name/user.email`; refuses when nothing is staged)*
+- [x] `git log [--oneline] [-n N]`, `git branch [-a]`, `git checkout <ref|-b name>`
+- [x] `git fetch` / `git pull` (fast-forward only initially; document merge limitation)
+- [x] `git push` — needs auth: `onAuth` hook prompting for a PAT (stored per-origin, in memory by default with opt-in localStorage; **never** commit to the sandbox fs where agents can read it — see §8) *(lib/git-auth.ts; opt-in persistence via `git config credential.persist true`; onAuthFailure drops the bad token)*
+- [x] `git diff` without args (all modified files), `git diff --staged` *(staged diff reads blobs by oid — STAGE walker entries have no `content()`)*
+- [x] Replace the `git status` porcelain rendering with branch + short-status format
+
+*(Implementation note: `lib/git.ts` became `createGitOps(getFs)` so tests and per-session server sandboxes inject their own fs; the browser keeps the `gitOps` singleton. The sandbox's git command shares the sandbox `zfs` — one store, coherent views. CORS proxy URL is configurable via `NEXT_PUBLIC_GIT_CORS_PROXY` / `setCorsProxy()` from day 1.)*
 
 **Acceptance:** clone → edit → add → commit → log shows the commit; push to a scratch repo on GitHub works with a PAT; e2e Playwright script covers the loop (minus push).
 

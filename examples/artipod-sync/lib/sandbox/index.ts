@@ -14,6 +14,7 @@
  */
 import { Bash } from 'just-bash/browser';
 import type { CustomCommand } from 'just-bash/browser';
+import { createGitOps } from '../git';
 import { makeEditCommand } from './edit-command';
 import { makeGitCommand } from './git-command';
 import { makeNotesCommand } from './notes-command';
@@ -46,7 +47,8 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     cwd: initialCwd,
     env: { HOME: initialCwd, USER: 'user', TERM: 'xterm-256color' },
     customCommands: [
-      makeGitCommand(),
+      // git shares the sandbox's zfs — shell view and git view stay coherent
+      makeGitCommand(createGitOps(() => opts.zfs)),
       makeEditCommand(opts.onEdit),
       makeNotesCommand(),
       ...(opts.extraCommands ?? []),

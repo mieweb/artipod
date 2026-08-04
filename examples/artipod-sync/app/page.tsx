@@ -37,6 +37,11 @@ export default function Home() {
       ]);
       if (cancelled) return;
       setFsInfo(info);
+      // PAT prompt for git push/fetch to private repos (token kept off the sandbox fs)
+      const { setAuthPrompt } = await import('@/lib/git-auth');
+      setAuthPrompt(async (origin) =>
+        window.prompt(`Personal access token for ${origin} (stored in memory):`),
+      );
       sandboxRef.current = createSandbox({
         zfs: fs,
         onEdit: (path) => {
