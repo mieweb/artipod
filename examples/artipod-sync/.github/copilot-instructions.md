@@ -41,6 +41,16 @@
 - **State/Logic**: Client-side heavy (ZenFS, isomorphic-git).
 - **Constraint**: NO backend server for git operations. All logic must run in the browser.
 
+## Deployment Environments
+
+### 🌐 Sample Site (`artipod-bash`)
+- **Detection**: If `hostname` returns `artipod-bash`, this machine is the public sample site.
+- **Run a release build, not dev**: `npm run build && npm run start -- -p 3000`
+- **Port**: Always serve on port 3000 (`npm run dev -p 3500` is for local development only).
+- **Public URL**: A load balancer outside the container maps `https://artipod-bash.os.mieweb.org` to port 3000.
+- **Process manager**: systemd unit `artipod-sync` (source of truth: `deploy/artipod-sync.service`). Deploy with `npm ci && npm run build && sudo systemctl restart artipod-sync`; logs via `journalctl -u artipod-sync -f`.
+- **Implication**: Generated links, callbacks, and CORS/redirect origins should use the public HTTPS URL, not `localhost:3000`.
+
 ## HTML & CSS Guidelines
 - **Tailwind CSS**: Use Tailwind CSS for styling. Prefer utility classes directly in JSX.
 - **Conditional Classes**: Use `clsx` or `tailwind-merge` for conditional class names.
