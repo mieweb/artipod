@@ -2,9 +2,7 @@
 
 Playground: https://artipod-bash.os.mieweb.org/
 
-<img width="500" alt="bash on browser" src="https://github.com/user-attachments/assets/fbaa33c8-790b-461a-8dac-69440c08238c" />
-
-
+<img width="250" alt="bash on browser" src="https://github.com/user-attachments/assets/fbaa33c8-790b-461a-8dac-69440c08238c" />
 
 A browser bash + git sandbox: [just-bash](https://github.com/vercel-labs/just-bash) (a full bash interpreter in TypeScript) over a persistent ZenFS filesystem, with isomorphic-git, xterm.js, Monaco, and an LLM agent loop that runs `bash` tool calls inside the same sandbox.
 
