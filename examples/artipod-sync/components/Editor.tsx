@@ -18,8 +18,7 @@ export default function Editor({ filepath, onClose }: EditorProps) {
   useEffect(() => {
     const loadFile = async () => {
       try {
-        // Check if file exists
-        if (fs.existsSync(filepath)) {
+        if (await fs.promises.exists(filepath)) {
           const data = await fs.promises.readFile(filepath, 'utf8');
           setContent(data as string);
         } else {
