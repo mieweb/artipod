@@ -44,10 +44,14 @@ export interface CreateSandboxOptions {
    * the registered providers before every command and reconciled after it.
    */
   proc?: boolean;
-  /** Host work to run around each non-transient command, e.g. materializing state. */
+  /**
+   * Host work to run around each non-transient command, e.g. materializing
+   * state into the filesystem. Returned messages are appended to stderr, so a
+   * hook reports a problem without taking the command down.
+   */
   hooks?: {
-    beforeExec?: () => Promise<void> | void;
-    afterExec?: () => Promise<void> | void;
+    beforeExec?: () => Promise<string[] | void> | string[] | void;
+    afterExec?: () => Promise<string[] | void> | string[] | void;
   };
   /** Tighter limits for server / agent use (defaults are sane for humans). */
   executionLimits?: BashOptions['executionLimits'];
@@ -102,7 +106,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       const live = !execOpts?.transient;
       const notices: string[] = [];
       if (live) {
-        await opts.hooks?.beforeExec?.();
+        notices.push(...((await opts.hooks?.beforeExec?.()) ?? []));
         if (opts.proc) notices.push(...(await refreshProc(opts.zfs)));
         history.push(line);
       }
@@ -114,7 +118,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
         }
         if (r.env?.PWD) cwd = r.env.PWD;
         if (opts.proc) notices.push(...(await reconcileProc(opts.zfs)));
-        await opts.hooks?.afterExec?.();
+        notices.push(...((await opts.hooks?.afterExec?.()) ?? []));
       }
       const stderr = notices.length ? `${r.stderr}${notices.join('\n')}\n` : r.stderr;
       return { stdout: r.stdout, stderr, exitCode: r.exitCode };

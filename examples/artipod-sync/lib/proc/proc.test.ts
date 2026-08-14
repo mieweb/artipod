@@ -216,3 +216,26 @@ describe('the snapshot is only refreshed for real commands', () => {
     expect([...procEntries().keys()]).toEqual(before);
   });
 });
+
+describe('host hooks', () => {
+  it('run around each command and report on stderr', async () => {
+    const calls: string[] = [];
+    const hooked = createSandbox({
+      zfs,
+      cwd: '/repo',
+      hooks: {
+        beforeExec: () => {
+          calls.push('before');
+        },
+        afterExec: () => {
+          calls.push('after');
+          return ['cases: responses.yaml: bad indentation'];
+        },
+      },
+    });
+    const r = await hooked.exec('echo hi');
+    expect(calls).toEqual(['before', 'after']);
+    expect(r.stdout).toBe('hi\n');
+    expect(r.stderr).toContain('cases: responses.yaml: bad indentation');
+  });
+});
