@@ -12,7 +12,17 @@
  */
 import { defineCommand } from 'just-bash/browser';
 import type { ExecResult } from 'just-bash/browser';
-import { getStorageUsage, opfsDirBytes, OPFS_FS_DIR, OPFS_MODELS_DIR } from './storage';
+import {
+  backendAt,
+  getStorageUsage,
+  mountBackend,
+  opfsDirBytes,
+  unmountBackend,
+  OPFS_FS_DIR,
+  OPFS_MODELS_DIR,
+  type MountSpec,
+} from './storage';
+import { renderTable } from './table';
 import type { ZenFsLike } from './types';
 
 export interface StorageDevice {
@@ -170,9 +180,24 @@ row carries real capacity. Used is a browser estimate (Chromium only).
 
 const USAGE: Record<string, string> = {
   mount: `usage: mount
+       mount -t <type> [-o <options>] <dir>
 
-List the ZenFS mount points backing this shell, in /etc/mtab style.
-Read-only: mounting and unmounting are not supported.
+With no arguments, list the ZenFS mount points in /etc/mtab style.
+
+One VFS is *the* filesystem; IndexedDB and OPFS are interchangeable backing
+devices that can be attached anywhere in it, side by side.
+
+  -t memory              a fresh in-memory filesystem (tmpfs)
+  -t idb [-o store=NAME] an IndexedDB object store (default store: artipodfs)
+  -t opfs [-o dir=PATH]  the OPFS sandbox dir, or a subdirectory of it
+
+The mount point is created if it does not exist.
+`,
+  umount: `usage: umount [-f] <dir>
+
+Detach a filesystem. / and /proc are never unmountable; a device holding
+persistent data (IndexedDB, OPFS) needs -f, since unmounting it hides data
+that is still there.
 `,
   df: `usage: df [-h] [-k] [-T] [--scan] [path...]
 
@@ -216,23 +241,95 @@ function helpFor(name: string, args: string[], shortFlag = true): ExecResult | n
   return null;
 }
 
+const MOUNT_TYPES: Record<string, MountSpec['type']> = {
+  memory: 'memory',
+  mem: 'memory',
+  tmpfs: 'memory',
+  idb: 'indexeddb',
+  indexeddb: 'indexeddb',
+  opfs: 'opfs',
+};
+
+/** `-o store=x,dir=y` → `{ store: 'x', dir: 'y' }`. */
+function parseMountOptions(raw: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of (raw ?? '').split(',').filter(Boolean)) {
+    const eq = part.indexOf('=');
+    out[eq < 0 ? part : part.slice(0, eq)] = eq < 0 ? '' : part.slice(eq + 1);
+  }
+  return out;
+}
+
+/** Mount points the shell cannot function without. */
+const PINNED_MOUNTS = new Set(['/', '/proc']);
+
 const makeMountCommand = () =>
-  defineCommand('mount', async (args) => {
+  defineCommand('mount', async (args, ctx) => {
     const help = helpFor('mount', args);
     if (help) return help;
-    if (args.length) {
-      return {
-        stdout: '',
-        stderr: "mount: read-only view; mounting is not supported (try 'mount --help')\n",
-        exitCode: 1,
-      };
+
+    if (!args.length) {
+      const { devices } = await probeStorage({});
+      const lines = mounted(devices).map(
+        (d) => `${d.source} on ${d.mountPoint} type ${d.type} (${d.options.join(',')})`,
+      );
+      return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
     }
-    const { devices } = await probeStorage({});
-    const lines = mounted(devices).map(
-      (d) => `${d.source} on ${d.mountPoint} type ${d.type} (${d.options.join(',')})`,
-    );
-    return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
+
+    let type: string | undefined;
+    let options: string | undefined;
+    const rest: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-t') type = args[++i];
+      else if (args[i] === '-o') options = args[++i];
+      else rest.push(args[i]);
+    }
+    if (!type || rest.length !== 1) {
+      return fail('mount', "usage: mount -t <type> [-o <options>] <dir> (try 'mount --help')");
+    }
+    const backend = MOUNT_TYPES[type];
+    if (!backend) return fail('mount', `unknown filesystem type '${type}'`);
+
+    const { store, dir } = parseMountOptions(options);
+    const path = ctx.fs.resolvePath(ctx.cwd, rest[0]);
+    try {
+      await mountBackend(path, { type: backend, store: store || undefined, dir: dir || undefined });
+    } catch (e) {
+      return fail('mount', (e as Error).message);
+    }
+    return { stdout: '', stderr: '', exitCode: 0 };
   });
+
+const makeUmountCommand = () =>
+  defineCommand('umount', async (args, ctx) => {
+    const help = helpFor('umount', args);
+    if (help) return help;
+    const flags = expandFlags(args);
+    const force = flags.includes('-f') || flags.includes('--force');
+    const target = flags.find((a) => !a.startsWith('-'));
+    if (!target) return fail('umount', "missing operand (try 'umount --help')");
+
+    const path = ctx.fs.resolvePath(ctx.cwd, target);
+    if (PINNED_MOUNTS.has(path)) return fail('umount', `${path}: cannot unmount`);
+
+    const backend = await backendAt(path);
+    if (!backend) return fail('umount', `${path}: not mounted`);
+    if (backend !== 'memory' && !force) {
+      return fail('umount', `${path}: holds persistent data on ${backend}; use -f to detach anyway`);
+    }
+    try {
+      await unmountBackend(path);
+    } catch (e) {
+      return fail('umount', (e as Error).message);
+    }
+    return { stdout: '', stderr: '', exitCode: 0 };
+  });
+
+const fail = (command: string, message: string): ExecResult => ({
+  stdout: '',
+  stderr: `${command}: ${message}\n`,
+  exitCode: 1,
+});
 
 /** Accepted and ignored, exactly as real df ignores them. */
 const DF_NOOP_FLAGS = new Set(['-v', '-P', '-l', '-a', '--all', '--sync', '--no-sync', '--local']);
@@ -431,6 +528,7 @@ const makeDiskutilCommand = () =>
 
 export const makeStorageCommands = (getZfs: () => ZenFsLike) => [
   makeMountCommand(),
+  makeUmountCommand(),
   makeDfCommand(getZfs),
   makeFindmntCommand(),
   makeLsblkCommand(),
@@ -477,15 +575,4 @@ function fmtSize(bytes: number | null, human: boolean): string {
     unit++;
   }
   return `${value < 10 && value % 1 !== 0 ? value.toFixed(1) : Math.round(value)}${UNITS[unit]}`;
-}
-
-/** df layout: numeric columns right-aligned, everything else left-aligned. */
-function renderTable(header: string[], rows: string[][], rightAligned: number[] = []): string {
-  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
-  const line = (cells: string[]) =>
-    cells
-      .map((c, i) => (rightAligned.includes(i) ? c.padStart(widths[i]) : c.padEnd(widths[i])))
-      .join(' ')
-      .trimEnd();
-  return `${[line(header), ...rows.map(line)].join('\n')}\n`;
 }

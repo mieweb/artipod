@@ -18,8 +18,16 @@ type MountConfig =
 
 const PREF_KEY = 'artipod-sync-storage-backend';
 const LOCK_NAME = 'artipod-sync-fs';
-const IDB_STORE = 'browser-git-fs';
+/**
+ * The default IndexedDB object store. One VFS is *the* filesystem — IndexedDB
+ * and OPFS are interchangeable backing devices for it — so the store is named
+ * after the filesystem, not after git, which is only one of its consumers.
+ */
+export const IDB_STORE = 'artipodfs';
+/** Pre-`artipodfs` store name; read once at first boot, then never again. */
+export const LEGACY_IDB_STORE = 'browser-git-fs';
 const MIGRATE_MOUNT = '/__migrate';
+const LEGACY_MOUNT = '/__legacy';
 /** Sandbox subtree inside OPFS — siblings (artipod-models/) stay invisible to agents. */
 export const OPFS_FS_DIR = 'artipod-fs';
 export const OPFS_MODELS_DIR = 'artipod-models';
@@ -57,6 +65,61 @@ async function mountConfigFor(backend: StorageBackend): Promise<MountConfig> {
     return { backend: WebAccess, handle: await opfsSandboxDir() };
   }
   return { backend: IndexedDB, storeName: IDB_STORE };
+}
+
+/** What `mount -t <type> [-o ...]` resolves to. */
+export interface MountSpec {
+  type: StorageBackend;
+  /** IndexedDB object store. Default: `artipodfs`. */
+  store?: string;
+  /** OPFS subdirectory below the sandbox dir. Default: the sandbox dir itself. */
+  dir?: string;
+}
+
+async function mountConfigForSpec(spec: MountSpec): Promise<MountConfig> {
+  const { InMemory } = await import('@zenfs/core');
+  if (spec.type === 'memory') return { backend: InMemory };
+  const { IndexedDB, WebAccess } = await import('@zenfs/dom');
+  if (spec.type === 'opfs') {
+    let handle = await opfsSandboxDir();
+    for (const segment of (spec.dir ?? '').split('/').filter(Boolean)) {
+      handle = await handle.getDirectoryHandle(segment, { create: true });
+    }
+    return { backend: WebAccess, handle };
+  }
+  return { backend: IndexedDB, storeName: spec.store ?? IDB_STORE };
+}
+
+/**
+ * Attaches a backing device at `path`. ZenFS only surfaces a mount point that
+ * already exists as a directory underneath, and the mkdir has to happen before
+ * the mount or it lands inside the new filesystem instead.
+ */
+export async function mountBackend(path: string, spec: MountSpec): Promise<void> {
+  const { fs, mount, mounts, resolveMountConfig } = await import('@zenfs/core');
+  if (!path.startsWith('/')) throw new Error(`mount point must be absolute: ${path}`);
+  if (mounts.has(path)) throw new Error(`mount point is already in use: ${path}`);
+  const resolved = await resolveMountConfig(await mountConfigForSpec(spec));
+  if (path !== '/' && !(await fs.promises.exists(path))) {
+    await fs.promises.mkdir(path, { recursive: true });
+  }
+  mount(path, resolved);
+}
+
+export async function unmountBackend(path: string): Promise<void> {
+  const { mounts, umount } = await import('@zenfs/core');
+  if (!mounts.has(path)) throw new Error(`not mounted: ${path}`);
+  umount(path);
+}
+
+/** The backend kind currently mounted at `path`, or null when nothing is. */
+export async function backendAt(path: string): Promise<StorageBackend | null> {
+  const { mounts } = await import('@zenfs/core');
+  const fs = mounts.get(path);
+  if (!fs) return null;
+  if (fs.name === 'webaccessfs') return 'opfs';
+  if (fs.name === 'tmpfs') return 'memory';
+  return 'indexeddb';
 }
 
 /**
@@ -160,10 +223,32 @@ export async function initFileSystem(pref?: StorageBackend): Promise<InitResult>
       throw e;
     }
   }
+  if (backend === 'indexeddb') await adoptLegacyStore();
   if (!(await fs.promises.exists('/repo'))) {
     await fs.promises.mkdir('/repo');
   }
   return { backend, isPrimaryTab };
+}
+
+/**
+ * One-time `browser-git-fs` → `artipodfs` adoption. Only runs when the new
+ * store is untouched, so it can never overwrite live data, and the legacy store
+ * is never written to — after this the old name is dead.
+ */
+async function adoptLegacyStore(): Promise<void> {
+  const { fs, mount, mounts, resolveMountConfig, umount } = await import('@zenfs/core');
+  const p = fs.promises;
+  if (mounts.has(LEGACY_MOUNT) || (await p.readdir('/')).length) return;
+
+  const { IndexedDB } = await import('@zenfs/dom');
+  await p.mkdir(LEGACY_MOUNT);
+  mount(LEGACY_MOUNT, await resolveMountConfig({ backend: IndexedDB, storeName: LEGACY_IDB_STORE }));
+  try {
+    if ((await p.readdir(LEGACY_MOUNT)).length) await copyTree(fs, LEGACY_MOUNT, '/');
+  } finally {
+    umount(LEGACY_MOUNT);
+    await p.rmdir(LEGACY_MOUNT).catch(() => undefined);
+  }
 }
 
 export interface MigrationProgress {
@@ -180,61 +265,83 @@ export async function migrateStorage(
   to: StorageBackend,
   onProgress?: (p: MigrationProgress) => void,
 ): Promise<{ files: number; bytes: number }> {
-  const { fs, mount, umount } = await import('@zenfs/core');
-  const p = fs.promises;
+  const { fs, mount, resolveMountConfig, umount } = await import('@zenfs/core');
 
   // Attach the target as a nested mount, then walk-copy (skipping the mount itself).
-  const { resolveMountConfig } = await import('@zenfs/core');
-  const targetFs = await resolveMountConfig(await mountConfigFor(to));
-  mount(MIGRATE_MOUNT, targetFs);
-
+  mount(MIGRATE_MOUNT, await resolveMountConfig(await mountConfigFor(to)));
   try {
-    const files: string[] = [];
-    const dirs: string[] = [];
-    const walk = async (dir: string): Promise<void> => {
-      for (const name of await p.readdir(dir)) {
-        const path = dir === '/' ? `/${name}` : `${dir}/${name}`;
-        if (path === MIGRATE_MOUNT) continue;
-        const st = await p.lstat(path);
-        if (st.isDirectory()) {
-          dirs.push(path);
-          await walk(path);
-        } else if (st.isFile()) {
-          files.push(path);
-        }
-        // symlinks: isomorphic-git materializes none by default; skip safely
-      }
-    };
-    await walk('/');
-
-    let copied = 0;
-    let bytes = 0;
-    for (const dir of dirs) {
-      await p.mkdir(`${MIGRATE_MOUNT}${dir}`, { recursive: true });
-    }
-    for (const file of files) {
-      const data = await p.readFile(file);
-      await p.writeFile(`${MIGRATE_MOUNT}${file}`, data);
-      bytes += data.byteLength;
-      copied++;
-      onProgress?.({ copied, total: files.length, currentPath: file });
-    }
-
-    // Verify: every file exists on the target with the same size.
-    for (const file of files) {
-      const st = await p.stat(`${MIGRATE_MOUNT}${file}`);
-      const src = await p.stat(file);
-      if (st.size !== src.size) {
-        throw new Error(`migration verify failed for ${file}: ${st.size} != ${src.size}`);
-      }
-    }
-
+    const result = await copyTree(fs, '/', MIGRATE_MOUNT, onProgress);
     saveBackendPref(to);
-    return { files: files.length, bytes };
+    return result;
   } finally {
     umount(MIGRATE_MOUNT);
   }
 }
+
+type ZenFs = (typeof import('@zenfs/core'))['fs'];
+
+/**
+ * Walk-copy `from` → `to`, skipping nested mount points, then verify every
+ * file arrived at the same size. Shared by the backend migration and the
+ * legacy-store adoption.
+ */
+async function copyTree(
+  fs: ZenFs,
+  from: string,
+  to: string,
+  onProgress?: (p: MigrationProgress) => void,
+): Promise<{ files: number; bytes: number }> {
+  const { mounts } = await import('@zenfs/core');
+  const p = fs.promises;
+  const nested = [...mounts.keys()].filter((m) => m !== from && isBelow(m, from));
+
+  const files: string[] = [];
+  const dirs: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    for (const name of await p.readdir(dir)) {
+      const path = dir === '/' ? `/${name}` : `${dir}/${name}`;
+      if (nested.includes(path)) continue;
+      const st = await p.lstat(path);
+      if (st.isDirectory()) {
+        dirs.push(path);
+        await walk(path);
+      } else if (st.isFile()) {
+        files.push(path);
+      }
+      // symlinks: isomorphic-git materializes none by default; skip safely
+    }
+  };
+  await walk(from);
+
+  const target = (path: string) => {
+    const rel = from === '/' ? path : path.slice(from.length);
+    return to === '/' ? rel : `${to}${rel}`;
+  };
+
+  let copied = 0;
+  let bytes = 0;
+  for (const dir of dirs) {
+    await p.mkdir(target(dir), { recursive: true });
+  }
+  for (const file of files) {
+    const data = await p.readFile(file);
+    await p.writeFile(target(file), data);
+    bytes += data.byteLength;
+    copied++;
+    onProgress?.({ copied, total: files.length, currentPath: file });
+  }
+
+  for (const file of files) {
+    const st = await p.stat(target(file));
+    const src = await p.stat(file);
+    if (st.size !== src.size) {
+      throw new Error(`migration verify failed for ${file}: ${st.size} != ${src.size}`);
+    }
+  }
+  return { files: files.length, bytes };
+}
+
+const isBelow = (path: string, root: string) => path.startsWith(root === '/' ? '/' : `${root}/`);
 
 export interface StorageUsage {
   usage: number;

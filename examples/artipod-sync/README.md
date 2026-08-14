@@ -16,6 +16,8 @@ See [just-bash-plan.md](just-bash-plan.md) for the architecture, design decision
 - **Git** — `clone`, `status`, `add`, `commit`, `log`, `branch`, `checkout`, `diff [--staged]`, `fetch`, `pull` (ff-only), `push` (PAT prompt; tokens never touch the sandbox fs). `https://` remotes only, via a configurable CORS proxy.
 - **Editor & tree** — Monaco (`edit <file>`) and a file-tree view over the same filesystem.
 - **Agent tab** — OpenAI-compatible tool-calling loop (Ozwell et al.); tool calls echo into the terminal; abort button; output truncated to protect context windows.
+- **`/proc` providers** — host state projected into files, rebuilt before every command and written back after it. Providers are declared like kernel modules, so `lsmod` / `modinfo` / `modprobe` manage them. artipod-sync ships `storage` (raw IndexedDB + OPFS); embedding apps register their own. See [lib/proc/README.md](lib/proc/README.md).
+- **One filesystem, many devices** — `mount -t memory|idb|opfs <dir>` and `umount [-f] <dir>` attach backing devices anywhere in the tree; git is just one consumer of it, not a special case.
 - **Storage tab** — IndexedDB ⇄ OPFS backend switch with verified migration, usage meter, persistence request, multi-tab write guard.
 - **Server parity** — `POST /api/exec` runs the same sandbox core per session (git included) with TTL eviction and hardened limits; `/api/git/*` is a self-hosted git CORS proxy with a host allowlist.
 

@@ -15,8 +15,12 @@
 import { Bash } from 'just-bash/browser';
 import type { BashOptions, CustomCommand } from 'just-bash/browser';
 import { createGitOps } from '../git';
+import { reconcileProc } from '../proc/reconcile';
+import { refreshProc } from '../proc/snapshot';
+import { registerBuiltinProviders } from '../proc/storage-provider';
 import { makeEditCommand } from './edit-command';
 import { makeGitCommand } from './git-command';
+import { makeModuleCommands } from './module-command';
 import { makeNotesCommand } from './notes-command';
 import { makeStorageCommands } from './storage-command';
 import type { CompletionResult, Sandbox, SandboxExecOptions, ZenFsLike } from './types';
@@ -35,6 +39,16 @@ export interface CreateSandboxOptions {
   cwd?: string;
   /** Additional custom commands (server may add more; agents reuse as-is). */
   extraCommands?: CustomCommand[];
+  /**
+   * Mount `/proc` and add lsmod/modinfo/modprobe: the snapshot is rebuilt from
+   * the registered providers before every command and reconciled after it.
+   */
+  proc?: boolean;
+  /** Host work to run around each non-transient command, e.g. materializing state. */
+  hooks?: {
+    beforeExec?: () => Promise<void> | void;
+    afterExec?: () => Promise<void> | void;
+  };
   /** Tighter limits for server / agent use (defaults are sane for humans). */
   executionLimits?: BashOptions['executionLimits'];
   executionLimitProfile?: BashOptions['executionLimitProfile'];
@@ -45,6 +59,7 @@ const DEFAULT_CWD = '/repo';
 export function createSandbox(opts: CreateSandboxOptions): Sandbox {
   const adapter = new ZenFsAdapter(opts.zfs);
   const initialCwd = opts.cwd ?? DEFAULT_CWD;
+  if (opts.proc) registerBuiltinProviders();
 
   const bash = new Bash({
     fs: adapter,
@@ -58,6 +73,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       makeEditCommand(opts.onEdit),
       makeNotesCommand(),
       ...makeStorageCommands(() => opts.zfs),
+      ...(opts.proc ? makeModuleCommands() : []),
       ...(opts.extraCommands ?? []),
     ],
   });
@@ -82,16 +98,26 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
 
   const sandbox: Sandbox = {
     async exec(line: string, execOpts?: SandboxExecOptions) {
-      if (!execOpts?.transient) history.push(line);
+      // Transient execs (tab completion) must not disturb the snapshot.
+      const live = !execOpts?.transient;
+      const notices: string[] = [];
+      if (live) {
+        await opts.hooks?.beforeExec?.();
+        if (opts.proc) notices.push(...(await refreshProc(opts.zfs)));
+        history.push(line);
+      }
       const r = await runLine(line, execOpts);
-      if (!execOpts?.transient) {
+      if (live) {
         if (r.env) {
           const { BASH_HISTORY: _history, ...rest } = r.env;
           carriedEnv = rest;
         }
         if (r.env?.PWD) cwd = r.env.PWD;
+        if (opts.proc) notices.push(...(await reconcileProc(opts.zfs)));
+        await opts.hooks?.afterExec?.();
       }
-      return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
+      const stderr = notices.length ? `${r.stderr}${notices.join('\n')}\n` : r.stderr;
+      return { stdout: r.stdout, stderr, exitCode: r.exitCode };
     },
 
     getCwd: () => cwd,

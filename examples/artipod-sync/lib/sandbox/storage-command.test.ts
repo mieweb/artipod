@@ -27,10 +27,10 @@ describe('mount', () => {
     expect(r.stdout.trim()).toBe('tmpfs on / type memory (rw)');
   });
 
-  it('refuses to actually mount anything', async () => {
+  it('needs -t to mount: a bare source/target pair is not enough', async () => {
     const r = await sandbox.exec('mount /dev/sda /mnt');
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toMatch(/not supported/);
+    expect(r.stderr).toMatch(/mount -t <type>/);
   });
 });
 
@@ -133,7 +133,7 @@ describe('block-device views', () => {
   });
 
   it('every view answers --help', async () => {
-    for (const name of ['mount', 'findmnt', 'lsblk', 'fdisk', 'diskutil']) {
+    for (const name of ['mount', 'umount', 'findmnt', 'lsblk', 'fdisk', 'diskutil']) {
       const long = await sandbox.exec(`${name} --help`);
       const short = await sandbox.exec(`${name} -h`);
       expect(long.exitCode, name).toBe(0);

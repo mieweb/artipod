@@ -33,6 +33,14 @@ Extras:
                    the same storage facts in other shapes. The origin quota
                    is the 'disk'; IndexedDB and OPFS are its partitions.
                    Each takes --help.
+  mount -t <type> <dir>, umount [-f] <dir>
+                   attach or detach a backing device anywhere in the tree:
+                   -t memory, -t idb [-o store=NAME], -t opfs [-o dir=PATH].
+  lsmod, modinfo <name>, modprobe [-r] <name>
+                   the /proc providers, which project host state into files.
+                   /proc is a snapshot: it is rebuilt before every command,
+                   and edits to a read-write provider's files are handed back
+                   to it after the command.
   help             list all available commands
   history          shell history (mirrors the terminal's arrow-key history)
   Tab              complete commands, aliases and paths
