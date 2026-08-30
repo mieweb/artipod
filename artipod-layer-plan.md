@@ -41,7 +41,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 
 | Phase | Branch | Status | PR |
 |---|---|---|---|
-| 0 — repo prep | `phase-0-esm-vitest` | in progress | |
+| 0 — repo prep | `phase-0-esm-vitest` | done (owner npm actions pending) | [#33](https://github.com/mieweb/artipod/pull/33), [#34](https://github.com/mieweb/artipod/pull/34) |
 | 1 — fs injection | `phase-1-podfs-injection` | not started | |
 | 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | not started | |
 | 3 — manifest + realizers | `phase-3-manifest-realizers` | not started | |
@@ -245,7 +245,7 @@ Each phase = one reviewable PR series into `mieweb/artipod` (+ a consuming PR in
 - [x] `npm test` green under vitest/ESM (same suites that passed under jest — no skipped tests without a worklog note) — verified: 5 files / **161 tests** passed, 0 skipped (same count as jest baseline)
 - [x] Built output is ESM with an `exports` map; importing the built package from a scratch `node` ESM script works — verified: `/tmp/artipod-esm-smoke` installs the package and imports `@artipod/core` + `/tools` + `/prompts` subpaths
 - [x] `examples/web-demo` moved to `attic/`; README points at the Phase 6 north-star demo — verified: `examples/README.md` web-demo section now points at `attic/web-demo` + the plan's Phase 6 demo
-- [ ] CI runs vitest on push
+- [x] CI runs vitest on push — verified: PR #34 checks green on Node 18.x + 20.x (≈2m40s each; nodejs.yml unchanged — its `npm test`/`npm run test:coverage` steps now invoke vitest)
 
 **Worklog:**
 
@@ -255,7 +255,8 @@ Each phase = one reviewable PR series into `mieweb/artipod` (+ a consuming PR in
 - 2026-08-30 — ESM conversion: `type: module`, tsconfig → `module/moduleResolution NodeNext`, `target ES2022`, `types [node, vitest/globals]`; 55 relative imports given `.js` extensions (54 from the grep sweep + one type-only `import('./artimount')` in types.ts that TS2835 caught); directory imports `./tools`/`./prompts` → explicit `/index.js`. Zero CJS-isms existed in src (no `__dirname`/`require`).
 - 2026-08-30 — package identity: `@artipod/core@0.1.0`, exports map (`.`, `./tools`, `./prompts`, `./package.json`), `repository`/`homepage`/`bugs` added (trusted-publishing provenance needs the repository match), author = Medical Informatics Engineering, LLC, LICENSE (MIT) added. Peers exact-pinned from artipod-sync lockfile: just-bash 3.2.0 / @zenfs/core 2.4.4 / @zenfs/dom 1.2.5, marked optional (see item note).
 - 2026-08-30 — vitest migration: jest.config.js deleted; vitest.config.ts with `globals: true`, node env, v8 coverage (text/lcov/html → `coverage/`). Specs used zero `jest.*` APIs; per-test `120000` timeout third-args carry over 1:1 (vitest hookTimeout default 10s ≥ jest's 5s). Verification: `npm run lint` clean, `npm run build` clean, `npm test` → **161/161** in 36.2s, `npm run test:coverage` → lcov.info 38 KB written.
-- 2026-08-30 — examples: `examples/web-demo` → `attic/web-demo` (`.gitignore` gained attic equivalents of the examples ignores); `examples/mcp-server` reinstalled + rebuilt against the ESM package, `import('artipod')` resolves; `example:basic` script switched ts-node → tsx (runs the full demo incl. a container start — see next entry). CI workflow untouched by design: script names are stable, so nodejs.yml now runs vitest transitively; publish.yml untouched — owner must configure npmjs trusted publishing for `@artipod/core` before any release.
+- 2026-08-30 — examples: `examples/web-demo` → `attic/web-demo` (`.gitignore` gained attic equivalents of the examples ignores); `examples/mcp-server` reinstalled + rebuilt against the ESM package, `import('artipod')` resolves; `example:basic` script switched ts-node → tsx (runs the full demo incl. a container start — note: first `npx tsx` run prompts interactively to install tsx). CI workflow untouched by design: script names are stable, so nodejs.yml now runs vitest transitively; publish.yml untouched — owner must configure npmjs trusted publishing for `@artipod/core` before any release.
+- 2026-08-30 — phase 0 gate (PR #34, CI green both Node lanes). Deviation, rule 6: gate taken with one box open — the owner-side `@artipod/core@0.0.1` placeholder publish (+ trusted-publishing config). It is an npm-side action that doesn't gate Phase 1 code; flagged to owner in the PR body and directly.
 
 ### Phase 1 — Make the core isomorphic (fs injection)
 
