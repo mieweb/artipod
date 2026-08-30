@@ -33,7 +33,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 
 ### Ask-first list (owner sign-off required)
 
-- npm publishes — owner runs them (or grants access): placeholder `@artipod/core@0.0.1` immediately (decided), first real `0.1.0` at the Phase 0 gate.
+- npm publishes — owner runs them (or grants access): placeholder `@artipod/core@0.0.1` immediately (decided), first real `0.1.0` at the Phase 0 gate. Also owner-only: configuring npmjs **trusted publishing** for `@artipod/core` — the existing `.github/workflows/publish.yml` is set up for `@mieweb/artipod` and will fail on the renamed package until that's done.
 - Anything touching the deployed artipod-sync service (`deploy/artipod-sync.service`, prod env, default registry allowlists).
 - Deleting the re-export shims from artipod-sync (scheduled one release after Phase 2).
 
@@ -64,7 +64,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 | Session/proxy patterns to mine for `/manager` in Phase 6 | `../artipod-sync/lib/server/` |
 | Components to thin into `/host` shells in Phase 2 | `../artipod-sync/components/Terminal.tsx`, `Editor.tsx`, `FileTree.tsx` |
 | VS Code-schema tools + prompts (already in this repo) | `src/tools/`, `src/prompts/` |
-| Docker hardening that must not regress | `src/containerUtils.ts`, `container/` |
+| Docker hardening that must not regress | `src/containerUtils.ts`, `src/containerRuntime.ts` (podman detection), `container/` |
 | OCI design source of truth (Phases 4–6) | [horner/artipod-sync#1](https://github.com/horner/artipod-sync/issues/1) |
 | Encryption, keyring, leases, offline grants, delegation (normative) | `docs/encryption.md` |
 | Agent confinement, sudo, approvals, admin policy (normative) | `docs/security-model.md` |
@@ -105,8 +105,22 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 2. **`ToolRegistry` is single-mount** — constructed with one `ArtiMount`; sync tools are sandbox-cwd-relative. Needed: pod-level registry resolving paths against each mount's declared root — no fixed prefix scheme (Decision #3).
 3. **Result envelopes differ** — artipod returns structured `ToolResult` objects; sync tools return LLM-ready strings. Keep structured results as the source of truth + serializers (OpenAI string / MCP content) on top.
 4. **Docker cannot bind virtual mounts** — a browser pod's IndexedDB-backed fs can't bind-mount into a container. That's not a bug: it's use case 3 (sync to server first, then execute with the docker backend). Document as an explicit constraint of the docker realizer.
-5. **jest → vitest** and **CJS → ESM**: `examples/web-demo` consumes the package via `file:`; it must survive the packaging change (or be updated in the same PR).
+5. **jest → vitest** and **CJS → ESM**: `examples/web-demo` consumes the package via `file:`; it retires to `attic/` in Phase 0. `examples/mcp-server` (added upstream, also `file:../..`) is already `"type": "module"` so the ESM flip helps it — but rebuild it to confirm; `examples/basic` imports `../../src` via ts-node and needs a tsx-era equivalent.
 6. **Version pinning** — `artipod-sync` uses `@zenfs/core ^2.3.11`, `@zenfs/dom ^1.0.0`, `just-bash ^3.2.0`. ZenFS backend API (needed for `OciLayerFS`/`OciViewFS`) is version-sensitive: pin exact versions in `@artipod/core` peerDeps before Phase 4.
+
+### 2026-08-30 addendum — upstream moved before Phase 0 started
+
+The table above describes the repos as of the plan's writing (artipod branch `feature/vscode-tool-compatibility`). Before Phase 0 began, `mieweb/artipod` `main` absorbed that branch (PR #8, **rebased** — same messages, new SHAs; remote branch deleted) plus ~40 more commits, releasing **v0.3.1**. New on main and not reflected above:
+
+- **Podman support** (`src/containerRuntime.ts`): automatic docker/podman detection (`detectRuntime`; machine/rootful/rootless modes).
+- **Read-only mounts**: `new ArtiMount(name, root, readonly)` → bind-mounted `:ro`.
+- **Main mount (breaking ctor change)**: `ArtiPod` now takes an options object; `useMainMount` defaults true and auto-creates a writable `main` mount under `workspaceDir`; `initialize()` is part of the lifecycle.
+- **`run_in_terminal` tool** added to the VS Code-schema tool set (`src/tools/podTools.ts`, `PodToolRegistry`).
+- **`examples/basic` + `examples/mcp-server`** (Hono-less MCP stdio server on `@modelcontextprotocol/sdk`, `file:../..` dep, already ESM).
+- **CI exists**: `.github/workflows/nodejs.yml` (lint/build/jest/coverage on Node 18+20, docker tests included) and `publish.yml` (npm trusted publishing for `@mieweb/artipod` on release).
+- Baseline moved: **161** jest tests (was 116).
+
+Nothing upstream contradicts the convergence direction — podman/ro-mounts/main-mount slot into the docker realizer + manifest work (Phase 3), `run_in_terminal` joins the tool surface Phase 1 rationalizes. Phase 0 items below were adjusted in place; the plan/docs landed via `docs/layer-plan-landing` instead of the original merge step.
 
 ## 3. Target architecture
 
@@ -218,12 +232,12 @@ Each phase = one reviewable PR series into `mieweb/artipod` (+ a consuming PR in
 
 > **Branch** `phase-0-esm-vitest` · **Status** _not started_
 
-- [ ] **Decided — do first:** PR + merge `feature/vscode-tool-compatibility` → `main`; `phase-0-esm-vitest` branches from the updated `main`.
+- [x] **Decided — do first:** ~~PR + merge `feature/vscode-tool-compatibility` → `main`~~ Overtaken by events: upstream already merged it (PR #8, rebased) and `main` moved to v0.3.1 — see §2 addendum. Replacement action done instead: cherry-picked the two plan/docs commits onto `docs/layer-plan-landing` (README conflict resolved per Decision #11 — target-state README kept, v0.3.1 README archived as `attic/v0.3-node.README.md`, quick-start updated to the options-object API) → PR → `main`. `phase-0-esm-vitest` branches from that updated `main`.
 - [ ] Ratify decisions: repo home = `mieweb/artipod`, npm name = **`@artipod/core`** (org created 2026-08-30); ESM + subpath exports; vitest replaces jest; exact-pin `just-bash`, `@zenfs/core`, `@zenfs/dom` as peer deps matching artipod-sync's lockfile.
 - [ ] Add the missing `LICENSE` file (MIT, matching package.json), fill `author`; owner publishes the `@artipod/core@0.0.1` placeholder to reserve the name.
 - [ ] Convert `artipod/` build to **pure ESM** with `exports` map (no dual CJS build); migrate jest specs to vitest (mechanical: `jest.fn` → `vi.fn`).
-- [ ] Retire `examples/web-demo` to `attic/` — superseded by the Phase 6 north-star demo (browser demo pod → clone → push/pull to server → snapshot/compact).
-- [ ] CI: vitest on Node; add a browser-ish lane later (Phase 2) via vitest + happy-dom or Playwright.
+- [ ] Retire `examples/web-demo` to `attic/` — superseded by the Phase 6 north-star demo (browser demo pod → clone → push/pull to server → snapshot/compact). `examples/basic` + `examples/mcp-server` stay but must survive the ESM flip (mcp-server: rebuild against the ESM package; basic: ts-node → tsx or node --import).
+- [ ] CI: convert `.github/workflows/nodejs.yml` from jest to vitest (keep lint/build/coverage lanes); leave `publish.yml` pointed at the renamed package but do **not** cut a release until the owner configures trusted publishing for `@artipod/core` (ask-first). Add a browser-ish lane later (Phase 2) via vitest + happy-dom or Playwright.
 
 **Done when:**
 
@@ -235,6 +249,8 @@ Each phase = one reviewable PR series into `mieweb/artipod` (+ a consuming PR in
 **Worklog:**
 
 - 2026-08-30 — handoff baseline (§0 setup, recorded pre-work): artipod `npm test` → Jest, 5 suites / 116 tests green (incl. Docker container tests, Docker running); artipod-sync `npm test` → Vitest, 10 files / 101 tests green.
+- 2026-08-30 — pre-phase reconciliation: found upstream had merged `feature/vscode-tool-compatibility` (PR #8, rebased SHAs) and advanced `main` to v0.3.1 (§2 addendum: podman, ro-mounts, main-mount breaking ctor, `run_in_terminal`, examples/basic+mcp-server, CI+publish workflows). Cherry-picked 7c75e8e + 6353955 onto `docs/layer-plan-landing`; only conflict was README.md, resolved per Decision #11 (target-state kept; v0.3.1 README → `attic/v0.3-node.README.md`; quick-start rewritten for the options-object ctor + podman mention).
+- 2026-08-30 — re-baseline on reconciled branch (= main v0.3.1 + docs): `npm ci && npm test` → jest 5 suites / **161 tests** green, 38.9s (Docker 29.4.0 up; node v22.18.0 / npm 10.9.3; engines ≥18 satisfied).
 
 ### Phase 1 — Make the core isomorphic (fs injection)
 
