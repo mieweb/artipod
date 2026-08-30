@@ -41,7 +41,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 
 | Phase | Branch | Status | PR |
 |---|---|---|---|
-| 0 — repo prep | `phase-0-esm-vitest` | not started | |
+| 0 — repo prep | `phase-0-esm-vitest` | done (owner npm actions pending) | [#33](https://github.com/mieweb/artipod/pull/33), [#34](https://github.com/mieweb/artipod/pull/34) |
 | 1 — fs injection | `phase-1-podfs-injection` | not started | |
 | 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | not started | |
 | 3 — manifest + realizers | `phase-3-manifest-realizers` | not started | |
@@ -233,24 +233,30 @@ Each phase = one reviewable PR series into `mieweb/artipod` (+ a consuming PR in
 > **Branch** `phase-0-esm-vitest` · **Status** _not started_
 
 - [x] **Decided — do first:** ~~PR + merge `feature/vscode-tool-compatibility` → `main`~~ Overtaken by events: upstream already merged it (PR #8, rebased) and `main` moved to v0.3.1 — see §2 addendum. Replacement action done instead: cherry-picked the two plan/docs commits onto `docs/layer-plan-landing` (README conflict resolved per Decision #11 — target-state README kept, v0.3.1 README archived as `attic/v0.3-node.README.md`, quick-start updated to the options-object API) → PR → `main`. `phase-0-esm-vitest` branches from that updated `main`.
-- [ ] Ratify decisions: repo home = `mieweb/artipod`, npm name = **`@artipod/core`** (org created 2026-08-30); ESM + subpath exports; vitest replaces jest; exact-pin `just-bash`, `@zenfs/core`, `@zenfs/dom` as peer deps matching artipod-sync's lockfile.
-- [ ] Add the missing `LICENSE` file (MIT, matching package.json), fill `author`; owner publishes the `@artipod/core@0.0.1` placeholder to reserve the name.
-- [ ] Convert `artipod/` build to **pure ESM** with `exports` map (no dual CJS build); migrate jest specs to vitest (mechanical: `jest.fn` → `vi.fn`).
-- [ ] Retire `examples/web-demo` to `attic/` — superseded by the Phase 6 north-star demo (browser demo pod → clone → push/pull to server → snapshot/compact). `examples/basic` + `examples/mcp-server` stay but must survive the ESM flip (mcp-server: rebuild against the ESM package; basic: ts-node → tsx or node --import).
-- [ ] CI: convert `.github/workflows/nodejs.yml` from jest to vitest (keep lint/build/coverage lanes); leave `publish.yml` pointed at the renamed package but do **not** cut a release until the owner configures trusted publishing for `@artipod/core` (ask-first). Add a browser-ish lane later (Phase 2) via vitest + happy-dom or Playwright.
+- [x] Ratify decisions: repo home = `mieweb/artipod`, npm name = **`@artipod/core`** (org created 2026-08-30); ESM + subpath exports; vitest replaces jest; exact-pin `just-bash` (3.2.0), `@zenfs/core` (2.4.4), `@zenfs/dom` (1.2.5) as peer deps matching artipod-sync's lockfile — added as **optional** peerDependencies (deviation: optional until `/sandbox` code actually consumes them in Phase 2, so plain node consumers aren't forced to install ZenFS).
+- [x] Add the missing `LICENSE` file (MIT, matching package.json), fill `author` (Medical Informatics Engineering, LLC); also added `repository`/`homepage`/`bugs` fields — npm provenance via the existing trusted-publishing workflow requires the repository match.
+- [ ] Owner publishes the `@artipod/core@0.0.1` placeholder to reserve the name (ask-first — flagged to owner; trusted-publishing config for the new name is also owner-side).
+- [x] Convert `artipod/` build to **pure ESM** with `exports` map (no dual CJS build); migrate jest specs to vitest (mechanical: `jest.fn` → `vi.fn`) — in practice zero `jest.*` calls existed; the whole migration was import extensions + config.
+- [x] Retire `examples/web-demo` to `attic/` — superseded by the Phase 6 north-star demo (browser demo pod → clone → push/pull to server → snapshot/compact). `examples/basic` + `examples/mcp-server` stay but must survive the ESM flip (mcp-server: rebuild against the ESM package; basic: ts-node → tsx or node --import).
+- [x] CI: convert `.github/workflows/nodejs.yml` from jest to vitest (keep lint/build/coverage lanes) — conversion is transitive: the workflow invokes `npm test`/`npm run test:coverage`, whose scripts now run vitest; workflow file unchanged. `publish.yml` left pointed at the renamed package; do **not** cut a release until the owner configures trusted publishing for `@artipod/core` (ask-first). Add a browser-ish lane later (Phase 2) via vitest + happy-dom or Playwright.
 
 **Done when:**
 
-- [ ] `npm test` green under vitest/ESM (same suites that passed under jest — no skipped tests without a worklog note)
-- [ ] Built output is ESM with an `exports` map; importing the built package from a scratch `node` ESM script works
-- [ ] `examples/web-demo` moved to `attic/`; README points at the Phase 6 north-star demo
-- [ ] CI runs vitest on push
+- [x] `npm test` green under vitest/ESM (same suites that passed under jest — no skipped tests without a worklog note) — verified: 5 files / **161 tests** passed, 0 skipped (same count as jest baseline)
+- [x] Built output is ESM with an `exports` map; importing the built package from a scratch `node` ESM script works — verified: `/tmp/artipod-esm-smoke` installs the package and imports `@artipod/core` + `/tools` + `/prompts` subpaths
+- [x] `examples/web-demo` moved to `attic/`; README points at the Phase 6 north-star demo — verified: `examples/README.md` web-demo section now points at `attic/web-demo` + the plan's Phase 6 demo
+- [x] CI runs vitest on push — verified: PR #34 checks green on Node 18.x + 20.x (≈2m40s each; nodejs.yml unchanged — its `npm test`/`npm run test:coverage` steps now invoke vitest)
 
 **Worklog:**
 
 - 2026-08-30 — handoff baseline (§0 setup, recorded pre-work): artipod `npm test` → Jest, 5 suites / 116 tests green (incl. Docker container tests, Docker running); artipod-sync `npm test` → Vitest, 10 files / 101 tests green.
 - 2026-08-30 — pre-phase reconciliation: found upstream had merged `feature/vscode-tool-compatibility` (PR #8, rebased SHAs) and advanced `main` to v0.3.1 (§2 addendum: podman, ro-mounts, main-mount breaking ctor, `run_in_terminal`, examples/basic+mcp-server, CI+publish workflows). Cherry-picked 7c75e8e + 6353955 onto `docs/layer-plan-landing`; only conflict was README.md, resolved per Decision #11 (target-state kept; v0.3.1 README → `attic/v0.3-node.README.md`; quick-start rewritten for the options-object ctor + podman mention).
 - 2026-08-30 — re-baseline on reconciled branch (= main v0.3.1 + docs): `npm ci && npm test` → jest 5 suites / **161 tests** green, 38.9s (Docker 29.4.0 up; node v22.18.0 / npm 10.9.3; engines ≥18 satisfied).
+- 2026-08-30 — ESM conversion: `type: module`, tsconfig → `module/moduleResolution NodeNext`, `target ES2022`, `types [node, vitest/globals]`; 55 relative imports given `.js` extensions (54 from the grep sweep + one type-only `import('./artimount')` in types.ts that TS2835 caught); directory imports `./tools`/`./prompts` → explicit `/index.js`. Zero CJS-isms existed in src (no `__dirname`/`require`).
+- 2026-08-30 — package identity: `@artipod/core@0.1.0`, exports map (`.`, `./tools`, `./prompts`, `./package.json`), `repository`/`homepage`/`bugs` added (trusted-publishing provenance needs the repository match), author = Medical Informatics Engineering, LLC, LICENSE (MIT) added. Peers exact-pinned from artipod-sync lockfile: just-bash 3.2.0 / @zenfs/core 2.4.4 / @zenfs/dom 1.2.5, marked optional (see item note).
+- 2026-08-30 — vitest migration: jest.config.js deleted; vitest.config.ts with `globals: true`, node env, v8 coverage (text/lcov/html → `coverage/`). Specs used zero `jest.*` APIs; per-test `120000` timeout third-args carry over 1:1 (vitest hookTimeout default 10s ≥ jest's 5s). Verification: `npm run lint` clean, `npm run build` clean, `npm test` → **161/161** in 36.2s, `npm run test:coverage` → lcov.info 38 KB written.
+- 2026-08-30 — examples: `examples/web-demo` → `attic/web-demo` (`.gitignore` gained attic equivalents of the examples ignores); `examples/mcp-server` reinstalled + rebuilt against the ESM package, `import('artipod')` resolves; `example:basic` script switched ts-node → tsx (runs the full demo incl. a container start — note: first `npx tsx` run prompts interactively to install tsx). CI workflow untouched by design: script names are stable, so nodejs.yml now runs vitest transitively; publish.yml untouched — owner must configure npmjs trusted publishing for `@artipod/core` before any release.
+- 2026-08-30 — phase 0 gate (PR #34, CI green both Node lanes). Deviation, rule 6: gate taken with one box open — the owner-side `@artipod/core@0.0.1` placeholder publish (+ trusted-publishing config). It is an npm-side action that doesn't gate Phase 1 code; flagged to owner in the PR body and directly.
 
 ### Phase 1 — Make the core isomorphic (fs injection)
 

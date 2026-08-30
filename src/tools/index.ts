@@ -6,25 +6,25 @@
  * tool schema to work seamlessly with artipod containers.
  */
 
-import { ArtiMount } from '../artimount';
-import { ToolHandler, ToolName, ToolDefinition, ToolResult } from './types';
-import { createCoreTools } from './coreTools';
-import { createEditTools } from './editTools';
-import { createApplyPatchTool } from './applyPatchTool';
-import { allToolDefinitions } from './definitions';
+import { ArtiMount } from '../artimount.js';
+import { ToolHandler, ToolName, ToolDefinition, ToolResult } from './types.js';
+import { createCoreTools } from './coreTools.js';
+import { createEditTools } from './editTools.js';
+import { createApplyPatchTool } from './applyPatchTool.js';
+import { allToolDefinitions } from './definitions.js';
 
 // Re-export types
-export * from './types';
-export * from './definitions';
+export * from './types.js';
+export * from './definitions.js';
 
 // Re-export individual mount-level tools
-export { ReadFileTool, CreateFileTool, ListDirTool, CreateDirectoryTool } from './coreTools';
-export { ReplaceStringTool, MultiReplaceStringTool, NoMatchError, MultipleMatchError, NoChangeError } from './editTools';
-export { ApplyPatchTool } from './applyPatchTool';
-export * from './applyPatchParser';
+export { ReadFileTool, CreateFileTool, ListDirTool, CreateDirectoryTool } from './coreTools.js';
+export { ReplaceStringTool, MultiReplaceStringTool, NoMatchError, MultipleMatchError, NoChangeError } from './editTools.js';
+export { ApplyPatchTool } from './applyPatchTool.js';
+export * from './applyPatchParser.js';
 
 // Re-export pod-level tools
-export { RunTerminalTool, PodToolRegistry, createPodToolRegistry, createPodTools } from './podTools';
+export { RunTerminalTool, PodToolRegistry, createPodToolRegistry, createPodTools } from './podTools.js';
 
 /**
  * Tool registry for mount-level operations (file reading/editing)

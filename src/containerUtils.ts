@@ -2,7 +2,7 @@ import Docker from 'dockerode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
-import { getDockerClient } from './containerRuntime';
+import { getDockerClient } from './containerRuntime.js';
 
 // Re-export runtime types and functions for convenience
 export { 
@@ -10,12 +10,12 @@ export {
   getCachedRuntimeInfo, 
   clearRuntimeCache,
   isRuntimeAvailable,
-} from './containerRuntime';
+} from './containerRuntime.js';
 export type { 
   ContainerRuntimeInfo, 
   ContainerRuntimeType, 
   ContainerRuntimeMode,
-} from './containerRuntime';
+} from './containerRuntime.js';
 
 /**
  * Handle to a running container instance

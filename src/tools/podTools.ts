@@ -5,16 +5,16 @@
  * on individual ArtiMounts. They provide container command execution capabilities.
  */
 
-import { ArtiPod } from '../artipod';
-import { CommandResult } from '../containerUtils';
+import { ArtiPod } from '../artipod.js';
+import { CommandResult } from '../containerUtils.js';
 import {
   ToolHandler,
   ToolName,
   ToolResult,
   ToolDefinition,
   IRunInTerminalParams,
-} from './types';
-import { runInTerminalDefinition } from './definitions';
+} from './types.js';
+import { runInTerminalDefinition } from './definitions.js';
 
 /**
  * run_in_terminal tool - execute bash commands in container

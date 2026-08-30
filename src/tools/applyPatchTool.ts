@@ -3,14 +3,14 @@
  * Uses the ported parser from vscode-copilot-chat
  */
 
-import { ArtiMount } from '../artimount';
+import { ArtiMount } from '../artimount.js';
 import {
   ToolName,
   ToolHandler,
   EditResult,
   IApplyPatchParams,
-} from './types';
-import { applyPatchDefinition } from './definitions';
+} from './types.js';
+import { applyPatchDefinition } from './definitions.js';
 import {
   processPatch,
   applyCommit,
@@ -19,7 +19,7 @@ import {
   InvalidPatchFormatError,
   InvalidContextError,
   ActionType,
-} from './applyPatchParser';
+} from './applyPatchParser.js';
 
 /**
  * ApplyPatch tool handler

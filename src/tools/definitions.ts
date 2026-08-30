@@ -6,7 +6,7 @@
 import {
   ToolName,
   ToolDefinition,
-} from './types';
+} from './types.js';
 
 /**
  * Maximum lines per read operation (matches vscode-copilot-chat)

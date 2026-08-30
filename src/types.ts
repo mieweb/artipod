@@ -17,7 +17,7 @@ export interface ArtiPodOptions {
   /** If true (default), automatically create a writable 'main' mount */
   useMainMount?: boolean;
   /** Initial mounts to add to the pod */
-  mounts?: import('./artimount').ArtiMount[];
+  mounts?: import('./artimount.js').ArtiMount[];
 }
 
 /**

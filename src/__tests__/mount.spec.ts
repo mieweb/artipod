@@ -1,4 +1,4 @@
-import { ArtiMount } from '../artimount';
+import { ArtiMount } from '../artimount.js';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 

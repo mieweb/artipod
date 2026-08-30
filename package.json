@@ -1,50 +1,90 @@
 {
-  "name": "@mieweb/artipod",
-  "version": "0.3.1",
-  "description": "TypeScript module for managing AI-aware file storage with ArtiPods and ArtiMounts",
+  "name": "@artipod/core",
+  "version": "0.1.0",
+  "description": "A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize — in the browser and on Linux",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "default": "./dist/tools/index.js"
+    },
+    "./prompts": {
+      "types": "./dist/prompts/index.d.ts",
+      "default": "./dist/prompts/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "publishConfig": {
     "access": "public"
   },
   "files": [
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mieweb/artipod.git"
+  },
+  "homepage": "https://github.com/mieweb/artipod#readme",
+  "bugs": {
+    "url": "https://github.com/mieweb/artipod/issues"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build",
-    "example:basic": "npx ts-node examples/basic/basic-pod-usage.ts",
-    "dev": "cd examples/web-demo/backend && npm run dev",
-    "dev:frontend": "cd examples/web-demo/frontend && npm run dev"
+    "example:basic": "npx tsx examples/basic/basic-pod-usage.ts"
   },
   "keywords": [
     "ai",
     "storage",
     "metadata",
     "typescript",
-    "file-management"
+    "file-management",
+    "sandbox",
+    "oci",
+    "agent-tools"
   ],
-  "author": "",
+  "author": "Medical Informatics Engineering, LLC",
   "license": "MIT",
   "devDependencies": {
     "@types/dockerode": "^3.3.47",
-    "@types/jest": "^29.5.11",
     "@types/node": "^20.10.6",
     "@typescript-eslint/eslint-plugin": "^6.17.0",
     "@typescript-eslint/parser": "^6.17.0",
+    "@vitest/coverage-v8": "^3.2.4",
     "eslint": "^8.56.0",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.1.1",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "dockerode": "^4.0.9"
+  },
+  "peerDependencies": {
+    "@zenfs/core": "2.4.4",
+    "@zenfs/dom": "1.2.5",
+    "just-bash": "3.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@zenfs/core": {
+      "optional": true
+    },
+    "@zenfs/dom": {
+      "optional": true
+    },
+    "just-bash": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=18.0.0"

@@ -1,5 +1,5 @@
-import { ArtiPod } from '../artipod';
-import { ArtiMount } from '../artimount';
+import { ArtiPod } from '../artipod.js';
+import { ArtiMount } from '../artimount.js';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 

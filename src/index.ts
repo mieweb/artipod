@@ -1,5 +1,5 @@
-export { ArtiPod } from './artipod';
-export { ArtiMount } from './artimount';
+export { ArtiPod } from './artipod.js';
+export { ArtiMount } from './artimount.js';
 export { 
   findAllContainers, 
   removeContainer,
@@ -7,11 +7,11 @@ export {
   getCachedRuntimeInfo,
   clearRuntimeCache,
   isRuntimeAvailable,
-} from './containerUtils';
+} from './containerUtils.js';
 export type {
   ArtiPodConfig,
   ArtiPodOptions,
-} from './types';
+} from './types.js';
 export type {
   ContainerHandle,
   CommandResult,
@@ -19,10 +19,10 @@ export type {
   ContainerRuntimeInfo,
   ContainerRuntimeType,
   ContainerRuntimeMode,
-} from './containerUtils';
+} from './containerUtils.js';
 
 // Tools - vscode-copilot-chat compatible tool implementations
-export * from './tools';
+export * from './tools/index.js';
 
 // Prompts - vscode-copilot-chat compatible prompt templates
-export * from './prompts';
+export * from './prompts/index.js';
