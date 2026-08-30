@@ -41,6 +41,12 @@ examples/**/node_modules/
 examples/**/dist/
 examples/**/.container-*/
 
+# Retired examples parked in attic
+attic/**/workspace/
+attic/**/node_modules/
+attic/**/dist/
+attic/**/.container-*/
+
 # Misc
 *.log
 .playwright-mcp/

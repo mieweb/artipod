@@ -52,28 +52,9 @@ npm start
 
 See [mcp-server/README.md](./mcp-server/README.md) for VS Code integration setup.
 
-### [web-demo](./web-demo)
+### web-demo (retired)
 
-A full-stack web application with React frontend and Express backend, featuring:
-
-- Visual filesystem management
-- ArtiPod and ArtiMount creation
-- File editing across mounts
-- Docker container execution
-- Interactive bash terminal
-- SQLite persistence
-
-**Quick Start:**
-
-```bash
-cd web-demo
-npm run install:all
-npm run dev
-```
-
-Then open http://localhost:5173
-
-See [web-demo/README.md](./web-demo/README.md) for detailed documentation.
+The former full-stack web demo (React + Express + SQLite) is archived at [`attic/web-demo`](../attic/web-demo/). It is superseded by the Phase 6 north-star demo of the [artipod layer plan](../artipod-layer-plan.md): browser demo pod → clone → push/pull to a server → snapshot/compact.
 
 ## Creating New Examples
 
