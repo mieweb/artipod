@@ -2,7 +2,7 @@
  * Core file tool implementations matching vscode-copilot-chat interfaces
  */
 
-import { ArtiMount } from '../artimount';
+import { ArtiMount } from '../artimount.js';
 import {
   ToolName,
   ToolHandler,
@@ -14,14 +14,14 @@ import {
   IListDirParams,
   ICreateDirectoryParams,
   isReadFileParamsV2,
-} from './types';
+} from './types.js';
 import {
   readFileDefinition,
   createFileDefinition,
   listDirDefinition,
   createDirectoryDefinition,
   MAX_LINES_PER_READ,
-} from './definitions';
+} from './definitions.js';
 
 /**
  * Clamp a number between min and max

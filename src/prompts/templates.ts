@@ -6,7 +6,7 @@
  * prompts for AI agents using the artipod tools.
  */
 
-import { ToolName } from '../tools/types';
+import { ToolName } from '../tools/types.js';
 
 // ============================================================================
 // Marker Constants

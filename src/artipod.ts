@@ -1,4 +1,4 @@
-import { ArtiMount } from './artimount';
+import { ArtiMount } from './artimount.js';
 import {
   ContainerHandle,
   CommandResult,
@@ -7,8 +7,8 @@ import {
   createContainer,
   executeCommandInContainer,
   stopAndRemoveContainer,
-} from './containerUtils';
-import { ArtiPodOptions } from './types';
+} from './containerUtils.js';
+import { ArtiPodOptions } from './types.js';
 import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';

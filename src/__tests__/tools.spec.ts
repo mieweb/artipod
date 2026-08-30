@@ -1,4 +1,4 @@
-import { ArtiMount } from '../artimount';
+import { ArtiMount } from '../artimount.js';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import {
@@ -13,8 +13,8 @@ import {
   PodToolRegistry,
   RunTerminalTool,
   ToolName,
-} from '../tools';
-import { ArtiPod } from '../artipod';
+} from '../tools/index.js';
+import { ArtiPod } from '../artipod.js';
 
 describe('Tools', () => {
   let testDir: string;

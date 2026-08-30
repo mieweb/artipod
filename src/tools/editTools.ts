@@ -2,7 +2,7 @@
  * String replacement tool implementations matching vscode-copilot-chat interfaces
  */
 
-import { ArtiMount } from '../artimount';
+import { ArtiMount } from '../artimount.js';
 import {
   ToolName,
   ToolHandler,
@@ -10,11 +10,11 @@ import {
   MultiEditResult,
   IReplaceStringParams,
   IMultiReplaceStringParams,
-} from './types';
+} from './types.js';
 import {
   replaceStringDefinition,
   multiReplaceStringDefinition,
-} from './definitions';
+} from './definitions.js';
 
 /**
  * Error thrown when oldString is not found in the file
