@@ -13,7 +13,7 @@ This file is the single source of truth for progress. You (the implementer) keep
 
 Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 for the why/what; then work §4 phase by phase. Re-read the §3 subsection relevant to your current phase before starting it.
 
-**Initial scope: Phases 0–6.5.** Phase 7 (live streams) is designed but out of scope until 0–6.5 ship — do not start it without re-planning. The target-state system is documented in `docs/` + `README.md` (status-bannered ✅/🔮); when implementation diverges from a doc, fix the doc in the same PR.
+**Initial scope: Phases 0–6.6.** Phase 7 (live streams) is designed but out of scope until 0–6.6 ship — do not start it without re-planning. The target-state system is documented in `docs/` + `README.md` (status-bannered ✅/🔮); when implementation diverges from a doc, fix the doc in the same PR.
 
 ### Setup
 
@@ -49,6 +49,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 | 5 — snapshots + commit | `phase-5-snapshots` | not started | |
 | 6 — sync + manager | `phase-6-sync-manager` | not started | |
 | 6.5 — encryption & authority | `phase-6.5-authority` | not started | |
+| 6.6 — lazy hydration + site cache | `phase-6.6-hydration` | not started | |
 | 7 — live streams | `phase-7-live-streams` | stretch — out of initial scope | |
 
 ### Reference map
@@ -331,6 +332,7 @@ All inside `@artipod/core/oci`, implemented as ZenFS backends so every consumer 
 - [ ] **Pod superblock** (cleartext, per store): opaque pod ID, cipher suite, key-envelope refs, timestamps — enumeration without keys (docs/encryption.md#at-rest-format).
 - [ ] **Ciphertext blob format** (per-pod opt-in flag, default off until 6.5): chunked AES-256-GCM (~4 MiB, per-chunk nonce+tag, encrypted index), dual digests (plaintext diff ID + ciphertext address), decrypt-on-read chunk store *below* `OciLayerFS`; the CoW upper encrypts per generation under the same envelope.
 - [ ] Tar indexer (`LayerEntry[]` per issue) + decompress-once policy (keep compressed original + uncompressed content-addressed twin). Browser gzip via `DecompressionStream` with `fflate` fallback — just-bash's gzip is Node-only, do not reuse.
+- [ ] **Published layer indexes**: each layer's `LayerEntry[]` index ships as a small digest-addressed artifact beside the manifest (`application/vnd.artipod.layer.index.v1+json`), generated at commit/push — so the complete namespace is knowable with zero layer blobs (the Phase 6.6 hydration substrate). Foreign images without published indexes: a site cache or full pull generates them. `/api/oci` proxy passes `Range` through for byte-offset **resume** of interrupted blob downloads (blobs verify whole — no partial-verification machinery).
 - [ ] `OciLayerFS` — read-only ZenFS backend over one indexed layer (`/mnt/oci/layers/<n>` inspection mounts).
 - [ ] `OciViewFS` — single flattened read-only view over ordered layers with OCI whiteout semantics (`.wh.*`, `.wh..wh..opq`, `--through N`).
 - [ ] `CopyOnWrite` upper on top of the view = the pod workspace (manifest `root.image` + `volume` sources become real).
@@ -419,6 +421,46 @@ All inside `@artipod/core/oci`, implemented as ZenFS backends so every consumer 
 
 - _(empty)_
 
+### Phase 6.6 — Lazy hydration & site cache
+
+> **Branch** `phase-6.6-hydration` · **Status** _not started_ · driving use case: pull one pod per patient on today's schedule — visit notes eager, DICOM on demand, LAN cache making the browser fast
+
+**The OCI layer is the unit of hydration.** A pulled pod materializes at `refs` (manifest only) · `index` (manifest + published layer indexes + eager layers — every file in a lazy layer is a **placeholder**: `ls`/`stat`/tree serve size/metadata from the index, content absent) · `full`. Opening a file hydrates its *winning layer* (OciViewFS resolution), whole blob, digest-verified — no seekable-tar/eStargz/SOCI machinery, ordinary OCI throughout (annotations + one small index artifact per layer). Issue #1's volume separation is the first lever: the patient-record volume (markdown/FHIR) is eager; the imaging volume is lazy.
+
+- [ ] **Layer grouping at commit time** (where the intelligence lives): `artipod commit --layer-group 'dicom/**'` routes heavy paths into dedicated layers — ideally one study/dataset per layer so a click fetches a likely-needed-together unit; descriptor annotation `org.artipod.hydration: lazy|eager` (default by size threshold).
+- [ ] **Pull-time policy** — which layers hydrate up front:
+
+```ts
+interface HydrationPolicy {
+  default: 'eager' | 'lazy';       // falls back to annotation, then size threshold
+  eager?: string[];                // globs — layers containing matching paths hydrate up front
+  maxEagerLayerSize?: number;
+}
+```
+
+- [ ] **Whole-layer fetch, cache-friendly**: hydration downloads the layer blob, verifies its digest, indexes it once, caches it (one OPFS file per blob — a natural fit). Interrupted downloads resume by byte offset (`Range`). If layer granularity later proves too coarse for some workload, seekable formats (eStargz/SOCI/artipod-chunked) slot in behind the same `LazyLayer` abstraction without changing the pod model.
+- [ ] **Read semantics — no grep bombs** (unchanged property): fs reads of dehydrated content fail fast (`EREMOTE`-style) with an `artipod hydrate <path>` hint. Hydration is always an explicit act: UI click (hydrate-then-open), `artipod hydrate|dehydrate <glob>` (operates on the layers backing the glob), or the agent `prefetch` tool.
+- [ ] **Three bandwidth lanes** at the manager (extends 6.5's budgeted sync): **interactive** (on-click hydration, reserved headroom) ≻ **prefetch** (rules + AI hints) ≻ **background** (push/pull); budgets configurable, prefetch yields to interactive.
+- [ ] **AI prefetch**: `prefetch(paths|globs, priority)` becomes a pod-confined agent tool — paths resolve to their backing layers, which warm inside the prefetch budget ("orders mention chest CT → prefetch that study's layer"). No approval needed: in-pod, bandwidth-bounded, audit-visible.
+- [ ] **Site cache manager (Linux)**: a delegated manager as LAN pull-through cache — digest-keyed, verify-on-receipt, **blind (ciphertext) for encrypted pods** so PHI never sits plaintext on the cache box; browser transports try site cache → WAN fallback; an overnight job pre-pulls the schedule's pods.
+- [ ] Surface: hydration state in `/proc/hydration` + tree badges; `fetch:start|progress|done` on `pod.events`.
+
+**Done when:**
+
+- [ ] `index`-level pull transfers only manifests + index artifacts (byte counters); the full namespace lists/stats correctly at near-zero storage cost
+- [ ] Opening a placeholder fetches exactly one layer blob (transfer counters), digest verifies, content opens; the same open while offline errors clearly with the hydrate hint
+- [ ] `grep -r` across a dehydrated tree triggers zero fetches (test)
+- [ ] `artipod commit --layer-group 'dicom/**'` produces a dedicated layer with the `org.artipod.hydration: lazy` annotation (manifest inspection)
+- [ ] Interactive hydration preempts a running prefetch (throughput assertion)
+- [ ] Agent `prefetch` tool warms a glob's backing layers within budget, visible in `/proc/hydration`
+- [ ] Second browser on the LAN pulls the same pod with zero WAN blob fetches (site-cache counters); the cache holds only ciphertext for an encrypted pod
+- [ ] `dehydrate` evicts layer blobs but keeps indexes/placeholders; re-hydration round-trips
+- [ ] A foreign image without published indexes degrades gracefully (documented: index-level pull unavailable → full pull, or site cache generates indexes)
+
+**Worklog:**
+
+- _(empty)_
+
 ### Phase 7 — Live object streams (multiparty, event-driven)
 
 > **Branch** `phase-7-live-streams` · **Status** _stretch — out of initial scope (re-plan before starting)_
@@ -479,6 +521,8 @@ await rec.stop(); // seals: digest → OCI blob → entry in the next snapshot
 | WebRTC NAT/firewall failures for P2P streams (Phase 7) | multiparty falls apart | same chunk protocol over manager relay (WebSocket/SSE) as automatic fallback |
 | Encryption complexity stalls core phases | 4–6 slip | formats land in Phase 4 behind a per-pod opt-in flag (default off); keyring/authority isolated in 6.5; core phases never block on crypto |
 | Approval fatigue → rubber-stamped sudo | policy erosion | banned classes never prompt; capabilities scoped + TTL'd; audit stream reviewed; approver role is policy-granted, not default |
+| Implicit hydration storms (`grep -r` over placeholders) | bandwidth bombs, surprise costs | dehydrated reads fail fast with a hint — hydration only via click/command/prefetch tool; pinned by a zero-fetch test |
+| Layer grouping too coarse (one click pulls an oversized layer) | slow first-open, wasted bandwidth | commit-time `--layer-group` guidance (study/dataset per layer) + size warnings at commit; seekable formats later behind `LazyLayer` if it truly hurts |
 
 ## 6. Decisions (all resolved 2026-08-30)
 
@@ -490,6 +534,7 @@ await rec.stop(); // seals: digest → OCI blob → entry in the next snapshot
 6. **Server persistence: the manager decides.** `PodStore` interface with shipped implementations (ZenFS-on-disk, OCI layout dir, remote registry); sync is manager-driven anti-entropy of blobs/refs (convergent, CRDT-style, in any topology). Branch merges stay explicit in v1; Yjs-style live CRDTs remain an in-file concern. The hosted artipod-sync manager ships on the **OCI image-layout directory** store.
 7. **npm scope: `@artipod/*`** (org created on npmjs 2026-08-30). Primary package `@artipod/core` (mirrors `@zenfs/core`), published from the `mieweb/artipod` repo; placeholder `0.0.1` reserved immediately, first real release `0.1.0` at the Phase 0 gate. `@artipod/oci-9p` / `@artipod/container2wasm` become siblings when they materialize. The `@artipod/sandbox-web` working name from just-bash-plan is retired.
 8. **No AI in tests.** Suites cover the tool/loop *surface area* only: schemas, fs effects, truncation, loop plumbing against scripted fakes. No live model calls, no model downloads, no network; the ONNX `local/` suite stays fully mocked. No default AI endpoint ships — endpoints remain user-configured in the panel.
-9. **Scope**: the implementer (horner) executes Phases 0–6.5; Phase 7 is designed but requires re-planning before starting. `feature/vscode-tool-compatibility` merges to `main` before Phase 0 branches.
+9. **Scope**: the implementer (horner) executes Phases 0–6.6; Phase 7 is designed but requires re-planning before starting. `feature/vscode-tool-compatibility` merges to `main` before Phase 0 branches.
 10. **Agent confinement + sudo policy chain.** The agent is confined to its pod by the tool layer (a real, enforceable boundary — agents act only through tools). `sudo` is the sole escape: agents can never self-approve; a human approval counts only if signed admin policy grants that user the approver role; policy-banned classes fail EPERM without prompting; approvals mint scoped, TTL'd capabilities; all of it audited into pod provenance. Offline access = signed grants; site authority = delegation certificates (rig/interplanetary/relay profiles). Normative: docs/security-model.md + docs/encryption.md.
 11. **Docs are authored ahead as the target-state spec** (`README.md` + `docs/{browser,linux,bash-isolate,encryption,security-model,console}.md`), status-bannered ✅/🔮; a PR that diverges from a doc fixes the doc. The v0.1 Node-only README is archived at `attic/v0.1-node.README.md`. The Ctrl+~ console ships as `@artipod/core/console` (Phase 2).
+12. **Lazy hydration: the OCI layer is the unit.** Layer indexes ship as small artifacts beside the manifest, so the whole namespace is visible with zero layer blobs; opening a file hydrates its winning layer — whole blob, digest-verified. Heavy data is grouped into dedicated lazy-annotated layers at commit time (`--layer-group`, ideally one study/dataset per layer); notes/FHIR live in eager layers. Plain-OCI compatible (annotations + index artifacts only) — no eStargz/SOCI-style random-access machinery; seekable formats can slot behind the same `LazyLayer` abstraction later if layer granularity proves too coarse. Dehydrated reads fail fast with a hydrate hint — never implicit bulk fetching. Site caches: delegated managers, digest-keyed pull-through, blind for encrypted pods. Lanes: interactive ≻ prefetch (incl. the agent tool) ≻ background.

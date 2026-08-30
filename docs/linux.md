@@ -40,6 +40,7 @@ A long-running manager process (initially inside the artipod-sync Next server, l
 - serves sync: anti-entropy blob/ref exchange, `/api/oci` registry proxy (allowlist injected at init, default deny-all)
 - is an **authority**: issues leases, validates offline grants, holds/receives delegation certs, enforces signed admin policy ([security-model.md](security-model.md))
 - can itself be delegated (ship/station/site managers) and can relay blind (ciphertext cache) for scopes it holds no keys for ([encryption.md](encryption.md#offline-use-cases))
+- acts as a **site pull-through cache** (Phase 6.6): digest-keyed, verify-on-receipt, `Range`-capable; blind (ciphertext-only) for encrypted pods so PHI never sits plaintext on the cache box; an overnight job pre-pulls the schedule's pods so browsers hydrate over LAN ([browser.md](browser.md#lazy-hydration--phase-66))
 
 ## Deployment
 

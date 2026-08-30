@@ -30,6 +30,16 @@ OCI blobs (ciphertext at rest once 6.5 lands)
 
 Snapshots are references (manifest + upper generation), so agent-turn auto-checkpointing is cheap and captures *everything*, including shell side effects — unlike editor-level checkpoint systems that shadow-copy only tool-edited files.
 
+## Lazy hydration 🔮 (Phase 6.6)
+
+**The OCI layer is the unit of hydration.** Pods materialize at `refs` · `index` · `full`. At `index`, the pull transfers only the manifest plus small published layer-index artifacts — the *complete* namespace lists and stats from the indexes, while every file in a lazy layer is a placeholder. Opening a file downloads its winning layer's whole blob (digest-verified, cached as one OPFS file), then serves from cache. Driving case: one pod per patient on today's schedule — notes/FHIR in eager layers, each DICOM study grouped into its own lazy layer at commit time (`artipod commit --layer-group 'dicom/**'`, annotation `org.artipod.hydration: lazy`).
+
+- Plain OCI throughout: annotations + one small index artifact per layer — no seekable-tar/eStargz/SOCI machinery. If layer granularity ever proves too coarse, seekable formats slot in behind the same `LazyLayer` abstraction without changing the pod model.
+- **Hydration is always explicit**: UI click (hydrate-then-open), `artipod hydrate|dehydrate <glob>` (operates on backing layers), or the agent `prefetch` tool. Reads of dehydrated content fail fast with a hydrate hint — `grep -r` can never trigger a bandwidth storm.
+- Three bandwidth lanes: interactive (reserved headroom) ≻ prefetch (rules + AI hints, e.g. "orders mention chest CT → prefetch that study's layer") ≻ background sync. Interrupted downloads resume by byte offset.
+- `dehydrate` evicts layer blobs under storage pressure but keeps indexes/placeholders; state in `/proc/hydration`, progress on `pod.events`.
+- On a LAN with a [site cache manager](linux.md#the-server-manager-), blob fetches hit the local cache first and fall back to WAN.
+
 ## Ingest API 🔮 (Phase 7)
 
 Files and media enter the pod programmatically; everything funnels into one `ObjectStream` machine (append → replicate → seal → OCI blob):
