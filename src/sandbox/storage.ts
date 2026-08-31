@@ -9,6 +9,8 @@
  * OPFS is opt-in via the settings UI, persisted in localStorage.
  */
 
+import type { ZenFsLike } from './types.js';
+
 export type StorageBackend = 'opfs' | 'indexeddb' | 'memory';
 
 type MountConfig =
@@ -181,6 +183,13 @@ export interface InitResult {
   backend: StorageBackend;
   /** False when another tab already owns the filesystem. Advisory: writes are not blocked. */
   isPrimaryTab: boolean;
+  /**
+   * The node-like fs this init configured. Consumers MUST adopt this instance
+   * instead of importing '@zenfs/core' themselves — under file:/link installs
+   * the package resolves its own @zenfs/core copy, and two singletons means
+   * two disjoint filesystems.
+   */
+  zfs: ZenFsLike;
 }
 
 let releaseLock: (() => void) | null = null;
@@ -227,7 +236,7 @@ export async function initFileSystem(pref?: StorageBackend): Promise<InitResult>
   if (!(await fs.promises.exists('/repo'))) {
     await fs.promises.mkdir('/repo');
   }
-  return { backend, isPrimaryTab };
+  return { backend, isPrimaryTab, zfs: fs };
 }
 
 /**
