@@ -47,7 +47,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 | 3 — manifest + realizers | `phase-3-manifest-realizers` | done | mieweb/artipod#39, [horner/artipod-sync#3](https://github.com/horner/artipod-sync/pull/3) |
 | 4 — OCI store | `phase-4-oci-store` | done | mieweb/artipod#40, [horner/artipod-sync#4](https://github.com/horner/artipod-sync/pull/4) |
 | 5 — snapshots + commit | `phase-5-snapshots` | done | mieweb/artipod#41, [horner/artipod-sync#5](https://github.com/horner/artipod-sync/pull/5) |
-| 6 — sync + manager | `phase-6-sync-manager` | not started | |
+| 6 — sync + manager | `phase-6-sync-manager` | done | mieweb/artipod#42, horner/artipod-sync#6 |
 | 6.5 — encryption & authority | `phase-6.5-authority` | not started | |
 | 6.6 — lazy hydration + site cache | `phase-6.6-hydration` | not started | |
 | 7 — live streams | `phase-7-live-streams` | stretch — out of initial scope | |
@@ -412,26 +412,33 @@ All inside `@artipod/core/oci`, implemented as ZenFS backends so every consumer 
 
 ### Phase 6 — Browser ↔ server synchronization
 
-> **Branch** `phase-6-sync-manager` · **Status** _not started_ · includes a consuming PR in `horner/artipod-sync`
+> **Branch** `phase-6-sync-manager` · **Status** _done_ (mieweb/artipod#42 · consuming PR horner/artipod-sync#6)
 
-- [ ] `artipod clone|push|pull <ref>` — clone materializes a ref as a new local pod (browser or server); push/pull exchange volume/image manifests + missing blobs by digest through a transport (registry or `/api/oci` proxy). Digest-addressed blobs make resumable, dedup'd sync trivial (only missing digests move).
-- [ ] `/manager` + `PodStore`: a **pod manager** is whatever hosts pods (the artipod-sync server, a future daemon, the browser tab itself). Each manager configures durability via the `PodStore` interface — shipped impls: ZenFS-on-disk, plain dir with OCI image layout, remote registry — and decides how/when it communicates changes. The hosted artipod-sync manager uses the **OCI image-layout directory** store first (Decision #6: inspectable with skopeo/crane, trivial to back up/import). The generic pod/session hosting from `lib/server/exec-sessions.ts` graduates here; HTTP wiring, auth, and rate-limit policy stay in the app.
-- [ ] Sync semantics: anti-entropy exchange of digest-addressed blobs + refs. The blob set is add-only and content-addressed — a convergent replicated set — so managers can sync in any order/direction and converge (the "all artipods sync up" CRDT idea, applied at the distribution layer). Divergent writable uppers are **branches** resolved by explicit merge/checkout (no auto-merge in v1); live per-document co-editing CRDTs (Yjs, kerebron-style) are a complementary *in-file* mechanism, orthogonal to layer sync.
-- [ ] Server pod: `/api/exec` sessions get manifest-driven pods (Phase 3) instead of a bare `/`; a synced ref materializes the same workspace server-side.
-- [ ] Round-trip flow (replaces wtf.md's git-remote sketch as the *pod* sync mechanism): browser `commit` → `push` → server `pull` + heavy execution (docker backend, real tools) → server `commit` → browser `pull` → new layer appears as a snapshot branch. Append-only provenance for AI outputs, exactly as `plan-artipodSync.prompt.md` wanted — but with OCI instead of a bespoke CAS.
-- [ ] Defer (explicitly out of scope for v1, tracked in issue #1 comments): eStargz lazy pull, chunked layers, 9P/container2wasm. (Encryption/envelopes moved into scope as Phase 6.5; `ArtipodPeerTransport` returns in Phase 7 as the P2P leg of live streams.)
+- [x] `artipod clone|push|pull <ref>` — clone materializes a ref as a new local pod (browser or server); push/pull exchange volume/image manifests + missing blobs by digest through a transport (registry or `/api/oci` proxy). Digest-addressed blobs make resumable, dedup'd sync trivial (only missing digests move). _Deviation (rule 6): `clone` materializes into a directory tree inside the current pod's fs (`/clones/<name>`) rather than spawning a separate pod — one pod per store today; multi-pod stores arrive with 6.5/6.6 managers. push/pull run against `sync.remote` (a `PodStore`), not raw transports; `pull` reuses the one verify-everything `pullImage` path via `storeTransport`._
+- [x] `/manager` + `PodStore`: a **pod manager** is whatever hosts pods (the artipod-sync server, a future daemon, the browser tab itself). Each manager configures durability via the `PodStore` interface — shipped impls: ZenFS-on-disk (`ZenFsPodStore` = `OciStore`), plain dir with OCI image layout (`OciLayoutPodStore`), HTTP client (`HttpPodStore`). The hosted artipod-sync manager uses the **OCI image-layout directory** store first (Decision #6: verified skopeo/crane-shaped on disk — `oci-layout`, annotated `index.json`, `blobs/sha256/`). The generic pod/session hosting from `lib/server/exec-sessions.ts` graduated as `PodSessionHost`; HTTP wiring, auth, and rate-limit numbers stayed in the app (its 11 tests unchanged). _Deviation (rule 6): the remote-**registry** PodStore impl is deferred — registry PULL already exists via `DirectRegistryTransport`/proxy, and push-to-registry has no consumer until a hosted registry appears._
+- [x] Sync semantics: anti-entropy exchange of digest-addressed blobs + refs (`syncRef`/`syncAllRefs` — only missing digests move, any order/direction, idempotent convergence; verified both directions in `manager.test.ts` and live: `3 blobs moved` → `0 moved, 3 already there`). Divergent writable uppers are **branches** resolved by explicit merge/checkout (no auto-merge in v1); live per-document co-editing CRDTs stay orthogonal.
+- [x] Server pod: `/api/exec` sessions run on `PodSessionHost` (manifest-driven chroot pods over one shared ZenFS store); a synced ref materializes the same workspace server-side via `materializeImage` (north-star stage 3).
+- [x] Round-trip flow (replaces wtf.md's git-remote sketch as the *pod* sync mechanism): browser `commit` → `push` → server `pull` + heavy execution (docker backend, real tools) → server `commit` → browser `pull` → new layer appears read-only next to the workspace. Scripted end-to-end in `src/__tests__/northStar.spec.ts`.
+- [x] Defer (explicitly out of scope for v1, tracked in issue #1 comments): eStargz lazy pull, chunked layers, 9P/container2wasm. (Encryption/envelopes moved into scope as Phase 6.5; `ArtipodPeerTransport` returns in Phase 7 as the P2P leg of live streams.)
 
 **Done when — the north-star demo (the `examples/web-demo` replacement), each step scripted or recorded:**
 
-- [ ] Browser creates a demo pod → edits offline → `artipod snapshot create`
-- [ ] `artipod clone` into a second local pod
-- [ ] Reconnect → `push`; server manager `pull`s and runs a containerized job (docker realizer) over the same content
-- [ ] Server `commit`s a derived layer → browser `pull`s it and mounts it read-only next to the workspace
-- [ ] `artipod compact` squashes the browser pod's history
+- [x] Browser creates a demo pod → edits offline → `artipod snapshot create` (northStar.spec.ts stage 1)
+- [x] `artipod clone` into a second local pod (stage 2: `/clones/notes` — writable, edits don't leak back)
+- [x] Reconnect → `push`; server manager `pull`s and runs a containerized job (docker realizer) over the same content (stages 2–3: push counters `3 moved/0 skipped` then `0/3`; server `wc -w` in a real container → `3`)
+- [x] Server `commit`s a derived layer → browser `pull`s it and mounts it read-only next to the workspace (stages 4–5: `field/notes:derived`, EROFS on write, live tree untouched)
+- [x] `artipod compact` squashes the browser pod's history (stage 6: one snapshot, origin `compact`)
+
+Also verified live against the running app (dev server :3500): terminal `commit → push → re-push` with the expected counters, `.artipod-store/` OCI layout on disk, `GET /api/pods/refs`, `refs?name=`, blob fetch and 404 paths via curl.
 
 **Worklog:**
 
-- _(empty)_
+- `/manager` module: `pod-store.ts` (`PodStore`, `ZenFsPodStore`, `OciLayoutPodStore`), `sync.ts` (`walkImageDigests`, `syncRef`/`syncAllRefs`, `storeTransport`, `materializeImage`), `http-store.ts` (`HttpPodStore` — HEAD/GET/PUT `blobs/<digest>`, GET/PUT `refs`, digests verified client-side), `session-host.ts` (`PodSessionHost` + `SESSION_ID_PATTERN`). Exported as `@artipod/core/manager`.
+- `oci/command.ts` gained `push`/`pull`/`clone` verbs + `remote` context; `createZenFsPod` gained `sync: { remote }`. `pullImage` now skips layers whose blobs are already present (the anti-entropy property applied to registry pulls too).
+- `PodSessionHost.exec` returns `cwd` and the host grew `reset()` so artipod-sync's `exec-sessions.ts` could become a pure policy wrapper (TTL 15 min / 50 sessions / 30 s / 256 MiB stay app-side; its 11 tests pass unchanged).
+- North-star demo: `src/__tests__/northStar.spec.ts`, 6 stages green including the real docker job (chmod 777 tempdir, 120 s timeout, seccomp profile — same rig as containerExecution).
+- Package totals: 25 test files / 355 tests green, lint 0, build clean.
+- App half (horner/artipod-sync#6): `/api/pods/[...path]` route over `OciLayoutPodStore` at `ARTIPOD_STORE_DIR` (default `.artipod-store`, gitignored); `page.tsx` wires `sync.remote = new HttpPodStore('/api/pods')`; `.npmrc install-links=true` — the file: **symlink** made Next bundle the package's own `@zenfs/core` copy (`tf is not a constructor` at page-data collection); with a copied install everything resolves to the app's single zenfs and `serverComponentsExternalPackages` works; `fflate` added explicitly (no longer resolves through the symlink).
 
 ### Phase 6.5 — Encryption & authority
 
