@@ -34,6 +34,8 @@ import { registerPodManifestProvider } from '../proc/pod-provider.js';
 import { OciStore } from '../oci/store.js';
 import { makeArtipodCommand } from '../oci/command.js';
 import type { OciTransport } from '../oci/transport.js';
+import { SnapshotManager } from '../oci/snapshot.js';
+import type { ToolCallingLoopOptions } from '../agent/types.js';
 
 export interface RealizedZenFsMount {
   name: string;
@@ -156,6 +158,14 @@ export interface ZenFsPod {
   readonly mountTable: ReadonlyArray<RealizedZenFsMount>;
   /** The pod's OCI blob store (initialized on first use). */
   readonly oci: { store: OciStore; transport?: OciTransport };
+  /** Pod revision control: snapshots, checkout, commit, compact, gc. */
+  readonly snapshots: SnapshotManager;
+  /**
+   * Loop options implementing the default-ON agent auto-snapshot (plan
+   * Decision #5): a diff snapshot lands before every tool-executing turn;
+   * pass `{ autoSnapshot: false }` to opt out. Spread into loop.run options.
+   */
+  agentLoopOptions(opts?: { autoSnapshot?: boolean }): Pick<ToolCallingLoopOptions, 'beforeToolTurn'>;
   /** just-bash session over the realized fs, pod commands + /proc registered. */
   createSandbox(): Sandbox;
   /** VS Code-schema file tools resolved over the pod's mount table. */
@@ -193,6 +203,11 @@ export async function createZenFsPod(
   const ociStore = new OciStore(zfs);
   await ociStore.init();
   const oci = { store: ociStore, transport: options.oci?.transport };
+  const snapshots = new SnapshotManager({
+    zfs,
+    store: ociStore,
+    roots: mountTable.filter((e) => !e.readonly).map((e) => e.path),
+  });
 
   const podFs = zfs.promises as unknown as PodFs;
   const resolver = () =>
@@ -208,8 +223,15 @@ export async function createZenFsPod(
     zfs,
     events,
     mountTable,
-    oci,
-    createSandbox() {
+    oci,    snapshots,
+    agentLoopOptions(opts?: { autoSnapshot?: boolean }) {
+      if (opts?.autoSnapshot === false) return {};
+      return {
+        beforeToolTurn: async () => {
+          await snapshots.create({ origin: 'agent-turn', skipIfClean: true });
+        },
+      };
+    },    createSandbox() {
       return createSandbox({
         zfs,
         events,
@@ -217,7 +239,7 @@ export async function createZenFsPod(
         cwd: defaultCwd,
         onEdit: options.onEdit,
         extraCommands: [
-          makeArtipodCommand({ store: ociStore, zfs, transport: options.oci?.transport, events }),
+          makeArtipodCommand({ store: ociStore, zfs, transport: options.oci?.transport, events, snapshots }),
           ...(options.extraCommands ?? []),
         ],
         hooks: options.hooks,

@@ -124,6 +124,8 @@ export interface ToolCallingLoopOptions {
   onAssistantMessage?: (content: string) => void;
   onToolCall?: (toolCall: ToolCall) => void;
   onToolResult?: (toolCall: ToolCall, result: ToolResult) => void;
+  /** Called once per tool-executing iteration, before the calls run. */
+  beforeToolTurn?: (iteration: number) => void | Promise<void>;
 }
 
 export interface ToolCallingLoopResult {

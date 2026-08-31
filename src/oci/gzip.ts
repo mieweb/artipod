@@ -22,3 +22,13 @@ export async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
 export function isGzip(bytes: Uint8Array): boolean {
   return bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
 }
+
+/** Gzip for commit layers (CompressionStream everywhere we run). */
+export async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
+  if (typeof globalThis.CompressionStream === 'function') {
+    const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new CompressionStream('gzip'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  const { gzipSync } = await import('fflate');
+  return gzipSync(bytes);
+}
