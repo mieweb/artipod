@@ -18,7 +18,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 ### Setup
 
 - Sibling checkouts expected next to this repo: `../artipod-sync` (you will edit it in Phases 2–7), `../just-bash`, `../ozwell-artipod`, `../ui` (read-only references — **never edit `../just-bash`**, it is upstream).
-- Node 20 LTS (`engines` requires ≥18). Docker running locally from Phase 3 on. npm publish access to the `artipod` org is needed only at first publish (ask first).
+- Node 20 LTS baseline (`engines` requires ≥20 since Phase 1 — ZenFS needs the stable `globalThis.crypto`, absent on EOL Node 18). Docker running locally from Phase 3 on. npm publish access to the `artipod` org is needed only at first publish (ask first).
 - Baseline before touching anything: `npm ci && npm test` here **and** in `../artipod-sync` — record both results in the Phase 0 worklog.
 
 ### Working rules
@@ -284,6 +284,7 @@ The one structural refactor everything else depends on. `ArtiMount` already uses
 - 2026-08-30 — security fix en route: ArtiMount traversal guard was prefix-sloppy (`resolved.startsWith(rootPath)` admits `/rootX`); now boundary-exact with a pinned contract test on both backends.
 - 2026-08-30 — tools.spec updated: PodToolRegistry now always carries `bash` alongside `run_in_terminal` (2 tools); zero other spec changes beyond import extensions/adapters.
 - 2026-08-30 — verification: `tsc --noEmit` clean; lint clean; vitest **197/197** (was 161 — +36 contract/truncation/serializer/resolver tests); build clean.
+- 2026-08-30 — post-merge CI fix (`fix/node-20-baseline`, PR #36): PR #35's CI failed only on the **Node 18** lane — `@zenfs/core` polyfills read `globalThis.crypto.randomUUID` at import, which EOL Node 18 lacks; Node 20's tests passed (its job died on fail-fast cancellation of the coverage step). Matrix now 20.x + 22.x, `engines` ≥20. Process note: PR #35 was merged while checks were red because a `| tail` pipe swallowed the checks-watch exit code — don't pipe `gh pr checks --watch`; merge gates on its raw exit from now on.
 
 ### Phase 2 — Move sandbox, agent, proc into `@artipod/core` (executes just-bash-plan Phase 6)
 
