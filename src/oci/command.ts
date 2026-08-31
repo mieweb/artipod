@@ -18,7 +18,7 @@ import type { OciStore } from './store.js';
 import type { OciTransport } from './transport.js';
 import { parseImageRef, formatImageRef } from './transport.js';
 import { pullImage, loadImageLayers, type ImageManifest } from './pull.js';
-import { mountOciView } from './view.js';
+import { mountOciView, mergeLayerEntries } from './view.js';
 import { isDigest, type Digest } from './digest.js';
 import type { SnapshotManager } from './snapshot.js';
 import type { PodStore } from '../manager/pod-store.js';
@@ -80,6 +80,8 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   image pull <ref> --index             index-level pull: metadata + placeholders only
   hydrate <ref> <path|glob>            fetch the lazy layers backing matching paths
   dehydrate <ref> <glob>               evict layer blobs; placeholders + indexes stay
+  open <ref> [path]                    writable overlay on a lazy basis (pulls index if needed)
+  files [<ref>]                        per-file local/remote hydration state
 `;
 
 function sanitizeRefForPath(ref: string): string {
@@ -235,6 +237,44 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
       if (group === 'gc' && snapshots) {
         const result = await snapshots.gc();
         return ok(`gc: deleted ${result.deleted} objects, reclaimed ${result.reclaimedBytes} bytes\n`);
+      }
+
+      if (group === 'open') {
+        if (!hydrator) return fail('artipod: no hydrator configured for this pod (set hydration in pod options)');
+        if (!sub) return fail('usage: artipod open <ref> [path]');
+        let state = await hydrator.stateFor(sub);
+        let pulled = '';
+        if (!state) {
+          const result = await hydrator.pullIndex(sub);
+          state = result.state;
+          pulled = `index-level pull of ${sub}: ${result.transferredBytes} bytes moved\n`;
+        }
+        const at = rest.find((a) => a.startsWith('/')) ?? `/open/${sanitizeRefForPath(sub)}`;
+        await hydrator.openOverlay(sub, at);
+        events?.emit('fs:changed', { origin: 'exec' });
+        const remote = (await hydrator.dehydratedPaths(sub)).length;
+        return ok(`${pulled}opened ${sub} at ${at} — writable overlay on a lazy basis (${remote} file(s) still remote)\ncd ${at}\n`);
+      }
+
+      if (group === 'files') {
+        if (!hydrator) return fail('artipod: no hydrator configured for this pod (set hydration in pod options)');
+        const refArg = sub ?? (hydrator.overlays.size === 1 ? [...hydrator.overlays.keys()][0] : undefined);
+        if (!refArg) return fail('usage: artipod files <ref>   (ref optional with exactly one open overlay)');
+        const { layers, state } = await hydrator.loadView(refArg);
+        const merged = mergeLayerEntries(layers);
+        const rows = [...merged.entries.entries()]
+          .filter(([, e]) => e.type !== 'dir')
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([path, e]) => [
+            state.layers[e.layer]?.state === 'placeholder' ? 'remote' : 'local',
+            String(e.size),
+            path,
+          ]);
+        const capped = rows.slice(0, 500);
+        return ok(
+          renderTable(['STATE', 'SIZE', 'PATH'], capped) +
+            (rows.length > capped.length ? `\n…and ${rows.length - capped.length} more\n` : '\n'),
+        );
       }
 
       if (group === 'hydrate') {

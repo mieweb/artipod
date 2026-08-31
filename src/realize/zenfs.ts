@@ -156,7 +156,15 @@ export interface ZenFsPodOptions
   /** OCI layer: transport for `artipod image pull` (store always available). */
   oci?: { transport?: OciTransport };
   /** Manager sync: the remote PodStore push/pull/clone talk to. */
-  sync?: { remote?: import('../manager/pod-store.js').PodStore };
+  sync?: {
+    remote?: import('../manager/pod-store.js').PodStore;
+    /**
+     * Open this published ref as the workspace basis at boot (sync plan
+     * Phase D): index pull if needed → lazy view → writable CoW overlay at
+     * `at` (default /open/<ref-slug>); default cwd moves there.
+     */
+    basis?: { ref: string; at?: string };
+  };
   /**
    * Phase 6.5 (docs/encryption.md + docs/security-model.md): encrypt the
    * pod's store with keyring custody and wire login/lock + the sudo
@@ -183,6 +191,8 @@ export interface ZenFsPodOptions
     policy?: HydrationPolicy;
     /** Default image ref for the agent's prefetch tool. */
     defaultRef?: string;
+    /** Dehydrated READ behavior: 'fail' (default, zero-fetch pinned) or 'fetch' (sync plan D6). */
+    onDemand?: 'fail' | 'fetch';
   };
 }
 
@@ -203,6 +213,8 @@ export interface ZenFsPod {
   readonly approvals?: ApprovalBroker;
   /** Present when `hydration` is configured (Phase 6.6). */
   readonly hydrator?: Hydrator;
+  /** Present when `sync.basis` opened at boot (sync plan Phase D). */
+  readonly basis?: { ref: string; at: string };
   /**
    * Loop options implementing the default-ON agent auto-snapshot (plan
    * Decision #5): a diff snapshot lands before every tool-executing turn;
@@ -241,7 +253,7 @@ export async function createZenFsPod(
   }
 
   const disposeProc = proc ? registerPodManifestProvider(m) : null;
-  const defaultCwd = options.cwd ?? mountTable[0]?.path ?? '/';
+  let defaultCwd = options.cwd ?? mountTable[0]?.path ?? '/';
 
   const ociStore = new OciStore(zfs);
   await ociStore.init();
@@ -280,7 +292,15 @@ export async function createZenFsPod(
 
   // Phase 6.6: lazy hydration.
   const hydrator = options.hydration
-    ? new Hydrator({ store: ociStore, zfs, remote: options.sync?.remote, transport: options.oci?.transport, events, policy: options.hydration.policy })
+    ? new Hydrator({
+        store: ociStore,
+        zfs,
+        remote: options.sync?.remote,
+        transport: options.oci?.transport,
+        events,
+        policy: options.hydration.policy,
+        onDemand: options.hydration.onDemand,
+      })
     : undefined;
   let disposeHydrationProc: (() => void) | null = null;
   if (proc && hydrator) {
@@ -288,6 +308,22 @@ export async function createZenFsPod(
       disposeHydrationProc = registerProcProvider(hydrator.procProvider());
     } catch {
       // already projected by another live pod
+    }
+  }
+
+  // Sync plan Phase D: open the published basis as the workspace.
+  let basis: { ref: string; at: string } | undefined;
+  if (options.sync?.basis && hydrator) {
+    const { ref } = options.sync.basis;
+    const at = options.sync.basis.at ?? `/open/${ref.replace(/[^a-zA-Z0-9._-]+/g, '_')}`;
+    try {
+      if (!(await hydrator.stateFor(ref))) await hydrator.pullIndex(ref);
+      await hydrator.openOverlay(ref, at);
+      basis = { ref, at };
+      if (!options.cwd) defaultCwd = at;
+    } catch (e) {
+      // the pod still boots offline — the basis can be opened later via the verb
+      console.warn(`artipod: basis '${ref}' not opened — ${(e as Error).message}`);
     }
   }
 
@@ -311,6 +347,7 @@ export async function createZenFsPod(
     audit,
     approvals,
     hydrator,
+    basis,
     agentLoopOptions(opts?: { autoSnapshot?: boolean }) {
       if (opts?.autoSnapshot === false) return {};
       return {
