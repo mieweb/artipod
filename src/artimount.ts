@@ -1,4 +1,4 @@
-import * as path from 'path';
+import { resolvePosix, dirnamePosix, joinPosix, relativePosix } from './pathUtils.js';
 import type { PodFs } from './podfs.js';
 import { nodePodFs } from './nodePodFs.js';
 
@@ -20,7 +20,7 @@ export class ArtiMount {
    */
   constructor(name: string, rootPath: string, readonly: boolean = false, podFs?: PodFs) {
     this.name = name;
-    this.rootPath = path.resolve(rootPath);
+    this.rootPath = resolvePosix(rootPath);
     this.readonly = readonly;
     this.fs = podFs ?? nodePodFs();
   }
@@ -76,11 +76,13 @@ export class ArtiMount {
    * @param relativePath - Path relative to mount root
    */
   private _resolve(relativePath: string): string {
-    const resolved = path.resolve(this.rootPath, relativePath);
+    const resolved = resolvePosix(this.rootPath, relativePath);
 
     // Prevent path traversal outside mount (exact-boundary check: '/a' must
-    // not admit '/ab/...', only '/a' itself or '/a/...')
-    if (resolved !== this.rootPath && !resolved.startsWith(this.rootPath + path.sep)) {
+    // not admit '/ab/...', only '/a' itself or '/a/...'). Root mounts ('/')
+    // admit every absolute path.
+    const boundary = this.rootPath === '/' ? '/' : this.rootPath + '/';
+    if (resolved !== this.rootPath && !resolved.startsWith(boundary)) {
       throw new Error(`Path ${relativePath} is outside mount root`);
     }
 
@@ -170,7 +172,7 @@ export class ArtiMount {
       throw new Error(`Cannot write to read-only mount '${this.name}'`);
     }
     const fullPath = this._resolve(relativePath);
-    const dir = path.dirname(fullPath);
+    const dir = dirnamePosix(fullPath);
     
     // Ensure parent directories exist
     await this.fs.mkdir(dir, { recursive: true });
@@ -204,7 +206,7 @@ export class ArtiMount {
     
     // Return paths relative to root with sizes
     return files.map(f => ({
-      path: path.relative(this.rootPath, f.fullPath),
+      path: relativePosix(this.rootPath, f.fullPath),
       size: f.size
     }));
   }
@@ -222,7 +224,7 @@ export class ArtiMount {
     
     // Return paths relative to root with sizes and directory flag
     return entries.map(e => ({
-      path: path.relative(this.rootPath, e.fullPath),
+      path: relativePosix(this.rootPath, e.fullPath),
       size: e.size,
       isDirectory: e.isDirectory
     }));
@@ -241,7 +243,7 @@ export class ArtiMount {
       const dirEntries = await this.fs.readdir(dir, { withFileTypes: true });
       
       for (const entry of dirEntries) {
-        const fullPath = path.join(dir, entry.name);
+        const fullPath = joinPosix(dir, entry.name);
         
         if (entry.isDirectory()) {
           entries.push({ fullPath, size: 0, isDirectory: true });
@@ -273,7 +275,7 @@ export class ArtiMount {
       const entries = await this.fs.readdir(dir, { withFileTypes: true });
       
       for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
+        const fullPath = joinPosix(dir, entry.name);
         
         if (entry.isDirectory()) {
           await this._listRecursive(fullPath, files);

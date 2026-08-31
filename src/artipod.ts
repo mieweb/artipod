@@ -11,8 +11,15 @@ import {
 import { ArtiPodOptions } from './types.js';
 import type { PodFs } from './podfs.js';
 import { nodePodFs } from './nodePodFs.js';
-import * as crypto from 'crypto';
-import * as path from 'path';
+import { joinPosix } from './pathUtils.js';
+import { PodEvents } from './events.js';
+
+/** Isomorphic 16-byte hex id (WebCrypto exists in browsers and Node ≥20). */
+function randomHexId(): string {
+  const buf = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(buf);
+  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 interface BuildPromptOptions {
   maxSize?: number;
@@ -36,6 +43,8 @@ export class ArtiPod {
   private useMainMount: boolean;
   private initialized: boolean = false;
   private fs: PodFs;
+  /** Coherence bus: exec:start/exec:end + coarse fs:changed (plan §3). */
+  readonly events = new PodEvents();
 
   /**
    * Format file size in human-readable format
@@ -50,7 +59,7 @@ export class ArtiPod {
 
   constructor(options?: ArtiPodOptions) {
     // Generate or use provided ID
-    this.id = options?.id || crypto.randomBytes(16).toString('hex');
+    this.id = options?.id || randomHexId();
     this.workspaceDir = options?.workspaceDir;
     this.useMainMount = options?.useMainMount ?? true;
     this.fs = options?.fs ?? nodePodFs();
@@ -102,7 +111,7 @@ export class ArtiPod {
 
     // Create and initialize main mount if needed
     if (this.useMainMount && this.workspaceDir) {
-      const mainMountPath = path.join(this.workspaceDir, `artipod-${this.id}`);
+      const mainMountPath = joinPosix(this.workspaceDir, `artipod-${this.id}`);
       
       // Create directory (recursive: true means no error if exists)
       await this.fs.mkdir(mainMountPath, { recursive: true });
@@ -139,7 +148,7 @@ export class ArtiPod {
 
     // Delete the directory
     if (this.workspaceDir) {
-      const mainMountPath = path.join(this.workspaceDir, `artipod-${this.id}`);
+      const mainMountPath = joinPosix(this.workspaceDir, `artipod-${this.id}`);
       await this.fs.rm(mainMountPath, { recursive: true, force: true });
     }
   }
@@ -480,7 +489,13 @@ export class ArtiPod {
     }
 
     const effectiveTimeout = timeout ?? this.commandTimeout;
-    return await executeCommandInContainer(this.container, command, effectiveTimeout);
+    this.events.emit('exec:start', { line: command });
+    const startedAt = Date.now();
+    const result = await executeCommandInContainer(this.container, command, effectiveTimeout);
+    this.events.emit('exec:end', { line: command, exitCode: result.exitCode, durationMs: Date.now() - startedAt });
+    // Coarse by contract: a container command can touch any mount.
+    this.events.emit('fs:changed', { origin: 'exec' });
+    return result;
   }
 
   /**
