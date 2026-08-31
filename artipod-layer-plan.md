@@ -49,7 +49,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 | 5 — snapshots + commit | `phase-5-snapshots` | done | mieweb/artipod#41, [horner/artipod-sync#5](https://github.com/horner/artipod-sync/pull/5) |
 | 6 — sync + manager | `phase-6-sync-manager` | done | mieweb/artipod#42, horner/artipod-sync#6 |
 | 6.5 — encryption & authority | `phase-6.5-authority` | done | mieweb/artipod#45 |
-| 6.6 — lazy hydration + site cache | `phase-6.6-hydration` | not started | |
+| 6.6 — lazy hydration + site cache | `phase-6.6-hydration` | done | mieweb/artipod#46 |
 | 7 — live streams | `phase-7-live-streams` | stretch — out of initial scope | |
 
 ### Reference map
@@ -474,43 +474,38 @@ Plus the end-to-end flagship: `src/__tests__/encryptedPod.spec.ts` — locked po
 
 ### Phase 6.6 — Lazy hydration & site cache
 
-> **Branch** `phase-6.6-hydration` · **Status** _not started_ · driving use case: pull one pod per patient on today's schedule — visit notes eager, DICOM on demand, LAN cache making the browser fast
+> **Branch** `phase-6.6-hydration` · **Status** _done_ (mieweb/artipod#46) · driving use case: pull one pod per patient on today's schedule — visit notes eager, DICOM on demand, LAN cache making the browser fast
 
 **The OCI layer is the unit of hydration.** A pulled pod materializes at `refs` (manifest only) · `index` (manifest + published layer indexes + eager layers — every file in a lazy layer is a **placeholder**: `ls`/`stat`/tree serve size/metadata from the index, content absent) · `full`. Opening a file hydrates its *winning layer* (OciViewFS resolution), whole blob, digest-verified — no seekable-tar/eStargz/SOCI machinery, ordinary OCI throughout (annotations + one small index artifact per layer). Issue #1's volume separation is the first lever: the patient-record volume (markdown/FHIR) is eager; the imaging volume is lazy.
 
-- [ ] **Layer grouping at commit time** (where the intelligence lives): `artipod commit --layer-group 'dicom/**'` routes heavy paths into dedicated layers — ideally one study/dataset per layer so a click fetches a likely-needed-together unit; descriptor annotation `org.artipod.hydration: lazy|eager` (default by size threshold).
-- [ ] **Pull-time policy** — which layers hydrate up front:
-
-```ts
-interface HydrationPolicy {
-  default: 'eager' | 'lazy';       // falls back to annotation, then size threshold
-  eager?: string[];                // globs — layers containing matching paths hydrate up front
-  maxEagerLayerSize?: number;
-}
-```
-
-- [ ] **Whole-layer fetch, cache-friendly**: hydration downloads the layer blob, verifies its digest, indexes it once, caches it (one OPFS file per blob — a natural fit). Interrupted downloads resume by byte offset (`Range`). If layer granularity later proves too coarse for some workload, seekable formats (eStargz/SOCI/artipod-chunked) slot in behind the same `LazyLayer` abstraction without changing the pod model.
-- [ ] **Read semantics — no grep bombs** (unchanged property): fs reads of dehydrated content fail fast (`EREMOTE`-style) with an `artipod hydrate <path>` hint. Hydration is always an explicit act: UI click (hydrate-then-open), `artipod hydrate|dehydrate <glob>` (operates on the layers backing the glob), or the agent `prefetch` tool.
-- [ ] **Three bandwidth lanes** at the manager (extends 6.5's budgeted sync): **interactive** (on-click hydration, reserved headroom) ≻ **prefetch** (rules + AI hints) ≻ **background** (push/pull); budgets configurable, prefetch yields to interactive.
-- [ ] **AI prefetch**: `prefetch(paths|globs, priority)` becomes a pod-confined agent tool — paths resolve to their backing layers, which warm inside the prefetch budget ("orders mention chest CT → prefetch that study's layer"). No approval needed: in-pod, bandwidth-bounded, audit-visible.
-- [ ] **Site cache manager (Linux)**: a delegated manager as LAN pull-through cache — digest-keyed, verify-on-receipt, **blind (ciphertext) for encrypted pods** so PHI never sits plaintext on the cache box; browser transports try site cache → WAN fallback; an overnight job pre-pulls the schedule's pods.
-- [ ] Surface: hydration state in `/proc/hydration` + tree badges; `fetch:start|progress|done` on `pod.events`.
+- [x] **Layer grouping at commit time** (where the intelligence lives): `artipod commit --tag t --layer-group 'dicom/**'` (repeatable) routes matching paths into dedicated layers annotated `org.artipod.hydration: lazy` + `org.artipod.layer-group`; **every** layer publishes its index as a digest-addressed blob annotated `org.artipod.layer-index` (and `walkImageDigests` carries the artifacts, so ordinary push/sync move them — northStar counters went 3→4). _Deviation (rule 6): the size-threshold default moved to **pull-time** policy (`maxEagerLayerSize`) rather than a commit-time annotation — the committer knows groups, the puller knows its link._
+- [x] **Pull-time policy**: `HydrationPolicy { default: 'eager'|'lazy'; eager?: string[]; maxEagerLayerSize?: number }` — explicit annotation wins, then threshold, then default; `eager` globs promote layers whose paths the app wants NOW (matched against the published index, before any layer bytes move). Pod option `hydration: { policy, defaultRef }` feeds the verbs.
+- [x] **Whole-layer fetch, cache-friendly**: hydration fetches the layer blob (digest-verified by `putBlob`), gunzips, twins + indexes once. Interrupted downloads resume by byte offset: `fetchBlobResumable` + persisted partials + `HttpPodStore.getBlobRange` (`Range: bytes=<offset>-`, 200-full fallback for range-blind servers). _One-OPFS-file-per-blob is the app's storage shape; the package stays fs-agnostic._
+- [x] **Read semantics — no grep bombs**: reads of dehydrated content fail fast with `DehydratedError` — a real kerium `EREMOTE` ErrnoError carrying the `artipod hydrate <path>` hint (zenfs propagates it; foreign Error subclasses get wrapped as ENOENT — learned the hard way). Hydration is always explicit: `artipod hydrate|dehydrate <ref> <glob>` or the agent `prefetch` tool. _Note: just-bash's `cat` prints its own generic error line by design; the hint reaches file tools/editor surfaces via the fs error — asserted through `read_file`._
+- [x] **Three bandwidth lanes**: `BandwidthScheduler` — interactive ≻ prefetch ≻ background, one transfer at a time, lane re-evaluated between tasks so prefetch yields to interactive at layer granularity (deterministic order pinned by test).
+- [x] **AI prefetch**: `makePrefetchTool(hydrator, defaultRef)` — pod-confined agent tool (`prefetch { paths, ref?, priority }`), warms backing layers in the prefetch/background lane, no approval needed (in-pod, bandwidth-bounded, audit-visible via fetch events). Auto-registered in `createAgentTools` when hydration is on.
+- [x] **Site cache manager**: `CachingPodStore(front, origin)` — LAN pull-through, digest-keyed, verify-on-receipt, counters for front hits vs origin fetches; **blind for encrypted pods by construction** (it stores the ciphertext blobs encrypted sync moves). Refs stay origin-fresh with cached fallback. _Deviation (rule 6): the Linux site-cache **daemon** (overnight pre-pull job, delegated-cert wiring) is deployment work on the app side; the package ships the store composition + the 6.5 delegation primitives it needs._
+- [x] Surface: `/proc/hydration` (per-ref layer states + in-flight) + `fetch:start|progress|done` on `pod.events`.
 
 **Done when:**
 
-- [ ] `index`-level pull transfers only manifests + index artifacts (byte counters); the full namespace lists/stats correctly at near-zero storage cost
-- [ ] Opening a placeholder fetches exactly one layer blob (transfer counters), digest verifies, content opens; the same open while offline errors clearly with the hydrate hint
-- [ ] `grep -r` across a dehydrated tree triggers zero fetches (test)
-- [ ] `artipod commit --layer-group 'dicom/**'` produces a dedicated layer with the `org.artipod.hydration: lazy` annotation (manifest inspection)
-- [ ] Interactive hydration preempts a running prefetch (throughput assertion)
-- [ ] Agent `prefetch` tool warms a glob's backing layers within budget, visible in `/proc/hydration`
-- [ ] Second browser on the LAN pulls the same pod with zero WAN blob fetches (site-cache counters); the cache holds only ciphertext for an encrypted pod
-- [ ] `dehydrate` evicts layer blobs but keeps indexes/placeholders; re-hydration round-trips
-- [ ] A foreign image without published indexes degrades gracefully (documented: index-level pull unavailable → full pull, or site cache generates indexes)
+- [x] `index`-level pull transfers only manifests + index artifacts (byte counters); the full namespace lists/stats correctly at near-zero storage cost (lazyPod.spec: lazy blob reads = 0, metadata reads ≤ 6; `ls` + `cat notes.md` serve from index + eager layer)
+- [x] Opening a placeholder fetches exactly one layer blob (transfer counters +1, sibling study untouched), digest verifies, content opens; the same open while dehydrated errors clearly with the hydrate hint (shell fails fast; `read_file` tool surfaces `artipod hydrate …`)
+- [x] `grep -r` across a dehydrated tree triggers zero fetches (WAN counter unchanged)
+- [x] `artipod commit --layer-group 'dicom/**'` produces dedicated layers with the `org.artipod.hydration: lazy` annotation (manifest inspection: group + index-digest annotations per layer)
+- [x] Interactive hydration preempts a running prefetch (hydration.test scheduler: completion order `p1, i1, p2, p3`)
+- [x] Agent `prefetch` tool warms a glob's backing layers within budget, visible in `/proc/hydration` (state flips to hydrated, exactly one blob fetched)
+- [x] Second browser on the LAN pulls the same pod with zero WAN blob fetches (CachingPodStore counters); the cache holds only ciphertext for an encrypted pod (every cached byte `isEncryptedBlob`, PHI marker absent)
+- [x] `dehydrate` evicts layer blobs but keeps indexes/placeholders; re-hydration round-trips (blob+twin gone, `ls` still lists, hydrate restores content)
+- [x] A foreign image without published indexes degrades gracefully — documented here: index-level pull unavailable for annotation-less layers ⇒ those layers fetch fully with `degraded: true` in the hydration state (site-cache index generation can lift this later); content remains fully usable (lazyPod.spec test 2)
 
 **Worklog:**
 
-- _(empty)_
+- `src/manager/hydration.ts`: `pathGlobMatch` (`**` crosses `/`), `HydrationPolicy`, `BandwidthScheduler` (3 lanes, deterministic yield), `fetchBlobResumable` + `persistPartial` (Range resume, partial persistence, tamper detection), `CachingPodStore`, `Hydrator` (pullIndex / loadView / mount-remount / hydrate / dehydrate / stateFor / procProvider), `makePrefetchTool`. Annotations moved to `oci/tar.ts` (avoids an oci↔manager import cycle).
+- `snapshot.commit(tag, { layerGroups })`: multi-layer output, per-layer published index artifacts; `OciViewFS` gained nullable layer bytes + `DehydratedError`; `store.deleteUncompressed`; `HttpPodStore.getBlobRange`; verbs `image pull --index`, `hydrate`, `dehydrate`, `commit --layer-group`; `image mount` routes through the hydrator when hydration state exists (live views refresh on hydrate/dehydrate).
+- Hard-won: zenfs wraps foreign Errors as ENOENT — placeholder reads must throw a REAL ErrnoError (kerium `Errno.EREMOTE = 66`; zenfs doesn't re-export the enum). Global `zenMount` is invisible inside `bindContext` chroots — the two-browser e2e runs pod B on a fresh global fs with a Map-backed WAN store instead. just-bash has no `yes`/`head -c`/`sh` — a silently empty payload file made a placeholder read "succeed" (0-byte reads never touch layer bytes).
+- Also fixed 6.5 test-file type errors CI can't see (build tsconfig excludes tests; vitest erases type-only imports): always run `tsc --noEmit -p tsconfig.json` before gating.
+- 30 files / 373 tests / lint 0 / build clean. App wiring (OPFS blob cache file-per-blob, schedule pre-pull job, hydration badges in the tree) is deployment work — no artipod-sync PR required this phase.
 
 ### Phase 7 — Live object streams (multiparty, event-driven)
 

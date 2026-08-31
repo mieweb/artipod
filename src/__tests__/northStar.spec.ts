@@ -98,10 +98,10 @@ describe('north-star demo', () => {
   it('3. reconnect → push; only missing digests move (and a re-push moves zero)', async () => {
     const push = await shell.exec('artipod push field/notes:1');
     expect(push.exitCode).toBe(0);
-    expect(push.stdout).toMatch(/pushed field\/notes:1: 3 blobs moved/); // manifest + config + layer
+    expect(push.stdout).toMatch(/pushed field\/notes:1: 4 blobs moved/); // manifest + config + layer + published index (6.6)
 
     const again = await shell.exec('artipod push field/notes:1');
-    expect(again.stdout).toMatch(/0 blobs moved .*3 already there/);
+    expect(again.stdout).toMatch(/0 blobs moved .*4 already there/);
 
     // the manager's store is a real skopeo-shaped layout on disk
     const layout = JSON.parse(await readFile(join(serverDir, 'index.json'), 'utf8'));

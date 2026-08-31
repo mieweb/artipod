@@ -36,6 +36,7 @@ import { Keyring, makeKeysProcProvider } from '../manager/keyring.js';
 import { PodLocker } from '../manager/locker.js';
 import { AuditLog } from '../manager/audit.js';
 import { ApprovalBroker } from '../manager/approval.js';
+import { Hydrator, makePrefetchTool, type HydrationPolicy } from '../manager/hydration.js';
 import { OciStore } from '../oci/store.js';
 import { makeArtipodCommand } from '../oci/command.js';
 import type { OciTransport } from '../oci/transport.js';
@@ -174,6 +175,15 @@ export interface ZenFsPodOptions
     /** Requesting principal for sudo. Default `agent:pod`. */
     principal?: string;
   };
+  /**
+   * Phase 6.6: lazy hydration. Present = the pod gets a Hydrator (index
+   * pulls, hydrate/dehydrate verbs, /proc/hydration, agent prefetch tool).
+   */
+  hydration?: {
+    policy?: HydrationPolicy;
+    /** Default image ref for the agent's prefetch tool. */
+    defaultRef?: string;
+  };
 }
 
 export interface ZenFsPod {
@@ -191,6 +201,8 @@ export interface ZenFsPod {
   readonly audit: AuditLog;
   /** Present when `authority.policy` is configured. */
   readonly approvals?: ApprovalBroker;
+  /** Present when `hydration` is configured (Phase 6.6). */
+  readonly hydrator?: Hydrator;
   /**
    * Loop options implementing the default-ON agent auto-snapshot (plan
    * Decision #5): a diff snapshot lands before every tool-executing turn;
@@ -266,6 +278,19 @@ export async function createZenFsPod(
     }
   }
 
+  // Phase 6.6: lazy hydration.
+  const hydrator = options.hydration
+    ? new Hydrator({ store: ociStore, zfs, remote: options.sync?.remote, transport: options.oci?.transport, events, policy: options.hydration.policy })
+    : undefined;
+  let disposeHydrationProc: (() => void) | null = null;
+  if (proc && hydrator) {
+    try {
+      disposeHydrationProc = registerProcProvider(hydrator.procProvider());
+    } catch {
+      // already projected by another live pod
+    }
+  }
+
   const podFs = zfs.promises as unknown as PodFs;
   const resolver = () =>
     new PodPathResolver(
@@ -285,6 +310,7 @@ export async function createZenFsPod(
     locker,
     audit,
     approvals,
+    hydrator,
     agentLoopOptions(opts?: { autoSnapshot?: boolean }) {
       if (opts?.autoSnapshot === false) return {};
       return {
@@ -315,6 +341,7 @@ export async function createZenFsPod(
             snapshots,
             remote: options.sync?.remote,
             authority: authorityContext,
+            hydrator,
           }),
           ...(options.extraCommands ?? []),
         ],
@@ -328,13 +355,18 @@ export async function createZenFsPod(
       return createPodFileTools(resolver());
     },
     createAgentTools(sandbox: Sandbox) {
-      return createSandboxTools(sandbox, {
+      const tools = createSandboxTools(sandbox, {
         mounts: mountTable.map((e) => ({ name: e.name, path: e.path, readonly: e.readonly })),
       });
+      if (hydrator) {
+        tools.set('prefetch', makePrefetchTool(hydrator, options.hydration?.defaultRef) as never);
+      }
+      return tools;
     },
     dispose() {
       disposeProc?.();
       disposeKeysProc?.();
+      disposeHydrationProc?.();
     },
   };
 }

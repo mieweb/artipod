@@ -52,6 +52,25 @@ export interface ApprovalRequestEvent {
   command?: string;
 }
 
+/** Phase 6.6 hydration transfers (docs: browser.md §hydration). */
+export interface FetchStartEvent {
+  digest: string;
+  lane: 'interactive' | 'prefetch' | 'background';
+  size?: number;
+}
+
+export interface FetchProgressEvent {
+  digest: string;
+  received: number;
+  total?: number;
+}
+
+export interface FetchDoneEvent {
+  digest: string;
+  ok: boolean;
+  bytes: number;
+}
+
 export interface PodEventMap {
   'exec:start': ExecStartEvent;
   'exec:end': ExecEndEvent;
@@ -59,6 +78,9 @@ export interface PodEventMap {
   'edit:request': EditRequestEvent;
   'agent:tool-call': AgentToolCallEvent;
   'approval:request': ApprovalRequestEvent;
+  'fetch:start': FetchStartEvent;
+  'fetch:progress': FetchProgressEvent;
+  'fetch:done': FetchDoneEvent;
 }
 
 export type PodEventName = keyof PodEventMap;
