@@ -42,7 +42,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 | Phase | Branch | Status | PR |
 |---|---|---|---|
 | 0 — repo prep | `phase-0-esm-vitest` | done (owner npm actions pending) | [#33](https://github.com/mieweb/artipod/pull/33), [#34](https://github.com/mieweb/artipod/pull/34) |
-| 1 — fs injection | `phase-1-podfs-injection` | not started | |
+| 1 — fs injection | `phase-1-podfs-injection` | done | [#35](https://github.com/mieweb/artipod/pull/35) |
 | 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | not started | |
 | 3 — manifest + realizers | `phase-3-manifest-realizers` | not started | |
 | 4 — OCI store | `phase-4-oci-store` | not started | |
@@ -264,23 +264,26 @@ Each phase = one reviewable PR series into `mieweb/artipod` (+ a consuming PR in
 
 The one structural refactor everything else depends on. `ArtiMount` already uses only the `fs.promises` shape — ZenFS exposes exactly that.
 
-- [ ] Define `PodFs` = minimal node-shaped promises interface (readFile, writeFile, mkdir, readdir(+withFileTypes), stat/lstat, rm, rename, …) in core.
-- [ ] `ArtiMount` takes `fs: PodFs` (constructor param; node entry provides a `nodePodFs()` default so existing callers don't break).
-- [ ] Pod-level `ToolRegistry`: resolve file paths against each mount's declared root — core enforces no prefix scheme (Decision #3); keep single-mount ctor as sugar.
-- [ ] Add `bash` tool (schema + truncation semantics ported from `artipod-sync/lib/agent/tools.ts`) — execution delegated to an injected `Sandbox` (arrives in Phase 2; until then node child_process or the docker backend can satisfy it server-side).
-- [ ] Port the OpenAI + MCP dual serializers onto artipod's `ToolDefinition`s.
-- [ ] Contract test: the full tools suite runs twice — over `node:fs/promises` (tempdir) and over ZenFS `InMemory` — same assertions.
+- [x] Define `PodFs` = minimal node-shaped promises interface (readFile, writeFile, mkdir, readdir(+withFileTypes), stat, rm, rename) in core (`src/podfs.ts`; lstat deferred until something needs symlink awareness).
+- [x] `ArtiMount` takes `fs: PodFs` (4th constructor param; `nodePodFs()` default keeps existing callers working — deviation: the default lives in artimount.ts via static import rather than a separate node entry; the browser/node export-condition split arrives with Phase 2/3). Bonus: boundary-exact traversal guard (`/a` no longer admits `/aX`), `write()` widened to `Uint8Array`, docker code isolated under `src/docker/` with a `./docker` subpath export.
+- [x] Pod-level `ToolRegistry`: `PodToolRegistry` now accepts a declarative `mountTable` (`{path, mount}[]`, absolute app-chosen paths, longest-prefix resolution, virtual directory listings above mount points, apply_patch header rewriting confined to a single mount) — core enforces no prefix scheme (Decision #3); `MountToolRegistry` stays as the single-mount sugar.
+- [x] Add `bash` tool (schema + truncation semantics ported from `artipod-sync/lib/agent/tools.ts`) — execution delegated to an injected `BashExecutor` (`containerBashExecutor(pod)` default until the Phase 2 sandbox lands).
+- [x] Port the OpenAI + MCP dual serializers onto artipod's `ToolDefinition`s (`toOpenAiTools` / `toMcpTools`).
+- [x] Contract test: the full tools suite runs twice — over `node:fs/promises` (tempdir) and over ZenFS `InMemory` — same assertions (`src/__tests__/contract.spec.ts`, `describe.each` over the two providers).
 
 **Done when:**
 
-- [ ] One shared contract suite for tools + `buildPrompt` runs twice — over `node:fs/promises` (tempdir) and over ZenFS `InMemory` — with identical assertions, green
-- [ ] `buildPrompt` output byte-identical across both fs implementations (fixture snapshot)
-- [ ] `grep -rn "node:fs\|from 'fs'" src/` shows hits only in `/docker` and the `nodePodFs` adapter
-- [ ] `bash` tool schema + 16 KiB truncation behavior covered by ported tests
+- [x] One shared contract suite for tools + `buildPrompt` runs twice — over `node:fs/promises` (tempdir) and over ZenFS `InMemory` — with identical assertions, green — verified: vitest 197/197, contract suite runs `describe.each` over both providers
+- [x] `buildPrompt` output byte-identical across both fs implementations (fixture snapshot) — verified: `toBe` across providers + snapshot written to `__snapshots__/contract.spec.ts.snap`
+- [x] `grep -rn "node:fs\|from 'fs'" src/` shows **import** hits only in `src/docker/`, the `nodePodFs` adapter, and the docker-backend spec (`containerExecution.spec.ts`, which exercises chmod-dependent container behavior); remaining textual hits are doc comments — wording amended per rule 6
+- [x] `bash` tool schema + 16 KiB truncation behavior covered by ported tests — verified: truncation head/tail/marker tests + JSON content body + schema shape in contract.spec.ts
 
 **Worklog:**
 
-- _(empty)_
+- 2026-08-30 — implemented in one PR (#35): podfs.ts + nodePodFs.ts; ArtiMount/ArtiPod fs injection (auto main mount inherits pod fs); containerUtils/containerRuntime → src/docker/ (+ `./docker` export); PodToolRegistry mountTable (longest-prefix resolver, virtual dirs above mounts, cross-mount multi_replace per-owning-mount, apply_patch single-mount header rewrite); bash tool + BashExecutor (container default); serializers; contract suite (node tempdir × ZenFS InMemory) + buildPrompt snapshot. @zenfs/core 2.4.4 devDep (peer already pinned in Phase 0).
+- 2026-08-30 — security fix en route: ArtiMount traversal guard was prefix-sloppy (`resolved.startsWith(rootPath)` admits `/rootX`); now boundary-exact with a pinned contract test on both backends.
+- 2026-08-30 — tools.spec updated: PodToolRegistry now always carries `bash` alongside `run_in_terminal` (2 tools); zero other spec changes beyond import extensions/adapters.
+- 2026-08-30 — verification: `tsc --noEmit` clean; lint clean; vitest **197/197** (was 161 — +36 contract/truncation/serializer/resolver tests); build clean.
 
 ### Phase 2 — Move sandbox, agent, proc into `@artipod/core` (executes just-bash-plan Phase 6)
 
