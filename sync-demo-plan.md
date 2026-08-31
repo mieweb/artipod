@@ -24,7 +24,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): sync phas
 | Phase | Branch | Status | PR |
 |---|---|---|---|
 | A — repo consolidation (move artipod-sync in, keep history) | `sync-a-move` | done | [#47](https://github.com/mieweb/artipod/pull/47) |
-| B — `@artipod/core/server` subpath (the heft leaves the app) | `sync-b-server` | in progress | |
+| B — `@artipod/core/server` subpath (the heft leaves the app) | `sync-b-server` | done | [#48](https://github.com/mieweb/artipod/pull/48) |
 | C — folder → artipod publish (per-file layers) | `sync-c-publish` | todo | |
 | D — browser opens a basis lazily; fetch-on-read | `sync-d-lazy-open` | todo | |
 | E — write-back: auto-push layers, server materializes | `sync-e-writeback` | todo | |
