@@ -5,6 +5,8 @@ import type { PodFs } from './podfs.js';
 import { nodePodFs } from './nodePodFs.js';
 import { joinPosix } from './pathUtils.js';
 import { PodEvents } from './events.js';
+import { realizeDocker } from './realize/docker.js';
+import type { PodManifest } from './manifest.js';
 
 // The docker backend (dockerode → ssh2 native addon) must never enter
 // browser bundles: loaded on first container use, node-only. webpackIgnore
@@ -43,6 +45,9 @@ export class ArtiPod {
   private useMainMount: boolean;
   private initialized: boolean = false;
   private fs: PodFs;
+  /** Manifest-declared container paths; absent names fall back to /context/<name>. */
+  private containerPaths = new Map<string, string>();
+  private manifest?: PodManifest;
   /** Coherence bus: exec:start/exec:end + coarse fs:changed (plan §3). */
   readonly events = new PodEvents();
 
@@ -55,6 +60,33 @@ export class ArtiPod {
     if (bytes < 1024) return `${bytes} bytes`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  /**
+   * Build a pod from a declarative manifest (plan Phase 3): hostDir mounts
+   * bind at their manifest-declared paths (Decision #3 — no enforced prefix;
+   * /context/<name> is only the non-manifest default). Virtual sources fail
+   * fast via realizeDocker (collision #4).
+   */
+  static fromManifest(manifest: PodManifest, options?: { id?: string; podFs?: PodFs }): ArtiPod {
+    const realization = realizeDocker(manifest);
+    const pod = new ArtiPod({
+      id: options?.id,
+      useMainMount: false,
+      mounts: realization.mounts.map(
+        (b) => new ArtiMount(b.name, b.hostDir, b.readonly, options?.podFs),
+      ),
+    });
+    for (const b of realization.mounts) {
+      pod.containerPaths.set(b.name, b.path);
+    }
+    pod.manifest = manifest;
+    return pod;
+  }
+
+  /** The manifest this pod was built from, when fromManifest was used. */
+  getManifest(): PodManifest | undefined {
+    return this.manifest;
   }
 
   constructor(options?: ArtiPodOptions) {
@@ -448,7 +480,7 @@ export class ArtiPod {
     const mounts: string[] = [];
     for (const [mountName, mount] of this.mounts) {
       const hostPath = mount.getRootPath();
-      const containerPath = `/context/${mountName}`;
+      const containerPath = this.containerPaths.get(mountName) ?? `/context/${mountName}`;
       const mountSuffix = mount.isReadOnly() ? ':ro' : '';
       mounts.push(`${hostPath}:${containerPath}${mountSuffix}`);
     }

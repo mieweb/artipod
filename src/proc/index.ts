@@ -27,3 +27,4 @@ export {
 export type { ProcEntry } from './snapshot.js';
 export { reconcileProc } from './reconcile.js';
 export { registerBuiltinProviders, storageProvider } from './storage-provider.js';
+export { makePodManifestProvider, registerPodManifestProvider } from './pod-provider.js';
