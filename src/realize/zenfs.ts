@@ -31,6 +31,9 @@ import type { ToolHandler } from '../tools/types.js';
 import { createSandboxTools } from '../agent/tools.js';
 import type { ToolHandler as AgentToolHandler } from '../agent/types.js';
 import { registerPodManifestProvider } from '../proc/pod-provider.js';
+import { OciStore } from '../oci/store.js';
+import { makeArtipodCommand } from '../oci/command.js';
+import type { OciTransport } from '../oci/transport.js';
 
 export interface RealizedZenFsMount {
   name: string;
@@ -142,6 +145,8 @@ export interface ZenFsPodOptions
   proc?: boolean;
   /** Shell cwd. Default: the first mount's path. */
   cwd?: string;
+  /** OCI layer: transport for `artipod image pull` (store always available). */
+  oci?: { transport?: OciTransport };
 }
 
 export interface ZenFsPod {
@@ -149,6 +154,8 @@ export interface ZenFsPod {
   readonly zfs: ZenFsLike;
   readonly events: PodEvents;
   readonly mountTable: ReadonlyArray<RealizedZenFsMount>;
+  /** The pod's OCI blob store (initialized on first use). */
+  readonly oci: { store: OciStore; transport?: OciTransport };
   /** just-bash session over the realized fs, pod commands + /proc registered. */
   createSandbox(): Sandbox;
   /** VS Code-schema file tools resolved over the pod's mount table. */
@@ -183,6 +190,10 @@ export async function createZenFsPod(
   const disposeProc = proc ? registerPodManifestProvider(m) : null;
   const defaultCwd = options.cwd ?? mountTable[0]?.path ?? '/';
 
+  const ociStore = new OciStore(zfs);
+  await ociStore.init();
+  const oci = { store: ociStore, transport: options.oci?.transport };
+
   const podFs = zfs.promises as unknown as PodFs;
   const resolver = () =>
     new PodPathResolver(
@@ -197,6 +208,7 @@ export async function createZenFsPod(
     zfs,
     events,
     mountTable,
+    oci,
     createSandbox() {
       return createSandbox({
         zfs,
@@ -204,7 +216,10 @@ export async function createZenFsPod(
         proc,
         cwd: defaultCwd,
         onEdit: options.onEdit,
-        extraCommands: options.extraCommands,
+        extraCommands: [
+          makeArtipodCommand({ store: ociStore, zfs, transport: options.oci?.transport, events }),
+          ...(options.extraCommands ?? []),
+        ],
         hooks: options.hooks,
         executionLimits: options.executionLimits,
         executionLimitProfile: options.executionLimitProfile,

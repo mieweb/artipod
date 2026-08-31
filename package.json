@@ -26,6 +26,10 @@
       "types": "./dist/proc/index.d.ts",
       "default": "./dist/proc/index.js"
     },
+    "./oci": {
+      "types": "./dist/oci/index.d.ts",
+      "default": "./dist/oci/index.js"
+    },
     "./agent": {
       "types": "./dist/agent/index.d.ts",
       "default": "./dist/agent/index.js"
@@ -104,6 +108,7 @@
     "@zenfs/dom": "1.2.5",
     "diff": "^8.0.2",
     "eslint": "^8.56.0",
+    "fflate": "^0.8.3",
     "isomorphic-git": "^1.25.0",
     "just-bash": "3.2.0",
     "typescript": "^5.3.3",
@@ -116,6 +121,7 @@
     "@zenfs/core": "2.4.4",
     "@zenfs/dom": "1.2.5",
     "diff": "^8.0.2",
+    "fflate": "^0.8.2",
     "isomorphic-git": "^1.25.0",
     "just-bash": "3.2.0"
   },
@@ -134,6 +140,9 @@
     },
     "just-bash": {
       "optional": true
+    },
+    "fflate": {
+      "optional": "true"
     }
   },
   "engines": {
