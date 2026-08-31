@@ -18,6 +18,22 @@
       "types": "./dist/prompts/index.d.ts",
       "default": "./dist/prompts/index.js"
     },
+    "./sandbox": {
+      "types": "./dist/sandbox/index.d.ts",
+      "default": "./dist/sandbox/index.js"
+    },
+    "./proc": {
+      "types": "./dist/proc/index.d.ts",
+      "default": "./dist/proc/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "default": "./dist/agent/index.js"
+    },
+    "./agent/local/worker": {
+      "types": "./dist/agent/local/worker.d.ts",
+      "default": "./dist/agent/local/worker.js"
+    },
     "./docker": {
       "types": "./dist/docker/index.d.ts",
       "default": "./dist/docker/index.js"
@@ -62,13 +78,19 @@
   "author": "Medical Informatics Engineering, LLC",
   "license": "MIT",
   "devDependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@types/diff": "^7.0.2",
     "@types/dockerode": "^3.3.47",
     "@types/node": "^20.10.6",
     "@typescript-eslint/eslint-plugin": "^6.17.0",
     "@typescript-eslint/parser": "^6.17.0",
     "@vitest/coverage-v8": "^3.2.4",
     "@zenfs/core": "2.4.4",
+    "@zenfs/dom": "1.2.5",
+    "diff": "^8.0.2",
     "eslint": "^8.56.0",
+    "isomorphic-git": "^1.25.0",
+    "just-bash": "3.2.0",
     "typescript": "^5.3.3",
     "vitest": "^3.2.4"
   },
@@ -78,6 +100,8 @@
   "peerDependencies": {
     "@zenfs/core": "2.4.4",
     "@zenfs/dom": "1.2.5",
+    "diff": "^8.0.2",
+    "isomorphic-git": "^1.25.0",
     "just-bash": "3.2.0"
   },
   "peerDependenciesMeta": {
@@ -85,6 +109,12 @@
       "optional": true
     },
     "@zenfs/dom": {
+      "optional": true
+    },
+    "diff": {
+      "optional": true
+    },
+    "isomorphic-git": {
       "optional": true
     },
     "just-bash": {
