@@ -21,6 +21,8 @@ import { pullImage, loadImageLayers, type ImageManifest } from './pull.js';
 import { mountOciView } from './view.js';
 import { isDigest, type Digest } from './digest.js';
 import type { SnapshotManager } from './snapshot.js';
+import type { PodStore } from '../manager/pod-store.js';
+import { syncRef, storeTransport, materializeImage } from '../manager/sync.js';
 
 export interface ArtipodCommandContext {
   store: OciStore;
@@ -28,6 +30,8 @@ export interface ArtipodCommandContext {
   transport?: OciTransport;
   events?: PodEvents;
   snapshots?: SnapshotManager;
+  /** The manager this pod syncs with (push/pull/clone). */
+  remote?: PodStore;
 }
 
 const activeMounts = new Map<string, () => void>();
@@ -52,6 +56,9 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   commit --tag <name>                  freeze the workspace into a volume image
   compact                              squash the snapshot chain into one layer
   gc                                   delete unreachable blobs, report bytes
+  push <ref>                           sync a ref to the manager (missing digests only)
+  pull <ref>                           sync a ref from the manager + index it
+  clone <ref> [path]                   materialize a ref as a writable tree
 `;
 
 function sanitizeRefForPath(ref: string): string {
@@ -67,10 +74,44 @@ async function resolveStoredRef(store: OciStore, refArg: string): Promise<{ disp
 
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
   defineCommand('artipod', async (args) => {
-    const { store, zfs, transport, events, snapshots } = podContext;
+    const { store, zfs, transport, events, snapshots, remote } = podContext;
     const [group, sub, ...rest] = args;
 
     try {
+      if (group === 'push') {
+        if (!sub) return fail('usage: artipod push <ref>');
+        if (!remote) return fail('artipod: no manager configured for this pod (set sync.remote)');
+        const result = await syncRef(store, remote, sub);
+        return ok(`pushed ${sub}: ${result.moved} blobs moved (${result.movedBytes} bytes), ${result.skipped} already there\n`);
+      }
+
+      if (group === 'pull' && sub) {
+        if (!remote) return fail('artipod: no manager configured for this pod (set sync.remote)');
+        const lines: string[] = [];
+        const result = await pullImage({
+          store,
+          transport: storeTransport(remote),
+          ref: sub,
+          onProgress: (m) => lines.push(m),
+        });
+        // keep the caller's literal ref name usable for mount
+        await store.putRef(sub, result.manifestDigest, 'application/vnd.oci.image.manifest.v1+json');
+        events?.emit('fs:changed', { origin: 'exec' });
+        return ok(`${lines.join('\n')}\npulled ${sub} (${result.layers.length} layers)\nmount it with: artipod image mount ${sub}\n`);
+      }
+
+      if (group === 'clone') {
+        if (!sub) return fail('usage: artipod clone <ref> [path]');
+        if (remote && !(await store.getRef(sub))) {
+          const result = await pullImage({ store, transport: storeTransport(remote), ref: sub });
+          await store.putRef(sub, result.manifestDigest, 'application/vnd.oci.image.manifest.v1+json');
+        }
+        const at = rest[0] ?? `/clones/${sanitizeRefForPath(sub)}`;
+        const result = await materializeImage({ store, zfs, refOrDigest: sub, at });
+        events?.emit('fs:changed', { origin: 'exec' });
+        return ok(`cloned ${sub} into ${at} (${result.files} files, writable)\n`);
+      }
+
       if (group === 'snapshot' && snapshots) {
         if (sub === 'create') {
           const snap = await snapshots.create({ label: rest.join(' ') || undefined });

@@ -30,6 +30,10 @@
       "types": "./dist/oci/index.d.ts",
       "default": "./dist/oci/index.js"
     },
+    "./manager": {
+      "types": "./dist/manager/index.d.ts",
+      "default": "./dist/manager/index.js"
+    },
     "./agent": {
       "types": "./dist/agent/index.d.ts",
       "default": "./dist/agent/index.js"
