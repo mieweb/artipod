@@ -30,10 +30,15 @@ describe('ArtiPod.fromManifest + docker realizer', () => {
   beforeAll(async () => {
     hostSrc = await mkdtemp(join(tmpdir(), 'artipod-mansrc-'));
     hostWork = await mkdtemp(join(tmpdir(), 'artipod-manwork-'));
+    // mkdtemp dirs are 0700 — unreadable for the container's non-root user on
+    // real Linux binds (macOS Docker Desktop masks this). Match the suite's
+    // chmod-777 convention.
+    await chmod(hostSrc, 0o777);
+    await chmod(hostWork, 0o777);
     await writeFile(join(hostSrc, 'hello.txt'), 'from the host\n');
     await mkdir(join(hostSrc, 'sub'));
+    await chmod(join(hostSrc, 'sub'), 0o777);
     await writeFile(join(hostSrc, 'sub', 'nested.txt'), 'nested\n');
-    await chmod(hostWork, 0o777);
 
     pod = ArtiPod.fromManifest(manifest());
     await pod.initialize();
