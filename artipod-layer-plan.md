@@ -48,7 +48,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 | 4 — OCI store | `phase-4-oci-store` | done | mieweb/artipod#40, [horner/artipod-sync#4](https://github.com/horner/artipod-sync/pull/4) |
 | 5 — snapshots + commit | `phase-5-snapshots` | done | mieweb/artipod#41, [horner/artipod-sync#5](https://github.com/horner/artipod-sync/pull/5) |
 | 6 — sync + manager | `phase-6-sync-manager` | done | mieweb/artipod#42, horner/artipod-sync#6 |
-| 6.5 — encryption & authority | `phase-6.5-authority` | not started | |
+| 6.5 — encryption & authority | `phase-6.5-authority` | done | mieweb/artipod#45 |
 | 6.6 — lazy hydration + site cache | `phase-6.6-hydration` | not started | |
 | 7 — live streams | `phase-7-live-streams` | stretch — out of initial scope | |
 
@@ -442,29 +442,35 @@ Also verified live against the running app (dev server :3500): terminal `commit 
 
 ### Phase 6.5 — Encryption & authority
 
-> **Branch** `phase-6.5-authority` · **Status** _not started_ · normative specs: [docs/encryption.md](docs/encryption.md), [docs/security-model.md](docs/security-model.md)
+> **Branch** `phase-6.5-authority` · **Status** _done_ (mieweb/artipod#45) · normative specs: [docs/encryption.md](docs/encryption.md), [docs/security-model.md](docs/security-model.md)
 
-- [ ] **Keyring** in `/manager`: unwrapped KEKs with expiries, memory-only non-extractable CryptoKeys; `/proc/keys` provider (names + expiries, never material).
-- [ ] **Leases**: `artipod login` → server/authority unwraps KEKs + issues signed lease `{podIds, ttl}`; auto-lock on expiry + `visibilitychange`; `artipod lock [--all]`; post-lock reads fail `EACCES` with a login hint; `lock` vs `purge` policy modes.
-- [ ] **Encryption flips on**: Phase 4's ciphertext format live end-to-end — encrypted pull/mount/edit/commit/push with plaintext existing only in memory.
-- [ ] **Offline grants**: device keypair enrollment (non-extractable, persisted), signed grant `{pods, device, permissions, notBefore, expires, maximumSnapshot, allowExport}`, ceremony-gated unlock (passkey/PIN), monotonic clock high-water mark (refuse on rollback), CRL-on-sync revocation.
-- [ ] **Delegation certs**: scoped sub-authority managers (lease issuance, grant validation, policy enforcement) verified by signature chain alone; blind-relay vs entitled-cache manager modes.
-- [ ] **Priority + budgeted sync**: refs/manifests → small deltas → bulk blobs; bandwidth budget knob; resume from chunk offsets (constrained-link profiles).
-- [ ] **sudo approval flow**: `approval:request` event with structured capability `{verb, target, mode, ttl, justification}`; signed admin policy (approver roles, capability classes, `defaults.approvable:false`); banned classes → instant EPERM, no prompt; approval mints a scoped TTL capability in the keyring; audit events appended to pod provenance. Replaces the Phase 2 EPERM stub.
-- [ ] **Console integration**: lock screen + login in `/console`; `approval:request` prompts render there when the host app has no UI for them.
+- [x] **Keyring** in `/manager`: unwrapped KEKs with expiries, memory-only non-extractable CryptoKeys; `/proc/keys` provider (names + expiries, never material). `PodLockedError` = the POSIX-shaped `EACCES` + login hint every locked surface throws.
+- [x] **Leases**: `artipod login` → authority releases KEKs + issues a signed lease (ECDSA P-256 over canonical JSON); auto-lock on expiry (timer) + `visibilitychange`; `artipod lock [--all|<pod>]`; post-lock reads AND writes fail `EACCES` with a login hint; `lock` vs `purge` policy modes (purge = `store.purgeBlobs()`, kiosk restore = re-sync). `artipod status` reads the keyring.
+- [x] **Encryption flips on**: Phase 4's ciphertext format live end-to-end — pod option `authority.encrypt` moves key custody to a provider backed by the keyring; commit/push/pull/clone run encrypted with plaintext only in memory. Found + closed a real leak: uncompressed twins (snapshot diffs) were plaintext at rest — now ciphertext like the blobs. _Boundary note (rule 6): local snapshot **metadata** (ids, paths, sizes in `snapshots/*.json`) stays cleartext working state — it never syncs; the encrypted boundary is everything blob-addressed. Superblock cleartext by design._
+- [x] **Offline grants**: device keypair enrollment (non-extractable ECDH P-256, persistable via structured clone), signed grant `{pods, device, permissions, notBefore, expires, maximumSnapshot, allowExport}` with KEKs wrapped ephemeral-static to the device, ceremony-gated unlock (injected passkey/PIN callback), `HighWaterClock` monotonic high-water mark (refuses key release on clock rollback), CRL-on-sync revocation.
+- [x] **Delegation certs**: scoped sub-authority managers issue leases fully offline; verification is pure signature-chain walking (root → cert₀ → … → lease) with scope globs, validity windows and TTL clamps enforced at every hop; `narrowPolicy` lets a delegate narrow admin policy, never widen. Blind-relay vs entitled-cache modes: the relay leg ships as `pushEncryptedRef`/`pullEncryptedRef` — relays hold ciphertext blobs + a KEK-sealed envelope only; entitled caches are just key-holding stores.
+- [x] **Priority + budgeted sync**: `syncRef` gained `{ maxBytes }` — metadata (manifest/config) first, bulk layers fill the budget, over-budget blobs defer to the next pass, ref pointer withheld until complete, anti-entropy makes resume free. _Deviation (rule 6): sub-blob chunk-offset resume stays deferred to 6.6's Range support, as Phase 4 already recorded._
+- [x] **sudo approval flow**: `ApprovalBroker` enforces the four non-negotiables — agents never self-approve (prompt is host-supplied); approver validity is policy-checked (`escape-approve` role); deny-by-policy returns EPERM **without prompting** (banned/unknown classes, disallowed modes); everything audited. Approval mints `cap:<class>:<target>[:<mode>]` in the keyring with policy-clamped TTL; a live capability covers re-execution without a fresh prompt. `sudo` keeps the Phase 2 default-deny exactly when no broker is configured. Audit = `AuditLog` hash chain (blobs + `pod/audit` ref) — `syncRef` walks it, so provenance survives push/pull by construction.
+- [x] **Console integration**: approval prompts render in `/console` (capability + justification + y/N on the input line) via `handle.approvalPrompt` — wire it into pod `authority.prompt`; lock state surfaces as a 🔒 hint whenever a command hits `pod locked`; `artipod login`/`lock`/`status` run in the console like any shell.
 
 **Done when:**
 
-- [ ] Lease expiry locks the pod → reads fail `EACCES` → `artipod login` restores — without data rewrite (test)
-- [ ] Offline grant survives reload, unlocks only via ceremony, expires by grant time, refuses on clock rollback (tests)
-- [ ] `sudo` on a policy-banned class returns EPERM with **no prompt**; a user without the approver role cannot approve; an approval mints a TTL capability visible in `/proc/keys` and expires (tests)
-- [ ] Audit: every request/decision appended to pod provenance and survives push/pull (test)
-- [ ] Blind relay round-trip: intermediate manager holds zero keys, end-to-end digests verify (test)
-- [ ] Delegated manager issues a valid lease fully offline (signature-chain verification only) (test)
+- [x] Lease expiry locks the pod → reads fail `EACCES` → `artipod login` restores — without data rewrite (authority.test.ts: ciphertext bytes compared before/during/after — byte-identical)
+- [x] Offline grant survives reload, unlocks only via ceremony, expires by grant time, refuses on clock rollback (authority.test.ts: fresh-session rehydration, ceremony refusal releases nothing, wrong device, tampered grant, rollback, expiry, CRL)
+- [x] `sudo` on a policy-banned class returns EPERM with **no prompt**; a user without the approver role cannot approve; an approval mints a TTL capability visible in `/proc/keys` and expires (approval.test.ts broker rules + pod-surface shell test)
+- [x] Audit: every request/decision appended to pod provenance and survives push/pull (approval.test.ts: 6-event chain, `syncRef` moves 3-blob chain, far side replays identical, re-push skips 3)
+- [x] Blind relay round-trip: intermediate manager holds zero keys, end-to-end digests verify (approval.test.ts: every relay byte `isEncryptedBlob`, plaintext marker absent, tampered blob rejected at pull)
+- [x] Delegated manager issues a valid lease fully offline (signature-chain verification only) (authority.test.ts: scope enforcement at issue AND verify, TTL clamp, forged/expired/wrong-root all rejected)
+
+Plus the end-to-end flagship: `src/__tests__/encryptedPod.spec.ts` — locked pod refuses snapshot with EACCES+hint → login → commit → `artipod push` routes ciphertext (manager store holds only `isEncryptedBlob` bytes, no plaintext marker) → lock → EACCES → login restores → second device (chrooted fs, same authority) logs in, pulls encrypted, clones, reads the note.
 
 **Worklog:**
 
-- _(empty)_
+- `/manager` new modules: `crypto.ts` (canonical-JSON ECDSA sign/verify, ephemeral-static ECDH KEK wrap, scope globs), `keyring.ts` (+ `/proc/keys` provider, `PodLockedError`), `authority.ts` (Authority / DelegatedAuthority / verifyLease), `grants.ts` (enrollDevice, HighWaterClock, unlockWithGrant), `policy.ts` (AdminPolicy evaluate/canApprove/narrowPolicy), `approval.ts` (ApprovalBroker, classifyCommand, capabilityName), `audit.ts` (AuditLog hash chain, AUDIT media type, sync walk), `locker.ts` (PodLocker: adoptLogin/lock/status/auto-lock, lock|purge), `encrypted-sync.ts` (push/pullEncryptedRef + post-pull twin/index build so mount/clone work).
+- Store custody: `enableEncryption(key | () => key)`; `locked`/`encrypted`/`sessionKey` accessors; `getRawBlob`/`resolveAlias` (relay surface); `purgeBlobs`; twins encrypted (leak found by the e2e test — locked snapshot succeeded because diffs bypassed putBlob).
+- Pod surface: options `authority { login, encrypt, lockMode, policy, prompt, principal }`; pod exposes `keyring/locker/audit/approvals`; `/proc/keys` registered alongside the manifest provider; sudo threading via `CreateSandboxOptions.sudo`; verbs `login/lock/status`; push/pull auto-detect encrypted pods (`ENCRYPTED_REF_MEDIA_TYPE`).
+- Ordering lesson: `PodLocker.lock` must audit BEFORE revoking — an encrypted store can't take the audit write after the key evaporates.
+- 28 files / 366 tests / lint 0 / build clean. No artipod-sync changes required this phase (app wiring of login UI + policy distribution is deployment work, not package work).
 
 ### Phase 6.6 — Lazy hydration & site cache
 

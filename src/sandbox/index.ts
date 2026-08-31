@@ -75,6 +75,8 @@ export interface CreateSandboxOptions {
   /** Tighter limits for server / agent use (defaults are sane for humans). */
   executionLimits?: BashOptions['executionLimits'];
   executionLimitProfile?: BashOptions['executionLimitProfile'];
+  /** Phase 6.5 approval flow for `sudo`; absent = default-deny stub. */
+  sudo?: import('./sudo-command.js').SudoOptions;
 }
 
 const DEFAULT_CWD = '/repo';
@@ -95,7 +97,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       makeGitCommand(createGitOps(() => opts.zfs)),
       makeEditCommand(opts.onEdit, opts.events),
       makeNotesCommand(),
-      makeSudoCommand(opts.events),
+      makeSudoCommand(opts.events, opts.sudo),
       ...makeStorageCommands(() => opts.zfs),
       ...(opts.proc ? makeModuleCommands() : []),
       ...(opts.extraCommands ?? []),

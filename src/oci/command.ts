@@ -23,6 +23,10 @@ import { isDigest, type Digest } from './digest.js';
 import type { SnapshotManager } from './snapshot.js';
 import type { PodStore } from '../manager/pod-store.js';
 import { syncRef, storeTransport, materializeImage } from '../manager/sync.js';
+import { pushEncryptedRef, pullEncryptedRef, ENCRYPTED_REF_MEDIA_TYPE } from '../manager/encrypted-sync.js';
+import type { LoginResult } from '../manager/authority.js';
+import type { PodLocker } from '../manager/locker.js';
+import type { Keyring } from '../manager/keyring.js';
 
 export interface ArtipodCommandContext {
   store: OciStore;
@@ -32,6 +36,13 @@ export interface ArtipodCommandContext {
   snapshots?: SnapshotManager;
   /** The manager this pod syncs with (push/pull/clone). */
   remote?: PodStore;
+  /** Phase 6.5: login/lock/status against the pod's authority. */
+  authority?: {
+    /** App-provided authentication → lease + keys (crosses the wire in real deployments). */
+    login: () => Promise<LoginResult>;
+    locker: PodLocker;
+    keyring: Keyring;
+  };
 }
 
 const activeMounts = new Map<string, () => void>();
@@ -59,6 +70,9 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   push <ref>                           sync a ref to the manager (missing digests only)
   pull <ref>                           sync a ref from the manager + index it
   clone <ref> [path]                   materialize a ref as a writable tree
+  login                                authenticate → lease → keyring populated
+  lock [--all|<pod>]                   drop keys now (reads fail EACCES until login)
+  status                               lease + capability expiries (also /proc/keys)
 `;
 
 function sanitizeRefForPath(ref: string): string {
@@ -74,19 +88,56 @@ async function resolveStoredRef(store: OciStore, refArg: string): Promise<{ disp
 
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
   defineCommand('artipod', async (args) => {
-    const { store, zfs, transport, events, snapshots, remote } = podContext;
+    const { store, zfs, transport, events, snapshots, remote, authority } = podContext;
     const [group, sub, ...rest] = args;
 
     try {
+      if (group === 'login') {
+        if (!authority) return fail('artipod: no authority configured for this pod (set authority in pod options)');
+        const result = await authority.login();
+        await authority.locker.adoptLogin(result);
+        return ok(`lease for ${result.lease.principal}: pods [${result.lease.podIds.join(', ')}] until ${result.lease.expiresAt}\n`);
+      }
+
+      if (group === 'lock') {
+        if (!authority) return fail('artipod: no authority configured for this pod');
+        const target = sub === '--all' || !sub ? undefined : sub;
+        await authority.locker.lock(target);
+        return ok(`locked ${target ?? 'all pods'} — keys dropped from the keyring\n`);
+      }
+
+      if (group === 'status') {
+        if (!authority) return fail('artipod: no authority configured for this pod');
+        const entries = authority.keyring.list();
+        if (entries.length === 0) return ok('locked — no live leases or capabilities (artipod login to restore)\n');
+        const lines = entries.map((e) => `${e.kind.padEnd(10)} ${e.name.padEnd(32)} expires ${new Date(e.expiresAt).toISOString()}`);
+        return ok(`${lines.join('\n')}\n`);
+      }
+
       if (group === 'push') {
         if (!sub) return fail('usage: artipod push <ref>');
         if (!remote) return fail('artipod: no manager configured for this pod (set sync.remote)');
+        if (store.encrypted) {
+          // Sync and relays move ciphertext only (docs/encryption.md).
+          const result = await pushEncryptedRef(store, remote, sub, store.sessionKey);
+          return ok(`pushed ${sub} (encrypted): ${result.moved} blobs moved (${result.movedBytes} bytes ciphertext), ${result.skipped} already there\n`);
+        }
         const result = await syncRef(store, remote, sub);
+        if (!result.complete) {
+          return ok(`pushed ${sub} (partial): ${result.moved} blobs moved (${result.movedBytes} bytes), ${result.remaining} deferred by budget\n`);
+        }
         return ok(`pushed ${sub}: ${result.moved} blobs moved (${result.movedBytes} bytes), ${result.skipped} already there\n`);
       }
 
       if (group === 'pull' && sub) {
         if (!remote) return fail('artipod: no manager configured for this pod (set sync.remote)');
+        const remoteRef = await remote.getRef(sub);
+        if (remoteRef?.mediaType === ENCRYPTED_REF_MEDIA_TYPE) {
+          if (!store.encrypted) return fail(`artipod: '${sub}' is an encrypted ref — this pod holds no key (artipod login first)`);
+          const result = await pullEncryptedRef(remote, store, sub, store.sessionKey);
+          events?.emit('fs:changed', { origin: 'exec' });
+          return ok(`pulled ${sub} (encrypted): ${result.moved} blobs moved, ${result.skipped} already there\n`);
+        }
         const lines: string[] = [];
         const result = await pullImage({
           store,
