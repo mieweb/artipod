@@ -7,8 +7,12 @@ import { joinPosix } from './pathUtils.js';
 import { PodEvents } from './events.js';
 
 // The docker backend (dockerode → ssh2 native addon) must never enter
-// browser bundles: it is loaded on first container use, node-only.
-const dockerBackend = () => import('./docker/containerUtils.js');
+// browser bundles: loaded on first container use, node-only. webpackIgnore
+// keeps webpack from following the dynamic edge (vite/vitest still resolve it).
+const dockerBackend = () =>
+  import(/* webpackIgnore: true */ './docker/containerUtils.js') as Promise<
+    typeof import('./docker/containerUtils.js')
+  >;
 
 /** Isomorphic 16-byte hex id (WebCrypto exists in browsers and Node ≥20). */
 function randomHexId(): string {
