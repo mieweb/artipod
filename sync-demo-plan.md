@@ -112,6 +112,8 @@ export function createPodStoreHandler(opts: {
 
 export function createGitProxyHandler(opts: { allowlist: string[] }): (req: Request, path: string[]) => Promise<Response>;
 export function createExecSessionHandler(opts: { host: PodSessionHost; auth?: …; limits?: … }): (req: Request) => Promise<Response>;
+export function createRegistryRelayHandler(opts: { allowedHosts: Iterable<string> }): (req: Request, path: string[]) => Promise<Response>;
+// ^ small deviation (rule 6): the /api/oci relay was copy-paste generic too, so it graduated with the rest.
 
 export { publishDirectory, materializeRef } from './folder.js';   // Phase C/E
 ```
@@ -190,12 +192,16 @@ Formal shape: pod state = join-semilattice of
   - 2026-08-31 — gate: #47 merged with a merge commit (6f0dedf); pointer README pushed to horner/artipod-sync main and repo archived (`gh repo view -q .isArchived` → true). Sample-site redeploy from the new path stays an open owner action (deploy checklist in the unit file header).
 
 ### Phase B — server subpath (`sync-b-server`)
-- [ ] `./server` export + `browser:false` stubs; guard test that browser entries never reach `dist/server`
-- [ ] `createPodStoreHandler` (blobs GET/HEAD/PUT + **Range 206**, refs GET/PUT/LIST, `auth`, `onRefPut`) + ported tests
-- [ ] `createGitProxyHandler` / `createExecSessionHandler` graduate with their suites; app keeps policy numbers only
-- [ ] Example routes collapse to option-building one-liners; live smoke: push/pull round-trip + Range resume against the app
+- [x] `./server` export + `browser:false` stubs; guard test that browser entries never reach `dist/server`
+- [x] `createPodStoreHandler` (blobs GET/HEAD/PUT + **Range 206**, refs GET/PUT/LIST, `auth`, `onRefPut`) + ported tests
+- [x] `createGitProxyHandler` / `createExecSessionHandler` graduate with their suites; app keeps policy numbers only
+- [x] Example routes collapse to option-building one-liners; live smoke: push/pull round-trip + Range resume against the app
 - **Done when**: `examples/artipod-sync/lib/server/` contains no generic logic; all previous route behaviors covered by package tests; example e2e (northStar-style) still green.
 - Worklog:
+  - 2026-08-31 — src/server/: common (PathHandler, AuthHook, bearerAuth — token read per request), pod-store-handler (HttpPodStore wire; Range `bytes=N-` → 206 + Content-Range, past-end → 416, other shapes → 200-full which the client already handles; onRefPut fires after successful ref PUT), git-proxy (pure fns moved verbatim + handler w/ injectable fetchFn), exec-handler (execInSession takes the host as an arg now; handler adds auth/JSON edges), registry-relay (deviation, rule 6: /api/oci was generic — graduated too). 25 tests incl. browser-guard (package.json contract + src-wide import scan).
+  - 2026-08-31 — ported 429 busy-guard test raced on a fresh host (the app suite was masked by warm module caches): both execs entered the async session-creation path. Fix: warm the session first so contention is on the busy flag. Deterministic.
+  - 2026-08-31 — app: 4 routes → option-building one-liners; lib/server/ deleted; tests/routes.test.ts pins deployment wiring (exec + EXEC_API_TOKEN at request time, ARTIPOD_STORE_DIR, OCI deny-all). Route tests needed vitest include `tests/**`.
+  - 2026-08-31 — verify: root `npx tsc --noEmit` clean, 398 tests, lint 0, build 0. App: 4 tests, lint 0, `next build` 0. Live smoke vs `next start` on :3599 (tmp store): PUT blob 201 → HEAD 200 → GET 200 → GET Range bytes=6- → **206** with the byte-6 slice → PUT ref 201 (manifest-first held) → GET refs lists it → blob present under /tmp/smoke-store/blobs/sha256/. Terminal-simplifier gotcha: a dropped `cd` made npx offer to download next@16 — use `npm --prefix` for app commands.
 
 ### Phase C — folder publish (`sync-c-publish`)
 - [ ] `publishDirectory` per §3.3: per-file layers + per-layer published indexes + LWW annotations + parents chain
