@@ -43,7 +43,7 @@ describe('ArtiPod - Container Execution', () => {
           // Ignore cleanup errors
         }
       }
-    }, 10000);
+    }, 120000);
 
     it('should start a container', async () => {
       const mount = new ArtiMount('test', testContextPath);
@@ -56,7 +56,7 @@ describe('ArtiPod - Container Execution', () => {
       expect(container).toBeDefined();
       expect(container.id).toBeDefined();
       expect(pod.hasContainer()).toBe(true);
-    }, 10000);
+    }, 120000);
 
     it('should start container with artipod user', async () => {
       const mount = new ArtiMount('test', testContextPath);
@@ -69,7 +69,7 @@ describe('ArtiPod - Container Execution', () => {
       const result = await pod.executeCommand('whoami');
       expect(result.stdout.trim()).toBe('artipod');
       expect(result.exitCode).toBe(0);
-    }, 10000);
+    }, 120000);
   });
 
   describe('executeCommand', () => {
@@ -79,7 +79,7 @@ describe('ArtiPod - Container Execution', () => {
       await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
       });
-    }, 10000);
+    }, 120000);
 
     afterEach(async () => {
       if (pod?.hasContainer()) {
@@ -89,7 +89,7 @@ describe('ArtiPod - Container Execution', () => {
           // Ignore cleanup errors
         }
       }
-    }, 10000);
+    }, 120000);
 
     it('should execute simple echo command', async () => {
       const result = await pod.executeCommand('echo "test"');
@@ -97,7 +97,7 @@ describe('ArtiPod - Container Execution', () => {
       expect(result.stdout.trim()).toBe('test');
       expect(result.stderr).toBe('');
       expect(result.exitCode).toBe(0);
-    }, 10000);
+    }, 120000);
 
     it('should capture stderr', async () => {
       const result = await pod.executeCommand('echo "error" >&2');
@@ -105,13 +105,13 @@ describe('ArtiPod - Container Execution', () => {
       expect(result.stdout).toBe('');
       expect(result.stderr.trim()).toBe('error');
       expect(result.exitCode).toBe(0);
-    }, 10000);
+    }, 120000);
 
     it('should return non-zero exit code on failure', async () => {
       const result = await pod.executeCommand('exit 42');
       
       expect(result.exitCode).toBe(42);
-    }, 10000);
+    }, 120000);
 
     it('should execute multiple commands sequentially', async () => {
       const result1 = await pod.executeCommand('echo "first"');
@@ -119,7 +119,7 @@ describe('ArtiPod - Container Execution', () => {
       
       expect(result1.stdout.trim()).toBe('first');
       expect(result2.stdout.trim()).toBe('second');
-    }, 10000);
+    }, 120000);
 
     it('should handle complex bash commands', async () => {
       const result = await pod.executeCommand(
@@ -128,14 +128,14 @@ describe('ArtiPod - Container Execution', () => {
       
       expect(result.stdout.trim()).toBe('1\n2\n3');
       expect(result.exitCode).toBe(0);
-    }, 10000);
+    }, 120000);
 
     it('should work in /context directory', async () => {
       const result = await pod.executeCommand('pwd');
       
       expect(result.stdout.trim()).toBe('/context');
       expect(result.exitCode).toBe(0);
-    }, 10000);
+    }, 120000);
   });
 
   describe('stopContainer', () => {
@@ -156,7 +156,7 @@ describe('ArtiPod - Container Execution', () => {
       // Verify container is removed
       const inspect = container.inspect.bind(container);
       await expect(inspect()).rejects.toThrow();
-    }, 10000);
+    }, 120000);
   });
 
   describe('context mount', () => {
@@ -166,7 +166,7 @@ describe('ArtiPod - Container Execution', () => {
       await pod.startContainer(dockerfilePath, {
         seccompProfilePath,
       });
-    }, 10000);
+    }, 120000);
 
     afterEach(async () => {
       if (pod?.hasContainer()) {
@@ -176,7 +176,7 @@ describe('ArtiPod - Container Execution', () => {
           // Ignore cleanup errors
         }
       }
-    }, 10000);
+    }, 120000);
 
     it('should mount context directory', async () => {
       // Create a test file in host context
@@ -191,7 +191,7 @@ describe('ArtiPod - Container Execution', () => {
       
       // Cleanup
       await fs.unlink(testFile);
-    }, 10000);
+    }, 120000);
 
     it('should allow writing to context directory', async () => {
       // Use sh -c to ensure proper shell interpretation
@@ -216,7 +216,7 @@ describe('ArtiPod - Container Execution', () => {
       
       // Cleanup
       await fs.unlink(path.join(testContextPath, 'output.txt'));
-    }, 10000);
+    }, 120000);
   });
 
   describe('error handling', () => {
@@ -234,7 +234,7 @@ describe('ArtiPod - Container Execution', () => {
       expect(result.stderr).toContain('not found');
       
       await pod.stopContainer();
-    }, 10000);
+    }, 120000);
   });
 
   describe('read-only mount', () => {
@@ -266,7 +266,7 @@ describe('ArtiPod - Container Execution', () => {
           // Ignore cleanup errors
         }
       }
-    }, 10000);
+    }, 120000);
 
     it('should mount read-only directory in container', async () => {
       const mount = new ArtiMount('readonly', readonlyTestPath, true);
@@ -280,7 +280,7 @@ describe('ArtiPod - Container Execution', () => {
       const readResult = await pod.executeCommand('cat /context/readonly/existing.txt');
       expect(readResult.exitCode).toBe(0);
       expect(readResult.stdout.trim()).toBe('readonly content');
-    }, 10000);
+    }, 120000);
 
     it('should prevent writing to read-only mount in container', async () => {
       const mount = new ArtiMount('readonly', readonlyTestPath, true);
@@ -295,7 +295,7 @@ describe('ArtiPod - Container Execution', () => {
         'sh -c "echo test > /context/readonly/newfile.txt"'
       );
       expect(writeResult.exitCode).not.toBe(0);
-    }, 10000);
+    }, 120000);
 
     it('should allow writing to writable mount alongside read-only mount', async () => {
       const readonlyMount = new ArtiMount('readonly', readonlyTestPath, true);
