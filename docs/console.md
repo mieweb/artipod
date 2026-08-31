@@ -1,6 +1,6 @@
 # The Ctrl+~ console module
 
-> **Status: 🔮 design.** Depends on `/host` controllers and `pod.events` (plan Phase 2); packaged as `@artipod/core/console`. Lock/login UX depends on Phase 6.5.
+> **Status: core ✅** — shipped as `@artipod/core/console`: builtin renderer, Ctrl+`/Ctrl+~ hotkey, read-only mode, approval prompts, SSR no-op, pod-locked hints. The shipped API takes `{ sandbox, events, … }`; the `pod`/`getPod` option, `position`, the `xterm` renderer, the script-tag build, and the full lock/login screen below are still 🔮.
 
 A drop-in, hotkey-summoned overlay terminal — the Quake console for web apps. Any application that hosts a pod gets a full artipod shell without building terminal UI.
 

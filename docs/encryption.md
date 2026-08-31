@@ -1,6 +1,6 @@
 # Encryption, keys, and offline authority
 
-> **Status: 🔮 design** (normative). Implemented in plan Phases 4 (formats) and 6.5 (keyring/leases/grants). Builds on the envelope-encryption discussion in [horner/artipod-sync#1](https://github.com/horner/artipod-sync/issues/1).
+> **Status: ✅ implemented** (normative) in plan Phases 4 (formats) and 6.5 (keyring/leases/grants) — see `@artipod/core/oci` (chunked-AEAD cipher) and `@artipod/core/manager` (keyring, authority, grants, locker). Builds on the envelope-encryption discussion in [horner/artipod-sync#1](https://github.com/horner/artipod-sync/issues/1).
 
 **The principle everything follows from:** disk only ever holds *ciphertext + wrapped keys*; usable keys exist only in a memory keyring, on a lease with a TTL. "Access expires" is not something done to the data — it is the key evaporating. Login (or a grant, or a delegated authority) restores the key, never rewrites the data.
 

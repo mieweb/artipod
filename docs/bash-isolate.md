@@ -1,6 +1,6 @@
 # The bash isolate (browser and server)
 
-> **Status: ✅ shipped** in artipod-sync (`lib/sandbox/`), moving to `@artipod/core/sandbox` in plan Phase 2. Facts below are source-verified against just-bash and pinned by tests — keep the tests when moving.
+> **Status: ✅ shipped** as `@artipod/core/sandbox` (moved from artipod-sync in plan Phase 2). Facts below are source-verified against just-bash and pinned by tests.
 
 The isolate is [just-bash](https://github.com/vercel-labs/just-bash) — a real bash interpreter in TypeScript (pipes, redirects, globs, vars, loops, ~90 coreutils) over a pluggable `IFileSystem` — bound to the pod's ZenFS graph through our adapter. It is the *same interpreter* in the browser, in Node server sessions, and under agents.
 
@@ -9,7 +9,7 @@ The isolate is [just-bash](https://github.com/vercel-labs/just-bash) — a real 
 ```
 createSandbox({ zfs, … }) → Sandbox { exec(), complete(), getCwd(), getEnv(), fs }
    ├─ ZenFsAdapter  — full IFileSystem contract over ZenFS (async-only; node-shaped errors pass through)
-   ├─ custom commands (trusted, host-side): git, edit, notes, mount/umount, lsmod/modinfo/modprobe, artipod 🔮
+   ├─ custom commands (trusted, host-side): git, edit, notes, mount/umount, lsmod/modinfo/modprobe, artipod ✅
    └─ /proc lifecycle: refresh before each exec, reconcile rw providers after
 ```
 

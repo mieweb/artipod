@@ -1,6 +1,6 @@
 # Browser implementation
 
-> **Status: mostly ✅** — everything in "Storage" through "UI surfaces" ships in artipod-sync today and moves into `@artipod/core` in plan Phase 2. Ingest API and devices are 🔮 (Phase 7); encrypted stores are 🔮 (Phases 4/6.5).
+> **Status: mostly ✅** — storage, the pod graph, lazy hydration, and the UI surfaces ship in `@artipod/core` today (plan Phases 2–6.6), encrypted stores included. Ingest API and devices are 🔮 (Phase 7).
 
 The browser is a first-class artipod runtime, not a viewer: full bash, git, agents, storage, and (by design) OCI versioning run in-page, offline.
 
@@ -19,10 +19,10 @@ ZenFS is the single filesystem; every consumer (shell, git, tools, editor, tree)
 - **Quota**: surface `navigator.storage.estimate()`; large OCI blobs prefer OPFS streaming when available 🔮.
 - Model weights (local ONNX agents) live in OPFS `artipod-models/`, a **sibling** of the pod fs — invisible to agents and never inside any pod.
 
-## The pod graph 🔮 (Phases 3–5)
+## The pod graph ✅ (Phases 3–5)
 
 ```
-OCI blobs (ciphertext at rest once 6.5 lands)
+OCI blobs (ciphertext at rest when encryption is enabled)
   → OciLayerFS (one layer, ro) → OciViewFS (ordered layers, whiteouts)
     → ZenFS CopyOnWrite upper (the workspace)
       → IndexedDB / OPFS
@@ -30,7 +30,7 @@ OCI blobs (ciphertext at rest once 6.5 lands)
 
 Snapshots are references (manifest + upper generation), so agent-turn auto-checkpointing is cheap and captures *everything*, including shell side effects — unlike editor-level checkpoint systems that shadow-copy only tool-edited files.
 
-## Lazy hydration 🔮 (Phase 6.6)
+## Lazy hydration ✅ (Phase 6.6)
 
 **The OCI layer is the unit of hydration.** Pods materialize at `refs` · `index` · `full`. At `index`, the pull transfers only the manifest plus small published layer-index artifacts — the *complete* namespace lists and stats from the indexes, while every file in a lazy layer is a placeholder. Opening a file downloads its winning layer's whole blob (digest-verified, cached as one OPFS file), then serves from cache. Driving case: one pod per patient on today's schedule — notes/FHIR in eager layers, each DICOM study grouped into its own lazy layer at commit time (`artipod commit --layer-group 'dicom/**'`, annotation `org.artipod.hydration: lazy`).
 

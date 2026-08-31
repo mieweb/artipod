@@ -160,6 +160,14 @@ export async function materializeImage(options: MaterializeOptions): Promise<{ a
     const dest = `${at}${path}`;
     if (entry.type === 'dir') {
       await zfs.promises.mkdir(dest, { recursive: true });
+    } else if (entry.type === 'symlink' && entry.linkTarget) {
+      await zfs.promises.mkdir(dest.slice(0, dest.lastIndexOf('/')) || '/', { recursive: true });
+      try {
+        await (zfs.promises as { symlink?: (target: string, path: string) => Promise<void> }).symlink?.(entry.linkTarget, dest);
+        files++;
+      } catch {
+        // backend without symlink support — the entry stays absent
+      }
     } else if (entry.type === 'file' || entry.type === 'hardlink') {
       const source = entry.type === 'hardlink' && entry.linkTarget ? merged.entries.get(entry.linkTarget) : entry;
       const c = source && source.type === 'file' ? source : entry;
