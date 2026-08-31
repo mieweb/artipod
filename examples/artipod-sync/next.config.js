@@ -38,6 +38,9 @@ class SkipStructChunkMinifyPlugin {
 const nextConfig = {
     // Server routes load these natively (ESM) — webpack's server bundle
     // breaks ZenFS class construction ("ed is not a constructor").
+    // NOTE: this matcher only works because .npmrc sets install-links=true:
+    // a file: SYMLINK for @artipod/core would resolve its @zenfs/core outside
+    // the app's node_modules and Next would silently bundle that copy.
     experimental: {
         serverComponentsExternalPackages: ['@zenfs/core', 'just-bash', 'isomorphic-git'],
     },

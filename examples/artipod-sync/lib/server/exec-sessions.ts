@@ -1,94 +1,20 @@
 /**
- * Per-session server sandboxes over one global in-memory ZenFS.
- *
- * Each session gets /sessions/<id> and a bindContext() chroot view, so git
- * works server-side identically to the browser while sessions stay mutually
- * invisible. This is just-bash's "untrusted script author" scenario: the
- * interpreter is the sandbox; we add the hardened limit profile, a per-fs
- * byte cap, an in-flight guard and TTL eviction on top.
+ * Per-session server sandboxes — a thin policy wrapper over
+ * @artipod/core/manager's PodSessionHost (plan Phase 6, Decision #2: the
+ * generic pod/session hosting lives in the package; THIS deployment's
+ * numbers and HTTP shape live here).
  */
-import { createSandbox } from '../sandbox';
-import type { Sandbox, ZenFsLike } from '../sandbox/types';
+import { PodSessionHost, SESSION_ID_PATTERN } from '@artipod/core/manager';
 
-export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+export { SESSION_ID_PATTERN };
 export const MAX_COMMAND_LENGTH = 100_000;
 
-const SESSION_TTL_MS = 15 * 60 * 1000;
-const MAX_SESSIONS = 50;
-const EXEC_TIMEOUT_MS = 30_000;
-const MAX_FS_BYTES = 256 * 1024 * 1024;
-
-interface SessionEntry {
-  sandbox: Sandbox;
-  lastUsed: number;
-  busy: boolean;
-}
-
-const sessions = new Map<string, SessionEntry>();
-let fsReady: Promise<void> | null = null;
-
-async function ensureGlobalFs(): Promise<void> {
-  if (!fsReady) {
-    fsReady = (async () => {
-      const { configure, InMemory } = await import('@zenfs/core');
-      try {
-        await configure({ mounts: { '/': InMemory } });
-      } catch (e) {
-        if (!(e instanceof Error) || !e.message.includes('Mount point is already in use')) throw e;
-      }
-    })();
-  }
-  return fsReady;
-}
-
-export function evictExpired(now = Date.now()): void {
-  sessions.forEach((entry, id) => {
-    if (now - entry.lastUsed > SESSION_TTL_MS) sessions.delete(id);
-  });
-}
-
-export type AcquireResult =
-  | { ok: true; entry: SessionEntry }
-  | { ok: false; status: number; message: string };
-
-async function acquireSession(sessionId: string): Promise<AcquireResult> {
-  await ensureGlobalFs();
-  evictExpired();
-
-  let entry = sessions.get(sessionId);
-  if (!entry) {
-    if (sessions.size >= MAX_SESSIONS) {
-      return { ok: false, status: 503, message: 'session limit reached, try again later' };
-    }
-    const core = await import('@zenfs/core');
-    const root = `/sessions/${sessionId}`;
-    await core.fs.promises.mkdir(`${root}/repo`, { recursive: true });
-    // another concurrent request may have created the session while we awaited
-    const existing = sessions.get(sessionId);
-    if (existing) {
-      entry = existing;
-    } else {
-      const ctx = core.bindContext({ root });
-      entry = {
-        sandbox: createSandbox({
-          zfs: ctx.fs as unknown as ZenFsLike,
-          executionLimitProfile: 'hardened',
-          executionLimits: { maxFileSystemBytes: MAX_FS_BYTES },
-        }),
-        lastUsed: Date.now(),
-        busy: false,
-      };
-      sessions.set(sessionId, entry);
-    }
-  }
-  if (entry.busy) {
-    return { ok: false, status: 429, message: 'session is busy with another command' };
-  }
-  // Reserve synchronously — no await between the check and this line.
-  entry.busy = true;
-  entry.lastUsed = Date.now();
-  return { ok: true, entry };
-}
+const host = new PodSessionHost({
+  ttlMs: 15 * 60 * 1000,
+  maxSessions: 50,
+  execTimeoutMs: 30_000,
+  maxFsBytes: 256 * 1024 * 1024,
+});
 
 export interface ExecRequestResult {
   status: number;
@@ -109,34 +35,21 @@ export async function execInSession(sessionId: unknown, command: unknown): Promi
     return { status: 413, body: { error: 'command too long' } };
   }
 
-  const acquired = await acquireSession(sessionId);
-  if (!acquired.ok) {
-    return { status: acquired.status, body: { error: acquired.message } };
+  const result = await host.exec(sessionId, command);
+  if (!result.ok) {
+    return { status: result.status, body: { error: result.message } };
   }
-
-  const { entry } = acquired;
-  // acquireSession already reserved the busy flag for us.
-  try {
-    const result = await entry.sandbox.exec(command, {
-      signal: AbortSignal.timeout(EXEC_TIMEOUT_MS),
-    });
-    return {
-      status: 200,
-      body: { ...result, cwd: entry.sandbox.getCwd() },
-    };
-  } catch (e) {
-    return { status: 500, body: { error: (e as Error).message } };
-  } finally {
-    entry.busy = false;
-    entry.lastUsed = Date.now();
-  }
+  return {
+    status: 200,
+    body: { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cwd: result.cwd },
+  };
 }
 
 export function sessionCount(): number {
-  return sessions.size;
+  return host.size;
 }
 
 /** Test helper. */
 export function resetSessions(): void {
-  sessions.clear();
+  host.reset();
 }
