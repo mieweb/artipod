@@ -441,6 +441,7 @@ export async function createZenFsPod(
             remote: options.sync?.remote,
             authority: authorityContext,
             hydrator,
+            pushBasis,
           }),
           ...(options.extraCommands ?? []),
         ],

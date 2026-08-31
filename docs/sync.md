@@ -1,6 +1,6 @@
 # Folder sync & convergence
 
-> **Status**: publish / lazy open / fetch-on-read / bidirectional write-back ✅ (sync-demo-plan Phases C–E, shipped in this repo and live in [examples/artipod-sync](../examples/artipod-sync)); per-path merge (`mergeHeads`, `mergers`) 🔮 (Phase F). Editing rule: when implementation diverges from this doc, fix the doc in the same PR.
+> **Status**: publish / lazy open / fetch-on-read / bidirectional write-back / per-path merge (`mergeHeads`, D9 `mergers`, merge-on-push) ✅ (sync-demo-plan Phases C–F, shipped in this repo and live in [examples/artipod-sync](../examples/artipod-sync)). Editing rule: when implementation diverges from this doc, fix the doc in the same PR.
 
 ## The model
 

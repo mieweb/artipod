@@ -187,11 +187,20 @@ export async function pushOverlay(
 ): Promise<OverlayPushResult> {
   const head = await buildOverlayHead(options);
   if (!head.changed) {
-    // Even an unchanged head may not have reached the remote yet (a prior
-    // push could have failed) — anti-entropy makes the retry free.
+    // Nothing new locally. Retry the transfer only when the remote is
+    // missing or strictly behind us — pushing an unchanged head at a
+    // remote that MOVED would regress it (merge-on-push protects wired
+    // remotes, but plain stores take putRef literally).
     const remoteRef = await options.remote.getRef(options.ref);
     if (remoteRef?.manifestDigest === head.manifestDigest) {
       return { pushed: false, manifestDigest: head.manifestDigest, overlayLayers: head.overlayLayers };
+    }
+    if (remoteRef) {
+      const { isAncestor } = await import('./merge.js');
+      const behind = await isAncestor(options.store, remoteRef.manifestDigest, head.manifestDigest);
+      if (!behind) {
+        return { pushed: false, manifestDigest: head.manifestDigest, overlayLayers: head.overlayLayers };
+      }
     }
   }
   const sync = await syncRef(options.store, options.remote, options.ref);

@@ -28,7 +28,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): sync phas
 | C — folder → artipod publish (per-file layers) | `sync-c-publish` | done | [#49](https://github.com/mieweb/artipod/pull/49) |
 | D — browser opens a basis lazily; fetch-on-read | `sync-d-lazy-open` | done | [#50](https://github.com/mieweb/artipod/pull/50) |
 | E — write-back: auto-push layers, server materializes | `sync-e-writeback` | done | [#51](https://github.com/mieweb/artipod/pull/51) |
-| F — CRDT convergence: per-file LWW merge | `sync-f-crdt` | todo | |
+| F — CRDT convergence: per-file LWW merge | `sync-f-crdt` | done | [#54](https://github.com/mieweb/artipod/pull/54) |
 
 ## 1. Goal — the demo scenario (north star)
 
@@ -251,15 +251,21 @@ Formal shape: pod state = join-semilattice of
   - 2026-08-31 — LIVE both directions (:3599, /tmp/demo-folder published via route): browser `echo hello-from-browser > sync-note.md && rm browser.md` → ~2 s → sync-note.md ON DISK, browser.md DELETED on disk; `echo server-edit v2 >> README.md` + republish (3 layers, 2 reused) → browser re-open pulls 2528 bytes of metadata → `tail -1 README.md` = server-edit v2, sync-note.md intact.
 
 ### Phase F — CRDT merge (`sync-f-crdt`)
-- [ ] `mergeHeads` per §3.6 (ancestor walk, per-path LWW, canonical ordering, parents=[A,B])
-- [ ] `mergers` option (D9): glob → content resolver, merged bytes become a new layer; property tests parameterized over LWW + a toy union merger (no yjs in core)
-- [ ] docs/sync.md: the sync model + "Composing with Yjs (YORM)" (when LWW is safe, when the merger hook is needed, tempo/origin guidance)
-- [ ] Property tests: commutative/idempotent/associative by manifest digest
-- [ ] Server merge-on-push (non-descendant heads), browser merge-on-pull; fast-forward preserved
-- [ ] Concurrent-edit e2e (disjoint files → union; same file → deterministic winner; loser recoverable via parent manifest mount)
-- [ ] Demo polish: run the full §1 paragraph live; record in worklog; update `docs/` status banners + README
+- [x] `mergeHeads` per §3.6 (ancestor walk, per-path LWW, canonical ordering, parents=[A,B])
+- [x] `mergers` option (D9): glob → content resolver, merged bytes become a new layer; property tests parameterized over LWW + a toy union merger (no yjs in core)
+- [x] docs/sync.md: the sync model + "Composing with Yjs (YORM)" (when LWW is safe, when the merger hook is needed, tempo/origin guidance) — landed early via #53; F banner flipped ✅ here
+- [x] Property tests: commutative/idempotent/associative by manifest digest
+- [x] Server merge-on-push (non-descendant heads), browser merge-on-pull; fast-forward preserved
+- [x] Concurrent-edit e2e (disjoint files → union; same file → deterministic winner; loser recoverable via parent manifest mount)
+- [x] Demo polish: run the full §1 paragraph live; record in worklog; update docs status banners + README
 - **Done when**: full scenario green scripted + live; docs updated in the same PR (docs-as-spec).
 - Worklog:
+  - 2026-08-31 — src/manager/merge.ts: `isAncestor` (parents-DAG BFS, walk cap), nearest common ancestor by BFS depth, `loadHeadView` (files → PathRegister w/ descriptor+diffId+clock; whiteout stamps collected from RAW layer entries — mergeLayerEntries applies them away), `mergeHeads` (fast-forward when contained; else three-way per path). Views build from published index artifacts → merging two lazy heads moves no layer bytes except content merges/group splits. Winners reuse per-file layers zero-copy; content merges and multi-file-layer winners become fresh per-file layers. Manifest: canonical path order, sorted parents, actor `merge` — byte-identical for (A,B) and (B,A).
+  - 2026-08-31 — symmetry hunt (property tests caught both): (1) unchanged files reference the SAME blob from both heads but each head's DESCRIPTOR carries its own actor annotation — picking side A's broke commutativity; canonical `newerOf` picks now. (2) `**/x` globs can't match root-level `x` (the `**/` needs a literal slash) — mergers also try the suffix form, same as publish ignores. Test-fixture lesson: re-stamping unchanged files to the new time makes them "edits" — stamp only changed paths.
+  - 2026-08-31 — deletion clocks: whiteout entries carry stamps (overlay rm); publishDirectory absence is unclocked → rule: untouched-vs-delete deletes, edit survives an unclocked delete, clocked whiteout resolves by LWW. Content mergers see only file-vs-file; file-vs-whiteout stays LWW (recorded in §3.6).
+  - 2026-08-31 — wiring: `createPodStoreHandler` merges on push by default (`merge: false` restores E overwrite; MergeOptions adds D9 mergers); stale pushes keep the newer head; `onRefPut` fires with the FINAL digest so materialize writes the merged state. PUT refs now returns `{manifestDigest, merged}` (HttpPodStore ignores bodies — compatible). Browser side: `artipod open` pushes diverged overlay changes FIRST (merge-on-push joins), then pulls the merged head — the "merge-on-pull" checklist item lands via the push side (deviation noted: local mergeHeads is exported and isomorphic; the demo routes divergence through the manager). pushOverlay regression found by the E suite: the unchanged-head anti-entropy retry would REGRESS a moved dumb-store remote — now only retries when the remote is missing or strictly behind (ancestry-checked).
+  - 2026-08-31 — suites: merge.test 6 (fast-forward, disjoint union + commutativity by manifest digest + descends-from-both, same-file LWW + loser reachable, associativity by semantic state — parents annotations legitimately differ across orders, D9 union merger, deletion clocks), handler merge-on-push + stale + merge:false, §1-finale e2e (handler-wired remote store: browser edit + concurrent server republish → merged head descends from v0+server, folder gets both, browser re-open keeps its own edit). 423 root / 7 app tests, lint 0, build 0.
+  - 2026-08-31 — LIVE §1 paragraph (:3599, /tmp/f3): picker → lazy open (`artipod files` all remote) → `cat notes.md` fetch-on-read → browser `echo from-browser > browser-note.md` typed, THEN server `README.md` edit + curl republish INSIDE the 2 s debounce window (true divergence) → auto-push merged by the handler → disk has BOTH (browser-note.md + welcome v2), browser re-open prints both, notes.md STILL lazy through the merge ("1 file(s) still remote"). The sync layer is formally a CRDT — demonstrated.
 
 ## 5. Risks
 
