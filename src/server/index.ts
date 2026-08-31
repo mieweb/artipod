@@ -32,3 +32,13 @@ export {
   type ExecSessionHandlerOptions,
 } from './exec-handler.js';
 export { createRegistryRelayHandler, type RegistryRelayHandlerOptions } from './registry-relay.js';
+export {
+  ANNOTATION_ACTOR,
+  ANNOTATION_MTIME,
+  ANNOTATION_PARENTS,
+  ANNOTATION_PATH,
+  DEFAULT_PUBLISH_IGNORE,
+  publishDirectory,
+  type PublishDirectoryOptions,
+  type PublishResult,
+} from './folder.js';

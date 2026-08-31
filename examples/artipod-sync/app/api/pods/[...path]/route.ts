@@ -1,6 +1,5 @@
-import { nodePodFs } from '@artipod/core';
-import { OciLayoutPodStore } from '@artipod/core/manager';
 import { createPodStoreHandler, type PathHandler } from '@artipod/core/server';
+import { getPodStore } from '@/lib/pods-store';
 
 /**
  * /api/pods — this deployment's pod manager sync surface (plan Phase 6,
@@ -12,16 +11,11 @@ import { createPodStoreHandler, type PathHandler } from '@artipod/core/server';
  */
 export const dynamic = 'force-dynamic';
 
-const storeDir = process.env.ARTIPOD_STORE_DIR ?? '.artipod-store';
 let handlerPromise: Promise<PathHandler> | null = null;
 
 function getHandler(): Promise<PathHandler> {
   if (!handlerPromise) {
-    handlerPromise = (async () => {
-      const store = new OciLayoutPodStore(nodePodFs(), storeDir);
-      await store.init();
-      return createPodStoreHandler({ store });
-    })();
+    handlerPromise = getPodStore().then((store) => createPodStoreHandler({ store }));
   }
   return handlerPromise;
 }

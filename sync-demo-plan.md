@@ -25,7 +25,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): sync phas
 |---|---|---|---|
 | A — repo consolidation (move artipod-sync in, keep history) | `sync-a-move` | done | [#47](https://github.com/mieweb/artipod/pull/47) |
 | B — `@artipod/core/server` subpath (the heft leaves the app) | `sync-b-server` | done | [#48](https://github.com/mieweb/artipod/pull/48) |
-| C — folder → artipod publish (per-file layers) | `sync-c-publish` | todo | |
+| C — folder → artipod publish (per-file layers) | `sync-c-publish` | done | [#49](https://github.com/mieweb/artipod/pull/49) |
 | D — browser opens a basis lazily; fetch-on-read | `sync-d-lazy-open` | todo | |
 | E — write-back: auto-push layers, server materializes | `sync-e-writeback` | todo | |
 | F — CRDT convergence: per-file LWW merge | `sync-f-crdt` | todo | |
@@ -204,13 +204,18 @@ Formal shape: pod state = join-semilattice of
   - 2026-08-31 — verify: root `npx tsc --noEmit` clean, 398 tests, lint 0, build 0. App: 4 tests, lint 0, `next build` 0. Live smoke vs `next start` on :3599 (tmp store): PUT blob 201 → HEAD 200 → GET 200 → GET Range bytes=6- → **206** with the byte-6 slice → PUT ref 201 (manifest-first held) → GET refs lists it → blob present under /tmp/smoke-store/blobs/sha256/. Terminal-simplifier gotcha: a dropped `cd` made npx offer to download next@16 — use `npm --prefix` for app commands.
 
 ### Phase C — folder publish (`sync-c-publish`)
-- [ ] `publishDirectory` per §3.3: per-file layers + per-layer published indexes + LWW annotations + parents chain
-- [ ] Determinism + CAS-reuse tests (republish unchanged tree ⇒ 0 new blobs; touch one file ⇒ 1 new layer)
-- [ ] `--group` globs; ignore defaults; symlink skip+warn
-- [ ] Example: `POST /api/pods/publish` behind `ARTIPOD_PUBLISH_ROOTS` + `scripts/publish.mjs`
-- [ ] Live: publish a real docs folder, `skopeo inspect` the layout store shows per-file layers
+- [x] `publishDirectory` per §3.3: per-file layers + per-layer published indexes + LWW annotations + parents chain
+- [x] Determinism + CAS-reuse tests (republish unchanged tree ⇒ 0 new blobs; touch one file ⇒ 1 new layer)
+- [x] `--group` globs; ignore defaults; symlink skip+warn
+- [x] Example: `POST /api/pods/publish` behind `ARTIPOD_PUBLISH_ROOTS` + `scripts/publish.mjs`
+- [x] Live: publish a real docs folder, `skopeo inspect` the layout store shows per-file layers
 - **Done when**: publish → browser `artipod image pull --index` lists the full tree with zero layer fetches (existing index-pull path).
 - Worklog:
+  - 2026-08-31 — src/server/folder.ts `publishDirectory(store, dir, ref, {actor, group, ignore})`: sorted walk (canonical order = deterministic diff_ids), one tar+gzip layer per file (or per `group` glob, first match wins), per-layer published index artifacts, annotations lazy/path/mtime/actor (`ANNOTATION_MTIME`+`ANNOTATION_ACTOR` = the D8 LWW clock), `org.artipod.parents` on the manifest. **Unchanged-tree republish is a full no-op** (same layers+config as head ⇒ head returned, ref untouched — otherwise every cron republish would grow the DAG with parents-only manifests). CAS reuse via hasBlob short-circuit. `ImageManifest` gained optional `annotations`. Symlinks/empty dirs skip+warn; OciViewFS already synthesizes implicit parent dirs, so no skeleton layer needed.
+  - 2026-08-31 — determinism note: tar entry mtime = file mtime (it IS the LWW clock); gzip determinism rides CompressionStream/zlib MTIME=0 (fflate fallback would stamp — unreachable on node ≥18, commented).
+  - 2026-08-31 — folder.test.ts (4): annotations/per-file layers; no-op republish + one-touch ⇒ 1 new layer + parents link; groups/ignores/symlink warn; **done-when e2e**: publish → pod w/ `sync.remote`+`hydration` → `artipod image pull folder/demo:latest --index` → mount + `find` lists all files while the WAN meter shows ZERO layer-blob reads. Gotchas: index entry paths are pod-absolute (`/docs/a.md`); verb order is `image pull <ref> --index`; the pull verb needs the `hydration` pod option.
+  - 2026-08-31 — app: lib/pods-store.ts singleton shared by `[...path]` + new `POST /api/pods/publish` (realpath + prefix check under `ARTIPOD_PUBLISH_ROOTS`, empty = disabled; ref regex); `scripts/publish.mjs` + `npm run publish:folder`. tests/routes.test.ts → 6 (publish inside/outside roots, disabled-by-default; store dir pinned at module scope before route imports — the singleton reads env once).
+  - 2026-08-31 — verify: root 402 tests / build 0 / tsc clean; app 6 tests / lint 0 / build 0. Live: published repo `docs/` → "7 layers (0 reused, 22527 new bytes)", immediate republish → "unchanged"; store = `oci-layout` + `index.json` (ref annotated) + 16 blobs (7 layers + 7 indexes + config + manifest). (skopeo not installed locally — layout verified with ls + index.json inspection; the format IS the skopeo dir format.) npm gotcha: `npm --prefix <dir> exec` does NOT chdir (ran the root vitest config) — use `npm --prefix <dir> run`.
 
 ### Phase D — lazy open + fetch-on-read (`sync-d-lazy-open`)
 - [ ] `artipod open <ref>` verb + `sync.basis` option: index pull → lazy view → CoW upper rw mount
