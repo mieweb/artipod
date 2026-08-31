@@ -35,5 +35,5 @@ artipod is a TypeScript module for managing AI-aware file storage with ArtiPods 
 - `src/` - Main source code
 - `src/tools/` - vscode-copilot-chat compatible tool implementations
 - `src/prompts/` - AI prompt templates
-- `examples/` - Example applications
+- `examples/` - Example applications (`examples/artipod-sync` is the hosted Next.js demo — it has its own `AGENTS.md` with app-specific constraints and the sample-site deployment runbook)
 - `container/` - Docker container configuration

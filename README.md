@@ -2,7 +2,7 @@
 
 **A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize — in the browser and on Linux.**
 
-> **Status: design + convergence in progress.** This README describes the target `@artipod/core` system. The Node/Docker core and the browser sandbox exist today (in this repo and in [artipod-sync](https://github.com/horner/artipod-sync)); their merge and the OCI/encryption layers are tracked phase-by-phase in [artipod-layer-plan.md](artipod-layer-plan.md). Sections are marked ✅ (shipped somewhere today) or 🔮 (design). Previous implementation-state READMEs are archived in `attic/` ([v0.1](attic/v0.1-node.README.md), [v0.3](attic/v0.3-node.README.md) — the v0.3 one documents the full current Node/Docker API, including podman support, read-only mounts, and the main mount).
+> **Status: design + convergence in progress.** This README describes the target `@artipod/core` system. The Node/Docker core and the browser sandbox exist today (in this repo — the browser app lives at [examples/artipod-sync](examples/artipod-sync)); their merge and the OCI/encryption layers are tracked phase-by-phase in [artipod-layer-plan.md](artipod-layer-plan.md). Sections are marked ✅ (shipped somewhere today) or 🔮 (design). Previous implementation-state READMEs are archived in `attic/` ([v0.1](attic/v0.1-node.README.md), [v0.3](attic/v0.3-node.README.md) — the v0.3 one documents the full current Node/Docker API, including podman support, read-only mounts, and the main mount).
 
 ## What is an artipod?
 
@@ -24,7 +24,7 @@ Three consumer surfaces, one layer:
 
 ## Quick starts
 
-### Browser pod with a shell (✅ shipped in artipod-sync today)
+### Browser pod with a shell (✅ shipped in examples/artipod-sync today)
 
 ```ts
 import { initFileSystem, createSandbox } from '@artipod/core/sandbox';
@@ -50,7 +50,7 @@ const out = await pod.executeCommand('grep -r TODO /context/src | wc -l');
 
 See [docs/linux.md](docs/linux.md) for the full server story (realizers, OCI-layout store, systemd).
 
-### An agent working inside a pod (✅ loop shipped in artipod-sync)
+### An agent working inside a pod (✅ loop shipped in examples/artipod-sync)
 
 ```ts
 import { createToolRegistry } from '@artipod/core/tools';
