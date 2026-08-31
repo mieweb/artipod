@@ -149,6 +149,8 @@ export interface ZenFsPodOptions
   cwd?: string;
   /** OCI layer: transport for `artipod image pull` (store always available). */
   oci?: { transport?: OciTransport };
+  /** Manager sync: the remote PodStore push/pull/clone talk to. */
+  sync?: { remote?: import('../manager/pod-store.js').PodStore };
 }
 
 export interface ZenFsPod {
@@ -239,7 +241,14 @@ export async function createZenFsPod(
         cwd: defaultCwd,
         onEdit: options.onEdit,
         extraCommands: [
-          makeArtipodCommand({ store: ociStore, zfs, transport: options.oci?.transport, events, snapshots }),
+          makeArtipodCommand({
+            store: ociStore,
+            zfs,
+            transport: options.oci?.transport,
+            events,
+            snapshots,
+            remote: options.sync?.remote,
+          }),
           ...(options.extraCommands ?? []),
         ],
         hooks: options.hooks,

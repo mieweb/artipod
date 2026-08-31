@@ -93,6 +93,14 @@ export async function pullImage(options: PullOptions): Promise<PullResult> {
 
   const layers: PulledLayer[] = [];
   for (const [i, layer] of manifest.layers.entries()) {
+    const knownDiffId = diffIds[i] && isDigest(diffIds[i]) ? (diffIds[i] as Digest) : undefined;
+    // Anti-entropy skip: digest-addressed content already here never re-fetches.
+    if (knownDiffId && (await store.hasBlob(layer.digest)) && (await store.hasUncompressed(knownDiffId))) {
+      const entryCount = (await store.getLayerIndex(knownDiffId)).entries.length;
+      layers.push({ digest: layer.digest, diffId: knownDiffId, size: layer.size, entryCount });
+      onProgress?.(`layer ${i + 1}/${manifest.layers.length}: already present, skipped`);
+      continue;
+    }
     onProgress?.(`layer ${i + 1}/${manifest.layers.length}: ${layer.digest.slice(0, 19)}… (${layer.size} bytes)`);
     const compressed = await transport.fetchBlob(ref, layer.digest);
     await store.putBlob(compressed, layer.digest); // verifies vs descriptor digest — the tamper gate
