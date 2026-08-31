@@ -14,14 +14,8 @@ export type {
   ApprovalRequestEvent,
 } from './events.js';
 export { normalizePosix, resolvePosix, joinPosix, dirnamePosix, relativePosix } from './pathUtils.js';
-export { 
-  findAllContainers, 
-  removeContainer,
-  detectRuntime,
-  getCachedRuntimeInfo,
-  clearRuntimeCache,
-  isRuntimeAvailable,
-} from './docker/index.js';
+// Docker runtime VALUES live in '@artipod/core/docker' only — re-exporting
+// them here would drag dockerode (native ssh2) into browser bundles.
 export type {
   ArtiPodConfig,
   ArtiPodOptions,

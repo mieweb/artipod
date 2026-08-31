@@ -1,18 +1,14 @@
 import { ArtiMount } from './artimount.js';
-import {
-  ContainerHandle,
-  CommandResult,
-  ContainerOptions,
-  buildContainerImage,
-  createContainer,
-  executeCommandInContainer,
-  stopAndRemoveContainer,
-} from './docker/containerUtils.js';
+import type { ContainerHandle, CommandResult, ContainerOptions } from './docker/containerUtils.js';
 import { ArtiPodOptions } from './types.js';
 import type { PodFs } from './podfs.js';
 import { nodePodFs } from './nodePodFs.js';
 import { joinPosix } from './pathUtils.js';
 import { PodEvents } from './events.js';
+
+// The docker backend (dockerode → ssh2 native addon) must never enter
+// browser bundles: it is loaded on first container use, node-only.
+const dockerBackend = () => import('./docker/containerUtils.js');
 
 /** Isomorphic 16-byte hex id (WebCrypto exists in browsers and Node ≥20). */
 function randomHexId(): string {
@@ -454,13 +450,14 @@ export class ArtiPod {
     }
 
     // Build or reuse image
-    this.imageName = await buildContainerImage(dockerfilePath);
+    const docker = await dockerBackend();
+    this.imageName = await docker.buildContainerImage(dockerfilePath);
     
     // Store timeout for later use
     this.commandTimeout = options?.commandTimeout || 30000;
 
     // Create and start container
-    this.container = await createContainer(this.imageName, mounts, options);
+    this.container = await docker.createContainer(this.imageName, mounts, options);
     return this.container;
   }
 
@@ -472,7 +469,7 @@ export class ArtiPod {
       throw new Error('No running container for this pod');
     }
 
-    await stopAndRemoveContainer(this.container);
+    await (await dockerBackend()).stopAndRemoveContainer(this.container);
     this.container = undefined;
     this.imageName = undefined;
   }
@@ -491,7 +488,7 @@ export class ArtiPod {
     const effectiveTimeout = timeout ?? this.commandTimeout;
     this.events.emit('exec:start', { line: command });
     const startedAt = Date.now();
-    const result = await executeCommandInContainer(this.container, command, effectiveTimeout);
+    const result = await (await dockerBackend()).executeCommandInContainer(this.container, command, effectiveTimeout);
     this.events.emit('exec:end', { line: command, exitCode: result.exitCode, durationMs: Date.now() - startedAt });
     // Coarse by contract: a container command can touch any mount.
     this.events.emit('fs:changed', { origin: 'exec' });

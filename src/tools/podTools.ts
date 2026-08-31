@@ -6,7 +6,7 @@
  */
 
 import { ArtiPod } from '../artipod.js';
-import { CommandResult } from '../docker/containerUtils.js';
+import type { CommandResult } from '../docker/containerUtils.js';
 import {
   ToolHandler,
   ToolName,
