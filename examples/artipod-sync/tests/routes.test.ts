@@ -4,10 +4,15 @@
  * the generic behaviors are covered by package tests; here we pin THIS
  * app's wiring (policy env vars, store dir, session policy).
  */
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+// The pods store singleton (lib/pods-store) reads this once — pin it before
+// any route import.
+const STORE_DIR = mkdtempSync(join(tmpdir(), 'pods-store-'));
+process.env.ARTIPOD_STORE_DIR = STORE_DIR;
 
 describe('route wiring', () => {
   it('POST /api/exec runs a command in a session with this deployment policy', async () => {
@@ -41,11 +46,57 @@ describe('route wiring', () => {
   });
 
   it('serves the pods store from ARTIPOD_STORE_DIR', async () => {
-    process.env.ARTIPOD_STORE_DIR = mkdtempSync(join(tmpdir(), 'pods-store-'));
     const { GET } = await import('../app/api/pods/[...path]/route');
     const res = await GET(new Request('http://localhost/api/pods/refs'), { params: { path: ['refs'] } });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
+  });
+
+  it('publishes a folder under ARTIPOD_PUBLISH_ROOTS and refuses one outside', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'publish-root-'));
+    mkdirSync(join(root, 'site'));
+    writeFileSync(join(root, 'site', 'index.md'), '# hello\n');
+    process.env.ARTIPOD_PUBLISH_ROOTS = root;
+    try {
+      const { POST } = await import('../app/api/pods/publish/route');
+      const publish = await POST(
+        new Request('http://localhost/api/pods/publish', {
+          method: 'POST',
+          body: JSON.stringify({ dir: join(root, 'site'), ref: 'folder/site:latest' }),
+        }),
+      );
+      expect(publish.status).toBe(201);
+      const body = (await publish.json()) as { layers: number; unchanged: boolean };
+      expect(body.layers).toBe(1);
+
+      const outside = await POST(
+        new Request('http://localhost/api/pods/publish', {
+          method: 'POST',
+          body: JSON.stringify({ dir: tmpdir(), ref: 'folder/evil:latest' }),
+        }),
+      );
+      expect(outside.status).toBe(403);
+
+      // The published ref shows up on the sync surface (same store).
+      const { GET } = await import('../app/api/pods/[...path]/route');
+      const refs = await GET(new Request('http://localhost/api/pods/refs'), { params: { path: ['refs'] } });
+      const list = (await refs.json()) as { ref: string }[];
+      expect(list.some((r) => r.ref === 'folder/site:latest')).toBe(true);
+    } finally {
+      delete process.env.ARTIPOD_PUBLISH_ROOTS;
+    }
+  });
+
+  it('publish is disabled when ARTIPOD_PUBLISH_ROOTS is unset', async () => {
+    delete process.env.ARTIPOD_PUBLISH_ROOTS;
+    const { POST } = await import('../app/api/pods/publish/route');
+    const res = await POST(
+      new Request('http://localhost/api/pods/publish', {
+        method: 'POST',
+        body: JSON.stringify({ dir: tmpdir(), ref: 'folder/x' }),
+      }),
+    );
+    expect(res.status).toBe(403);
   });
 
   it('OCI relay stays deny-all without ARTIPOD_OCI_ALLOWED_HOSTS', async () => {
