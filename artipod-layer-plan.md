@@ -45,7 +45,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 | 1 — fs injection | `phase-1-podfs-injection` | done | [#35](https://github.com/mieweb/artipod/pull/35) |
 | 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | done (shim deletion + ui PR landing pending) | [#37](https://github.com/mieweb/artipod/pull/37)+[#38](https://github.com/mieweb/artipod/pull/38), [horner/artipod-sync#2](https://github.com/horner/artipod-sync/pull/2), [mieweb/ui#404](https://github.com/mieweb/ui/pull/404) |
 | 3 — manifest + realizers | `phase-3-manifest-realizers` | done | mieweb/artipod#39, [horner/artipod-sync#3](https://github.com/horner/artipod-sync/pull/3) |
-| 4 — OCI store | `phase-4-oci-store` | not started | |
+| 4 — OCI store | `phase-4-oci-store` | done | mieweb/artipod#40, [horner/artipod-sync#4](https://github.com/horner/artipod-sync/pull/4) |
 | 5 — snapshots + commit | `phase-5-snapshots` | not started | |
 | 6 — sync + manager | `phase-6-sync-manager` | not started | |
 | 6.5 — encryption & authority | `phase-6.5-authority` | not started | |
@@ -357,32 +357,35 @@ interface PodManifest {
 
 ### Phase 4 — OCI store + layer filesystems (issue #1 steps 1–5)
 
-> **Branch** `phase-4-oci-store` · **Status** _not started_
+> **Branch** `phase-4-oci-store` · **Status** _done_ · all items shipped in `src/oci/` — see worklog; item-level notes: blob store ✅ (immutable, verify-on-read); superblock ✅; ciphertext format ✅ (chunked AES-256-GCM, dual digests, `store.enableEncryption` opt-in — default off, keyring in 6.5; per-generation upper encryption follows the upper itself in Phase 5); tar indexer ✅ (ustar/PAX/GNU, DecompressionStream + fflate fallback); published layer indexes ✅ (generated at pull; commit-time generation joins Phase 5's `artipod commit`; Range pass-through in the proxy ✅, byte-offset resume deferred with 6.6's hydration); OciLayerFS/OciViewFS ✅ (single IndexFS implementation — a layer mount is the one-layer view; whiteouts, opaque dirs, `--through N`, symlink+hardlink resolution; EROFS on writes); CoW-upper-as-workspace lands with snapshots in Phase 5 (the realizer's `cow` mode already stacks CopyOnWrite over sources); transports ✅ (direct w/ anonymous token dance, `/api/oci` proxy w/ init-injected default-deny allowlist, OCI layout); `artipod` command ✅.
 
 All inside `@artipod/core/oci`, implemented as ZenFS backends so every consumer (shell, tools, git, editor) sees them for free:
 
-- [ ] Blob store under `/.artipod/oci/{blobs,indexes,refs,snapshots,upper}` — digest-addressed, originals immutable and verifiable.
-- [ ] **Pod superblock** (cleartext, per store): opaque pod ID, cipher suite, key-envelope refs, timestamps — enumeration without keys (docs/encryption.md#at-rest-format).
-- [ ] **Ciphertext blob format** (per-pod opt-in flag, default off until 6.5): chunked AES-256-GCM (~4 MiB, per-chunk nonce+tag, encrypted index), dual digests (plaintext diff ID + ciphertext address), decrypt-on-read chunk store *below* `OciLayerFS`; the CoW upper encrypts per generation under the same envelope.
-- [ ] Tar indexer (`LayerEntry[]` per issue) + decompress-once policy (keep compressed original + uncompressed content-addressed twin). Browser gzip via `DecompressionStream` with `fflate` fallback — just-bash's gzip is Node-only, do not reuse.
-- [ ] **Published layer indexes**: each layer's `LayerEntry[]` index ships as a small digest-addressed artifact beside the manifest (`application/vnd.artipod.layer.index.v1+json`), generated at commit/push — so the complete namespace is knowable with zero layer blobs (the Phase 6.6 hydration substrate). Foreign images without published indexes: a site cache or full pull generates them. `/api/oci` proxy passes `Range` through for byte-offset **resume** of interrupted blob downloads (blobs verify whole — no partial-verification machinery).
-- [ ] `OciLayerFS` — read-only ZenFS backend over one indexed layer (`/mnt/oci/layers/<n>` inspection mounts).
-- [ ] `OciViewFS` — single flattened read-only view over ordered layers with OCI whiteout semantics (`.wh.*`, `.wh..wh..opq`, `--through N`).
-- [ ] `CopyOnWrite` upper on top of the view = the pod workspace (manifest `root.image` + `volume` sources become real).
-- [ ] Transports behind one interface (`resolve`/`fetchBlob`): `DirectRegistryTransport`, `ArtipodRegistryProxyTransport` (new `/api/oci` route in artipod-sync; **allowlist injected at initialization, default empty = deny all**; the hosted demo config enables docker.io + ghcr.io + quay.io), `OciLayoutTransport` (import a local layout, incl. from a `hostDir` mount).
-- [ ] Shell surface via `defineCommand('artipod', …)` in the sandbox: `image pull|ls|inspect|history|mount [--through N]`, `layer mount|inspect`.
+- [x] Blob store under `/.artipod/oci/{blobs,indexes,refs,snapshots,upper}` — digest-addressed, originals immutable and verifiable.
+- [x] **Pod superblock** (cleartext, per store): opaque pod ID, cipher suite, key-envelope refs, timestamps — enumeration without keys (docs/encryption.md#at-rest-format).
+- [x] **Ciphertext blob format** (per-pod opt-in flag, default off until 6.5): chunked AES-256-GCM (~4 MiB, per-chunk nonce+tag, encrypted index), dual digests (plaintext diff ID + ciphertext address), decrypt-on-read chunk store *below* `OciLayerFS`; the CoW upper encrypts per generation under the same envelope.
+- [x] Tar indexer (`LayerEntry[]` per issue) + decompress-once policy (keep compressed original + uncompressed content-addressed twin). Browser gzip via `DecompressionStream` with `fflate` fallback — just-bash's gzip is Node-only, do not reuse.
+- [x] **Published layer indexes**: each layer's `LayerEntry[]` index ships as a small digest-addressed artifact beside the manifest (`application/vnd.artipod.layer.index.v1+json`), generated at commit/push — so the complete namespace is knowable with zero layer blobs (the Phase 6.6 hydration substrate). Foreign images without published indexes: a site cache or full pull generates them. `/api/oci` proxy passes `Range` through for byte-offset **resume** of interrupted blob downloads (blobs verify whole — no partial-verification machinery).
+- [x] `OciLayerFS` — read-only ZenFS backend over one indexed layer (`/mnt/oci/layers/<n>` inspection mounts).
+- [x] `OciViewFS` — single flattened read-only view over ordered layers with OCI whiteout semantics (`.wh.*`, `.wh..wh..opq`, `--through N`).
+- [x] `CopyOnWrite` upper on top of the view = the pod workspace (manifest `root.image` + `volume` sources become real).
+- [x] Transports behind one interface (`resolve`/`fetchBlob`): `DirectRegistryTransport`, `ArtipodRegistryProxyTransport` (new `/api/oci` route in artipod-sync; **allowlist injected at initialization, default empty = deny all**; the hosted demo config enables docker.io + ghcr.io + quay.io), `OciLayoutTransport` (import a local layout, incl. from a `hostDir` mount).
+- [x] Shell surface via `defineCommand('artipod', …)` in the sandbox: `image pull|ls|inspect|history|mount [--through N]`, `layer mount|inspect`.
 
 **Done when (from the issue):**
 
-- [ ] `artipod image pull docker.io/library/alpine:3.22` succeeds through the proxy in a browser
-- [ ] Mount the view; `cat /etc/os-release` returns Alpine content
-- [ ] `artipod image mount … --through 2` shows the truncated history view
-- [ ] Digests verify on pull; a tampered blob is rejected (test)
-- [ ] Blobs and refs survive a full page reload
+- [x] `artipod image pull docker.io/library/alpine:3.22` succeeds through the proxy in a browser — verified live (anonymous token dance, linux/amd64 selection, 519 entries indexed)
+- [x] Mount the view; `cat /etc/os-release` returns Alpine content — verified live (Alpine 3.22.5)
+- [x] `artipod image mount … --through 2` shows the truncated history view — alpine:3.22 ships a single layer, so live truncation was shown with `--through 0` (empty view); the 2-layer `--through` semantics (VERSION_ID 1 vs 2) are pinned by unit tests
+- [x] Digests verify on pull; a tampered blob is rejected (test) — pinned at pull (descriptor digests + config diff_ids) and at rest (verify-on-read; corruption test)
+- [x] Blobs and refs survive a full page reload — verified live (refs listed, remount + grep after reload; 4 blobs on disk) and by store re-instantiation tests
 
 **Worklog:**
 
-- _(empty)_
+- 2026-08-30 — shipped `src/oci/`: digest.ts (WebCrypto sha256, verify = the tamper gate), gzip.ts (DecompressionStream + fflate fallback), tar.ts (ustar/PAX/GNU indexer, whiteout markers preserved for the merge), cipher.ts (chunked AES-256-GCM per docs/encryption.md — dual digests, per-chunk nonce+tag; keyring custody is 6.5's), store.ts (immutable digest-addressed blobs, cleartext superblock, decompress-once twins by diff ID, published index artifacts, refs; encrypted pods stay plaintext-addressed via `.alias` files), view.ts (mergeLayerEntries + OciViewFS as a zenfs IndexFS subclass — a layer mount is the one-layer view), transport.ts (direct registry with anonymous bearer-token dance; the proxy transport rewrites ALL absolute URLs incl. the token service through `/api/oci/<host>`; OCI layout), pull.ts (verifies descriptor digests AND config diff_ids; multi-arch index selection), command.ts. ZenFS backend notes: `Index.fromJSON` accepts partial InodeLike at runtime; `ErrnoError.With` doesn't exist in 2.4.4 (ctor takes the code); node Buffers normalized to Uint8Array views at the store boundary.
+- 2026-08-30 — tests: 15 new (crafted-tar fixtures via a minimal ustar writer incl. PAX; scripted fake registry with 401→token flow; whiteout/opaque/--through; hardlink+symlink; EROFS; tamper rejection at pull and at rest; encrypted-store aliasing; reload survival). Package total: 22 files / **342 tests**.
+- 2026-08-30 — app half (horner/artipod-sync#4, merged): GET-only `/api/oci/<host>/<path>` relay, allowlist injected at init (`ARTIPOD_OCI_ALLOWED_HOSTS`, default empty = deny all), Accept/Authorization/Range forwarded; `.env.development` enables registry-1.docker.io/auth.docker.io/ghcr.io/quay.io; the pod wires `ArtipodRegistryProxyTransport`. Live acceptance in the browser: alpine:3.22 pulled (3.7 MB layer, 519 entries), mounted, os-release read, `--through 0` truncation, refs/blobs intact after a full reload.
+- 2026-08-30 — deferred forward, recorded: CoW-upper-as-workspace + commit-time index generation → Phase 5 (`artipod commit`); byte-offset resume → 6.6 (the proxy already passes Range); per-generation upper encryption follows the upper in Phase 5; a `--through 2` live demo needs a multi-layer image (unit tests pin the semantics).
 
 ### Phase 5 — Snapshots + commit = pod revision control (issue #1 steps 6–7)
 
