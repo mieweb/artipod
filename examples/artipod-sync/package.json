@@ -11,7 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@artipod/core": "file:../artipod",
+    "@artipod/core": "file:../..",
     "@huggingface/transformers": "^4.2.0",
     "@monaco-editor/react": "^4.7.0",
     "@types/diff": "^7.0.2",

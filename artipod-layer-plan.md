@@ -17,7 +17,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 
 ### Setup
 
-- Sibling checkouts expected next to this repo: `../artipod-sync` (you will edit it in Phases 2–7), `../just-bash`, `../ozwell-artipod`, `../ui` (read-only references — **never edit `../just-bash`**, it is upstream).
+- Sibling checkouts expected next to this repo: `../just-bash`, `../ozwell-artipod`, `../ui` (read-only references — **never edit `../just-bash`**, it is upstream). The artipod-sync app lives **in this repo** at `examples/artipod-sync/` since the sync-demo-plan Phase A import (it was `../artipod-sync` during Phases 2–6.6; historical worklog references keep the old path).
 - Node 20 LTS baseline (`engines` requires ≥20 since Phase 1 — ZenFS needs the stable `globalThis.crypto`, absent on EOL Node 18). Docker running locally from Phase 3 on. npm publish access to the `artipod` org is needed only at first publish (ask first).
 - Baseline before touching anything: `npm ci && npm test` here **and** in `../artipod-sync` — record both results in the Phase 0 worklog.
 
