@@ -104,6 +104,16 @@ export default function Home() {
           // push/pull/clone talk to this deployment's manager store
           sync: {
             remote: new HttpPodStore('/api/pods'),
+            // stable per-profile LWW identity (Decision D8)
+            actor: (() => {
+              const key = 'artipod-actor';
+              let actor = localStorage.getItem(key);
+              if (!actor) {
+                actor = `browser:${crypto.randomUUID().slice(0, 8)}`;
+                localStorage.setItem(key, actor);
+              }
+              return actor;
+            })(),
             ...(basisChoice ? { basis: { ref: basisChoice } } : {}),
           },
           // The demo reads transparently hydrate (sync plan D6); find/ls stay zero-fetch.
@@ -120,6 +130,8 @@ export default function Home() {
       );
       sandboxRef.current = pod.createSandbox();
       podRef.current = pod;
+      // demo/debug escape hatch (see docs/console.md's future replacement)
+      (window as unknown as { __artipod?: unknown }).__artipod = pod;
       if (pod.basis) setWorkspaceRoot(pod.basis.at);
       setFsReady(true);
     })().catch((e) => console.error('Sandbox init failed:', e));

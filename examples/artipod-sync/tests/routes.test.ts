@@ -4,7 +4,7 @@
  * the generic behaviors are covered by package tests; here we pin THIS
  * app's wiring (policy env vars, store dir, session policy).
  */
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -97,6 +97,38 @@ describe('route wiring', () => {
       }),
     );
     expect(res.status).toBe(403);
+  });
+
+  it('a ref PUT materializes back into the published folder (sync plan Phase E)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'writeback-root-'));
+    mkdirSync(join(root, 'site'));
+    writeFileSync(join(root, 'site', 'index.md'), '# restore me\n');
+    process.env.ARTIPOD_PUBLISH_ROOTS = root;
+    try {
+      const { POST } = await import('../app/api/pods/publish/route');
+      const publish = await POST(
+        new Request('http://localhost/api/pods/publish', {
+          method: 'POST',
+          body: JSON.stringify({ dir: join(root, 'site'), ref: 'folder/wb:latest' }),
+        }),
+      );
+      const { manifestDigest } = (await publish.json()) as { manifestDigest: string };
+
+      rmSync(join(root, 'site', 'index.md')); // drift the folder…
+      const { PUT } = await import('../app/api/pods/[...path]/route');
+      const put = await PUT(
+        new Request('http://localhost/api/pods/refs', {
+          method: 'PUT',
+          body: JSON.stringify({ ref: 'folder/wb:latest', manifestDigest }),
+        }),
+        { params: { path: ['refs'] } },
+      );
+      expect(put.status).toBe(201);
+      // …the onRefPut hook restores it from the pushed head.
+      expect(readFileSync(join(root, 'site', 'index.md'), 'utf8')).toBe('# restore me\n');
+    } finally {
+      delete process.env.ARTIPOD_PUBLISH_ROOTS;
+    }
   });
 
   it('OCI relay stays deny-all without ARTIPOD_OCI_ALLOWED_HOSTS', async () => {

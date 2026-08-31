@@ -1,5 +1,6 @@
-import { createPodStoreHandler, type PathHandler } from '@artipod/core/server';
+import { createPodStoreHandler, materializeRef, type PathHandler } from '@artipod/core/server';
 import { getPodStore } from '@/lib/pods-store';
+import { publishDirFor, withinPublishRoots } from '@/lib/publish-map';
 
 /**
  * /api/pods — this deployment's pod manager sync surface (plan Phase 6,
@@ -15,7 +16,25 @@ let handlerPromise: Promise<PathHandler> | null = null;
 
 function getHandler(): Promise<PathHandler> {
   if (!handlerPromise) {
-    handlerPromise = getPodStore().then((store) => createPodStoreHandler({ store }));
+    handlerPromise = getPodStore().then((store) =>
+      createPodStoreHandler({
+        store,
+        // Sync plan Phase E: a pushed head lands in the folder it came from
+        // (mapping recorded at publish time; roots re-checked every time).
+        onRefPut: async (ref) => {
+          const mapped = await publishDirFor(ref);
+          const dir = mapped ? await withinPublishRoots(mapped) : null;
+          if (!dir) return;
+          try {
+            const result = await materializeRef(store, ref, dir);
+            if (result.warnings.length) console.warn(`materialize ${ref}:`, result.warnings.join('; '));
+          } catch (e) {
+            // best-effort: the ref landed; the folder catches up on the next push
+            console.warn(`materialize ${ref} failed:`, (e as Error).message);
+          }
+        },
+      }),
+    );
   }
   return handlerPromise;
 }
