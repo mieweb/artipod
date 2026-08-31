@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import dynamicImport from 'next/dynamic';
 import { initFileSystem } from '@/lib/filesystem';
+import { PodEvents } from '@artipod/core/host';
 import type { Sandbox } from '@/lib/sandbox/types';
 import type { InitResult } from '@/lib/sandbox/storage';
 import Editor from '@/components/Editor';
@@ -26,7 +27,10 @@ export default function Home() {
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewMode>('terminal');
   const sandboxRef = useRef<Sandbox | null>(null);
-  const termWriteRef = useRef<((text: string) => void) | null>(null);
+  // One event bus per pod: terminal, tree, editor and agent stay coherent.
+  const eventsRef = useRef<PodEvents | null>(null);
+  if (!eventsRef.current) eventsRef.current = new PodEvents();
+  const events = eventsRef.current;
 
   useEffect(() => {
     let cancelled = false;
@@ -46,6 +50,7 @@ export default function Home() {
       );
       sandboxRef.current = createSandbox({
         zfs: fs,
+        events,
         onEdit: (path) => {
           setEditingFile(path);
           setActiveView('editor');
@@ -76,20 +81,6 @@ export default function Home() {
       vv.removeEventListener('scroll', sync);
     };
   }, []);
-
-  const handleCommand = async (cmd: string, signal: AbortSignal) => {
-    if (!sandboxRef.current) {
-      return { stdout: '', stderr: 'FileSystem not ready\n', exitCode: 1 };
-    }
-    return sandboxRef.current.exec(cmd, { signal });
-  };
-
-  const handleComplete = async (line: string) => {
-    if (!sandboxRef.current) return { candidates: [], replaceStart: line.length };
-    return sandboxRef.current.complete(line);
-  };
-
-  const getPrompt = () => sandboxRef.current?.getCwd() ?? '';
 
   const handleFileSelect = (path: string) => {
     setEditingFile(path);
@@ -184,14 +175,11 @@ export default function Home() {
         <div 
           className={`absolute inset-0 ${activeView === 'terminal' ? 'z-10' : 'z-0 invisible'}`}
         >
-          {fsReady && (
+          {fsReady && sandboxRef.current && (
             <Terminal
-              onCommand={handleCommand}
-              getPrompt={getPrompt}
-              onComplete={handleComplete}
-              registerWriter={(write) => {
-                termWriteRef.current = write;
-              }}
+              sandbox={sandboxRef.current}
+              events={events}
+              readOnly={fsInfo ? !fsInfo.isPrimaryTab : false}
             />
           )}
         </div>
@@ -203,24 +191,26 @@ export default function Home() {
           {fsReady && (
             <AgentPanel
               getSandbox={() => sandboxRef.current}
-              echoToTerminal={(text) => termWriteRef.current?.(text)}
+              events={events}
             />
           )}
         </div>
 
-        {/* File Tree View */}
-        {fsReady && activeView === 'tree' && (
-          <div className="absolute inset-0 z-10">
-            <FileTree onSelectFile={handleFileSelect} />
-          </div>
-        )}
+        {/* File Tree - always mounted: fs:changed keeps it fresh across views */}
+        <div 
+          className={`absolute inset-0 ${activeView === 'tree' ? 'z-10' : 'z-0 invisible'}`}
+        >
+          {fsReady && <FileTree onSelectFile={handleFileSelect} events={events} />}
+        </div>
 
-        {/* Editor View */}
-        {activeView === 'editor' && editingFile && (
-          <div className="absolute inset-0 z-10">
+        {/* Editor - mounted while a file is open, so external changes land even when hidden */}
+        {editingFile && (
+          <div className={`absolute inset-0 ${activeView === 'editor' ? 'z-10' : 'z-0 invisible'}`}>
             <Editor 
               filepath={editingFile} 
               onClose={handleCloseEditor} 
+              events={events}
+              readOnly={fsInfo ? !fsInfo.isPrimaryTab : false}
             />
           </div>
         )}
