@@ -27,6 +27,7 @@ export default function Home() {
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewMode>('terminal');
   const sandboxRef = useRef<Sandbox | null>(null);
+  const podRef = useRef<Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>> | null>(null);
   // One event bus per pod: terminal, tree, editor and agent stay coherent.
   const eventsRef = useRef<PodEvents | null>(null);
   if (!eventsRef.current) eventsRef.current = new PodEvents();
@@ -76,6 +77,7 @@ export default function Home() {
         },
       );
       sandboxRef.current = pod.createSandbox();
+      podRef.current = pod;
       setFsReady(true);
     })().catch((e) => console.error('Sandbox init failed:', e));
     return () => {
@@ -212,6 +214,7 @@ export default function Home() {
             <AgentPanel
               getSandbox={() => sandboxRef.current}
               events={events}
+              getLoopOptions={() => podRef.current?.agentLoopOptions() ?? {}}
             />
           )}
         </div>
