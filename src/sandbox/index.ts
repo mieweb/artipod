@@ -23,18 +23,23 @@ import { makeGitCommand } from './git-command.js';
 import { makeModuleCommands } from './module-command.js';
 import { makeNotesCommand } from './notes-command.js';
 import { makeStorageCommands } from './storage-command.js';
+import { makeSudoCommand } from './sudo-command.js';
+import type { PodEvents } from '../events.js';
 import type { CompletionResult, Sandbox, SandboxExecOptions, ZenFsLike } from './types.js';
 import { ZenFsAdapter } from './zenfs-adapter.js';
 
 export type { CompletionResult, Sandbox, SandboxExecOptions, SandboxExecResult } from './types.js';
 export { SHELL_NOTES } from './notes-command.js';
 export { ZenFsAdapter } from './zenfs-adapter.js';
+export { SUDO_DENIED_MESSAGE } from './sudo-command.js';
 
 export interface CreateSandboxOptions {
   /** The ZenFS node-like fs object backing the sandbox. */
   zfs: ZenFsLike;
   /** Host hook for the `edit` command (opens Monaco in the browser). */
   onEdit?: (path: string) => void;
+  /** Pod event bus: exec:start/exec:end, coarse fs:changed, edit:request, approval:request. */
+  events?: PodEvents;
   /** Initial working directory. Default: /repo */
   cwd?: string;
   /** Additional custom commands (server may add more; agents reuse as-is). */
@@ -74,8 +79,9 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     customCommands: [
       // git shares the sandbox's zfs — shell view and git view stay coherent
       makeGitCommand(createGitOps(() => opts.zfs)),
-      makeEditCommand(opts.onEdit),
+      makeEditCommand(opts.onEdit, opts.events),
       makeNotesCommand(),
+      makeSudoCommand(opts.events),
       ...makeStorageCommands(() => opts.zfs),
       ...(opts.proc ? makeModuleCommands() : []),
       ...(opts.extraCommands ?? []),
@@ -105,7 +111,9 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       // Transient execs (tab completion) must not disturb the snapshot.
       const live = !execOpts?.transient;
       const notices: string[] = [];
+      const startedAt = Date.now();
       if (live) {
+        opts.events?.emit('exec:start', { line });
         notices.push(...((await opts.hooks?.beforeExec?.()) ?? []));
         if (opts.proc) notices.push(...(await refreshProc(opts.zfs)));
         history.push(line);
@@ -119,6 +127,9 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
         if (r.env?.PWD) cwd = r.env.PWD;
         if (opts.proc) notices.push(...(await reconcileProc(opts.zfs)));
         notices.push(...((await opts.hooks?.afterExec?.()) ?? []));
+        opts.events?.emit('exec:end', { line, exitCode: r.exitCode, durationMs: Date.now() - startedAt });
+        // Coarse by contract: a shell line can touch anything.
+        opts.events?.emit('fs:changed', { origin: 'exec' });
       }
       const stderr = notices.length ? `${r.stderr}${notices.join('\n')}\n` : r.stderr;
       return { stdout: r.stdout, stderr, exitCode: r.exitCode };
@@ -154,6 +165,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     },
 
     fs: adapter,
+    zfs: opts.zfs,
   };
   return sandbox;
 }
