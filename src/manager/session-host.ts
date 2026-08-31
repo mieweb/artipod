@@ -111,7 +111,7 @@ export class PodSessionHost {
 
   /** Run one command with the host's timeout; releases the session after. */
   async exec(sessionId: string, command: string): Promise<
-    | { ok: true; stdout: string; stderr: string; exitCode: number }
+    | { ok: true; stdout: string; stderr: string; exitCode: number; cwd: string }
     | { ok: false; status: number; message: string }
   > {
     const acquired = await this.acquire(sessionId);
@@ -120,12 +120,17 @@ export class PodSessionHost {
     const timer = setTimeout(() => controller.abort(), this.options.execTimeoutMs);
     try {
       const result = await acquired.sandbox.exec(command, { signal: controller.signal });
-      return { ok: true, ...result };
+      return { ok: true, ...result, cwd: acquired.sandbox.getCwd() };
     } catch (e) {
       return { ok: false, status: 500, message: (e as Error).message };
     } finally {
       clearTimeout(timer);
       acquired.release();
     }
+  }
+
+  /** Test helper: drop all sessions. */
+  reset(): void {
+    this.sessions.clear();
   }
 }
