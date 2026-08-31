@@ -41,4 +41,6 @@ export interface Sandbox {
   /** Tab-completion for an input line (commands, aliases, paths). */
   complete(line: string): Promise<CompletionResult>;
   fs: import('./zenfs-adapter.js').ZenFsAdapter;
+  /** The raw node-like fs backing the sandbox (same store as `fs`). */
+  zfs: ZenFsLike;
 }

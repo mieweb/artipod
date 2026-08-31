@@ -137,19 +137,39 @@ describe('tool surface serializers', () => {
   it('exposes the same tools as OpenAI definitions and MCP descriptors', () => {
     const tools = createSandboxTools(sandbox);
     const mcp = toMcpToolDescriptors(tools);
-    expect(mcp.map((t) => t.name).sort()).toEqual(['bash', 'list_files', 'read_file', 'write_file']);
+    // Collision #1 resolved: VS Code-schema file tools + bash — no more
+    // write_file/list_files shapes.
+    expect(mcp.map((t) => t.name).sort()).toEqual([
+      'apply_patch',
+      'bash',
+      'create_directory',
+      'create_file',
+      'list_dir',
+      'multi_replace_string_in_file',
+      'read_file',
+      'replace_string_in_file',
+    ]);
     const bash = mcp.find((t) => t.name === 'bash');
     expect(bash?.inputSchema.required).toEqual(['command']);
     expect(bash?.inputSchema.type).toBe('object');
   });
 
-  it('read_file/write_file/list_files operate relative to the shell cwd', async () => {
+  it('file tools use VS Code schemas over the sandbox store (shared with bash)', async () => {
     const tools = createSandboxTools(sandbox);
-    await tools.get('write_file')!.execute({ path: 'note.md', content: 'hi' });
-    const read = await tools.get('read_file')!.execute({ path: 'note.md' });
-    expect(read).toMatchObject({ success: true, content: 'hi' });
-    const listing = await tools.get('list_files')!.execute({});
+    const created = await tools.get('create_file')!.execute({ filePath: '/repo/note.md', content: 'hi' });
+    expect(created.success).toBe(true);
+    const read = await tools.get('read_file')!.execute({ filePath: '/repo/note.md' });
+    expect(read.success).toBe(true);
+    expect(read.content).toContain('hi');
+    const listing = await tools.get('list_dir')!.execute({ path: '/repo' });
     expect(listing.content).toMatch(/note\.md/);
+    // the shell sees the same store
+    const r = await sandbox.exec('cat /repo/note.md');
+    expect(r.stdout).toBe('hi');
+    // and shell writes are visible to the tools
+    await sandbox.exec('echo shell > /repo/from-shell.txt');
+    const read2 = await tools.get('read_file')!.execute({ filePath: '/repo/from-shell.txt' });
+    expect(read2.content).toContain('shell');
   });
 });
 
