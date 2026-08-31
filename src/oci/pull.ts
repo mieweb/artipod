@@ -24,6 +24,8 @@ export interface ImageManifest {
   mediaType?: string;
   config: OciDescriptor;
   layers: OciDescriptor[];
+  /** OCI manifest annotations (e.g. org.artipod.parents — the head DAG). */
+  annotations?: Record<string, string>;
 }
 
 const INDEX_TYPES = new Set([
