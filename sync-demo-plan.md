@@ -48,6 +48,7 @@ Success = a scripted e2e that walks that exact paragraph, plus a live run agains
 | D6 | Read semantics for a demo-opened basis = **fetch-on-read, unlimited**: any content read transparently hydrates its layer (interactive lane). `stat`/`ls`/`find` remain zero-fetch from indexes. The 6.6 fail-fast default is now a **mode** — `hydration.onDemand: 'fail' \| 'fetch'` — and existing pulls keep `'fail'` so the pinned zero-fetch grep test stands. |
 | D7 | Write-back cadence = **debounced auto-push**: quiet window (~2 s) after `fs:changed` → diff-layer snapshot → push. `rm` rides the same path as a whiteout. Explicit `artipod push` still works. |
 | D8 | Convergence = **per-file LWW merge, history kept**: blobs + manifests form a G-Set (content-addressed — never conflicts); a ref head advances by a deterministic per-path merge keyed by `(mtime, actor)`; losing layers stay reachable through parent manifests (recoverable via snapshot history). |
+| D9 | _(ratified 2026-08-31)_ **Per-path mergers are pluggable**: `mergeHeads` takes `mergers: { '<glob>': (a, b) => bytes }` — default stays LWW; a matched path resolves by *content merge* instead (the result becomes a new layer). Motivating case: Yjs documents (mieweb/yorm) — `Y.mergeUpdates([a, b])` is a lossless join where LWW would drop a side among artipod-only (offline) replicas. Core stays CRDT-library-free: apps inject the resolver; the contract (deterministic, commutative, associative, idempotent) is property-tested against every registered merger. Composition with live Yjs sync is documented in [docs/sync.md](docs/sync.md). |
 
 ## 2. What already exists (build on it, don't rebuild it)
 
@@ -161,8 +162,9 @@ Formal shape: pod state = join-semilattice of
 `mergeHeads(store, refA, refB) → manifest`: walk both layer chains to the common ancestor (via `org.artipod.parents`), build the per-path winner set, emit a merged manifest that **references the winning existing layers** (no byte copying), `parents: [A, B]`. Canonical path sort ⇒ same inputs in any order produce the **same manifest digest** — that digest equality is the convergence test. Losers stay reachable through parents (D8: history kept; `artipod snapshot`/`image mount` recovers them).
 
 - Wire it: server merges on push when the incoming head isn't a descendant of the current one; browser merges on pull the same way. Fast-forward stays fast-forward.
-- Deletion semantics: a whiteout is just a path entry whose winner may be "deleted at (mtime, actor)" — rm vs concurrent edit resolves by the same clock.
-- Tests (scripted, no AI per layer-plan Decision #5): commutativity (`merge(A,B) ≡ merge(B,A)` digest-equal), idempotence, associativity across three actors; e2e: browser edits `a.txt` while server republishes `b.txt` → both converge with both changes; both edit `a.txt` → newer `(mtime, actor)` wins everywhere, loser recoverable.
+- **Pluggable per-path mergers (D9)**: `mergeHeads(store, refA, refB, { mergers })` — the first glob matching a conflicting path resolves it by **content merge**: `resolve(bytesA, bytesB) → bytes`, wrapped into a NEW per-file layer (mtime = max of inputs, actor `merge:<a>+<b>`, both parents recorded). Unmatched paths keep zero-copy LWW. The resolver contract is the join-semilattice contract — deterministic, commutative, associative, idempotent — and the digest-equality property tests run parameterized over every registered merger (core tests use a toy deterministic merger, e.g. sorted-line set union; **no yjs dependency in core** — apps inject `(a, b) => Y.mergeUpdates([a, b])` for `**/*.ydoc`, see docs/sync.md).
+- Deletion semantics: a whiteout is just a path entry whose winner may be "deleted at (mtime, actor)" — rm vs concurrent edit resolves by the same clock. Content mergers see only file-vs-file conflicts; file-vs-whiteout stays LWW (a CRDT doc "deleted" on one side is a domain decision, not a byte merge).
+- Tests (scripted, no AI per layer-plan Decision #5): commutativity (`merge(A,B) ≡ merge(B,A)` digest-equal), idempotence, associativity across three actors — for LWW **and** for a registered content merger; e2e: browser edits `a.txt` while server republishes `b.txt` → both converge with both changes; both edit `a.txt` → newer `(mtime, actor)` wins everywhere, loser recoverable; both edit `notes.union` under a union merger → merged content contains both lines.
 - Demo polish gate: run the §1 paragraph live against the example app and record it in the worklog.
 
 ### 3.7 Security notes (OWASP-adjacent, all test-pinned)
@@ -250,6 +252,8 @@ Formal shape: pod state = join-semilattice of
 
 ### Phase F — CRDT merge (`sync-f-crdt`)
 - [ ] `mergeHeads` per §3.6 (ancestor walk, per-path LWW, canonical ordering, parents=[A,B])
+- [ ] `mergers` option (D9): glob → content resolver, merged bytes become a new layer; property tests parameterized over LWW + a toy union merger (no yjs in core)
+- [ ] docs/sync.md: the sync model + "Composing with Yjs (YORM)" (when LWW is safe, when the merger hook is needed, tempo/origin guidance)
 - [ ] Property tests: commutative/idempotent/associative by manifest digest
 - [ ] Server merge-on-push (non-descendant heads), browser merge-on-pull; fast-forward preserved
 - [ ] Concurrent-edit e2e (disjoint files → union; same file → deterministic winner; loser recoverable via parent manifest mount)
