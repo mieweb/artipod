@@ -1,0 +1,28 @@
+# Sample site (artipod-bash): serves the release build on port 3000.
+# The external load balancer maps https://artipod-bash.os.mieweb.org/ -> :3000
+#
+# Install:  sudo cp deploy/artipod-sync.service /etc/systemd/system/
+#           sudo systemctl daemon-reload
+#           sudo systemctl enable --now artipod-sync
+# Deploy:   npm ci && npm run build && sudo systemctl restart artipod-sync
+
+[Unit]
+Description=artipod-sync (Next.js release build)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=horner
+WorkingDirectory=/home/horner/artipod-sync
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/home/horner/artipod-sync/node_modules/.bin/next start -p 3000
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
