@@ -13,6 +13,8 @@ interface AgentPanelProps {
   getSandbox: () => Sandbox | null;
   /** Pod event bus: tool calls surface as agent:tool-call (replaces registerWriter). */
   events?: PodEvents;
+  /** Extra loop options from the pod (agent auto-snapshot is default ON). */
+  getLoopOptions?: () => Record<string, unknown>;
 }
 
 interface DisplayItem {
@@ -69,7 +71,7 @@ replace_string_in_file, apply_patch) over cat/echo; they take absolute pod
 paths like /repo/src/main.ts. Keep commands non-interactive (no pagers or
 prompts). sudo is denied in this environment.`;
 
-export default function AgentPanel({ getSandbox, events }: AgentPanelProps) {
+export default function AgentPanel({ getSandbox, events, getLoopOptions }: AgentPanelProps) {
   const [config, setConfig] = useState<AgentConfig>(DEFAULT_CONFIG);
   const [rememberKey, setRememberKey] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
@@ -177,6 +179,7 @@ export default function AgentPanel({ getSandbox, events }: AgentPanelProps) {
 
       historyRef.current.push({ role: 'user', content: question });
       const result = await loop.runWithHistory(historyRef.current, {
+        ...(getLoopOptions?.() ?? {}),
         signal: controller.signal,
         onAssistantMessage: (content) => append({ kind: 'assistant', text: content }),
         onToolCall: (call) => {
