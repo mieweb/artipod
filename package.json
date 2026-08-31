@@ -137,26 +137,6 @@
     "isomorphic-git": "^1.25.0",
     "just-bash": "3.2.0"
   },
-  "peerDependenciesMeta": {
-    "@zenfs/core": {
-      "optional": true
-    },
-    "@zenfs/dom": {
-      "optional": true
-    },
-    "diff": {
-      "optional": true
-    },
-    "isomorphic-git": {
-      "optional": true
-    },
-    "just-bash": {
-      "optional": true
-    },
-    "fflate": {
-      "optional": "true"
-    }
-  },
   "engines": {
     "node": ">=20.0.0"
   }
