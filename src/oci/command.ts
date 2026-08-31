@@ -20,12 +20,14 @@ import { parseImageRef, formatImageRef } from './transport.js';
 import { pullImage, loadImageLayers, type ImageManifest } from './pull.js';
 import { mountOciView } from './view.js';
 import { isDigest, type Digest } from './digest.js';
+import type { SnapshotManager } from './snapshot.js';
 
 export interface ArtipodCommandContext {
   store: OciStore;
   zfs: ZenFsLike;
   transport?: OciTransport;
   events?: PodEvents;
+  snapshots?: SnapshotManager;
 }
 
 const activeMounts = new Map<string, () => void>();
@@ -33,7 +35,7 @@ const activeMounts = new Map<string, () => void>();
 const ok = (stdout: string) => ({ stdout, stderr: '', exitCode: 0 });
 const fail = (stderr: string, exitCode = 1) => ({ stdout: '', stderr: stderr.endsWith('\n') ? stderr : `${stderr}\n`, exitCode });
 
-const USAGE = `usage: artipod <image|layer> <subcommand>
+const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   image pull <ref>                     pull through the configured transport
   image ls                             list pulled refs
   image inspect <ref>                  manifest + layer summary
@@ -42,6 +44,14 @@ const USAGE = `usage: artipod <image|layer> <subcommand>
   image umount <path>
   layer inspect <diffid>               entries of one layer index
   layer mount <diffid> [path]          mount a single layer read-only
+  snapshot create [label]              capture the workspace (diff vs HEAD)
+  snapshot ls                          list snapshots
+  snapshot diff <id> [id2]             changed paths (vs worktree when id2 omitted)
+  snapshot mount <id> [path]           zero-copy read-only mount of a snapshot
+  snapshot checkout <id> [path]        materialize a NEW writable branch
+  commit --tag <name>                  freeze the workspace into a volume image
+  compact                              squash the snapshot chain into one layer
+  gc                                   delete unreachable blobs, report bytes
 `;
 
 function sanitizeRefForPath(ref: string): string {
@@ -57,10 +67,71 @@ async function resolveStoredRef(store: OciStore, refArg: string): Promise<{ disp
 
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
   defineCommand('artipod', async (args) => {
-    const { store, zfs, transport, events } = podContext;
+    const { store, zfs, transport, events, snapshots } = podContext;
     const [group, sub, ...rest] = args;
 
     try {
+      if (group === 'snapshot' && snapshots) {
+        if (sub === 'create') {
+          const snap = await snapshots.create({ label: rest.join(' ') || undefined });
+          return ok(`snapshot ${snap!.id} created (${snap!.diff.entryCount} changed entries, ${snap!.diff.size} bytes diff)\n`);
+        }
+        if (sub === 'ls') {
+          const list = await snapshots.list();
+          if (!list.length) return ok('no snapshots\n');
+          return ok(
+            renderTable(
+              ['ID', 'PARENT', 'ORIGIN', 'ENTRIES', 'CREATED', 'LABEL'],
+              list.map((s) => [s.id, s.parent ?? '-', s.origin, String(s.diff.entryCount), s.createdAt, s.label ?? '']),
+            ),
+          );
+        }
+        if (sub === 'diff') {
+          if (!rest[0]) return fail('usage: artipod snapshot diff <id> [id2]');
+          const d = await snapshots.diff(rest[0], rest[1]);
+          const lines = [
+            ...d.added.map((p) => `A ${p}`),
+            ...d.modified.map((p) => `M ${p}`),
+            ...d.deleted.map((p) => `D ${p}`),
+          ];
+          return ok(lines.length ? lines.join('\n') + '\n' : 'no changes\n');
+        }
+        if (sub === 'mount') {
+          if (!rest[0]) return fail('usage: artipod snapshot mount <id> [path]');
+          const { at, unmount } = await snapshots.mount(rest[0], rest[1]);
+          activeMounts.get(at)?.();
+          activeMounts.set(at, unmount);
+          events?.emit('fs:changed', { origin: 'exec' });
+          return ok(`mounted snapshot ${rest[0]} (read-only) at ${at}\n`);
+        }
+        if (sub === 'checkout') {
+          if (!rest[0]) return fail('usage: artipod snapshot checkout <id> [path]');
+          const at = await snapshots.checkout(rest[0], rest[1]);
+          events?.emit('fs:changed', { origin: 'exec' });
+          return ok(`checked out ${rest[0]} into ${at} (writable branch; history untouched)\n`);
+        }
+      }
+
+      if (group === 'commit' && snapshots) {
+        const tagIdx = args.indexOf('--tag');
+        const tag = tagIdx !== -1 ? args[tagIdx + 1] : undefined;
+        if (!tag) return fail('usage: artipod commit --tag <name>');
+        const result = await snapshots.commit(tag);
+        events?.emit('fs:changed', { origin: 'exec' });
+        return ok(`committed ${tag}\n  manifest: ${result.manifestDigest}\n  layer: ${result.size} bytes (gzip)\nmount it with: artipod image mount ${tag}\n`);
+      }
+
+      if (group === 'compact' && snapshots) {
+        const snap = await snapshots.compact();
+        events?.emit('fs:changed', { origin: 'exec' });
+        return ok(`compacted chain → ${snap.id} (${snap.diff.entryCount} entries, ${snap.diff.size} bytes; superseded blobs are gc-able)\n`);
+      }
+
+      if (group === 'gc' && snapshots) {
+        const result = await snapshots.gc();
+        return ok(`gc: deleted ${result.deleted} objects, reclaimed ${result.reclaimedBytes} bytes\n`);
+      }
+
       if (group === 'image' && sub === 'pull') {
         const refArg = rest[0];
         if (!refArg) return fail('usage: artipod image pull <ref>');

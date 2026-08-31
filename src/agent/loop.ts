@@ -81,6 +81,9 @@ export class ToolCallingLoop {
       // Content alongside tool calls is still worth surfacing.
       if (assistantMessage.content) onAssistantMessage?.(assistantMessage.content);
 
+      // Pre-turn hook: pod auto-snapshots ride here (plan Decision #5).
+      await options.beforeToolTurn?.(iterations);
+
       for (const toolCall of toolCalls) {
         if (signal?.aborted) throw new Error('Agent run aborted');
         onToolCall?.(toolCall);

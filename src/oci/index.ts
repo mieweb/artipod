@@ -50,3 +50,8 @@ export { pullImage, loadImageLayers } from './pull.js';
 export type { PullResult, PulledLayer, PullOptions, ImageManifest } from './pull.js';
 export { makeArtipodCommand } from './command.js';
 export type { ArtipodCommandContext } from './command.js';
+export { SnapshotManager, SNAPSHOT_MEDIA_TYPE, VOLUME_CONFIG_MEDIA_TYPE } from './snapshot.js';
+export type { SnapshotManifest, SnapshotDiff, SnapshotOrigin, SnapshotManagerOptions } from './snapshot.js';
+export { writeTar, whiteoutPathFor } from './tar.js';
+export type { TarWriteEntry } from './tar.js';
+export { gzip } from './gzip.js';

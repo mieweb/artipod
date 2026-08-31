@@ -181,3 +181,90 @@ export function whiteoutTarget(path: string): { kind: 'opaque'; dir: string } | 
   if (base.startsWith('.wh.')) return { kind: 'delete', target: dir === '/' ? `/${base.slice(4)}` : `${dir}/${base.slice(4)}` };
   return null;
 }
+
+/** Turn a path into its whiteout marker path (deletion entry for diff layers). */
+export function whiteoutPathFor(path: string): string {
+  const idx = path.lastIndexOf('/');
+  const dir = idx <= 0 ? '' : path.slice(0, idx);
+  return `${dir}/.wh.${path.slice(idx + 1)}`;
+}
+
+// --- tar writer (diff/commit layers) ----------------------------------------
+
+export interface TarWriteEntry {
+  path: string;
+  type: LayerEntryType;
+  content?: Uint8Array;
+  mode?: number;
+  mtimeMs?: number;
+  linkTarget?: string;
+}
+
+const tarEncoder = new TextEncoder();
+
+function writeOctal(block: Uint8Array, offset: number, length: number, value: number) {
+  const s = Math.max(0, Math.floor(value)).toString(8).padStart(length - 1, '0');
+  block.set(tarEncoder.encode(s.slice(0, length - 1)), offset);
+  block[offset + length - 1] = 0;
+}
+
+function tarHeader(name: string, size: number, typeflag: string, mode: number, mtimeMs: number, linkname = ''): Uint8Array {
+  const block = new Uint8Array(512);
+  block.set(tarEncoder.encode(name.slice(0, 100)), 0);
+  writeOctal(block, 100, 8, mode & 0o7777);
+  writeOctal(block, 108, 8, 0);
+  writeOctal(block, 116, 8, 0);
+  writeOctal(block, 124, 12, size);
+  writeOctal(block, 136, 12, Math.floor(mtimeMs / 1000));
+  block.set(tarEncoder.encode('        '), 148);
+  block[156] = typeflag.charCodeAt(0);
+  block.set(tarEncoder.encode(linkname.slice(0, 100)), 157);
+  block.set(tarEncoder.encode('ustar'), 257);
+  block.set(tarEncoder.encode('00'), 263);
+  let sum = 0;
+  for (const b of block) sum += b;
+  block.set(tarEncoder.encode(sum.toString(8).padStart(6, '0')), 148);
+  block[154] = 0;
+  block[155] = 0x20;
+  return block;
+}
+
+/**
+ * Write a tar (PAX long-name records when needed). Paths are pod-absolute
+ * and stored without the leading slash, the way image layers ship.
+ */
+export function writeTar(entries: TarWriteEntry[]): Uint8Array {
+  const parts: Uint8Array[] = [];
+  const pad512 = (n: number) => Math.ceil(n / 512) * 512;
+  for (const entry of entries) {
+    const name = entry.path.replace(/^\//, '') + (entry.type === 'dir' ? '/' : '');
+    const content = entry.content ?? new Uint8Array(0);
+    const mtimeMs = entry.mtimeMs ?? 0;
+    const mode = entry.mode ?? (entry.type === 'dir' ? 0o755 : 0o644);
+    if (name.length > 100) {
+      const record = `path=${name}\n`;
+      let len = record.length + 3;
+      if (`${len} ${record}`.length !== len) len += 1;
+      const pax = tarEncoder.encode(`${len} ${record}`);
+      parts.push(tarHeader('././@PaxHeader', pax.length, 'x', 0o644, mtimeMs));
+      const padded = new Uint8Array(pad512(pax.length));
+      padded.set(pax);
+      parts.push(padded);
+    }
+    const typeflag = entry.type === 'dir' ? '5' : entry.type === 'symlink' ? '2' : entry.type === 'hardlink' ? '1' : '0';
+    parts.push(tarHeader(name.length > 100 ? name.slice(0, 100) : name, entry.type === 'file' ? content.length : 0, typeflag, mode, mtimeMs, entry.linkTarget ?? ''));
+    if (entry.type === 'file' && content.length) {
+      const padded = new Uint8Array(pad512(content.length));
+      padded.set(content);
+      parts.push(padded);
+    }
+  }
+  parts.push(new Uint8Array(1024));
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
