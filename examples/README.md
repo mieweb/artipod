@@ -4,6 +4,20 @@ This directory contains example applications demonstrating the ArtiPod library.
 
 ## Available Examples
 
+### [artipod-sync](./artipod-sync)
+
+The hosted example implementation: a Next.js app where the whole pod runs in your browser — terminal (just-bash), Monaco editor, file tree, agent panel — with server routes for the manager sync store (`/api/pods`), the OCI registry relay (`/api/oci`), the git CORS proxy (`/api/git`), and exec sessions (`/api/exec`). Formerly the standalone `horner/artipod-sync` repo; imported with full history.
+
+**Run it:**
+
+```bash
+cd examples/artipod-sync
+npm ci
+npm run dev   # http://localhost:3500
+```
+
+See its [README](./artipod-sync/README.md) and [AGENTS.md](./artipod-sync/AGENTS.md) (deployment runbook).
+
 ### [basic](./basic)
 
 A simple TypeScript script demonstrating the core ArtiPod features:

@@ -1,5 +1,7 @@
 # artipod-sync
 
+The hosted example implementation of [`@artipod/core`](../../README.md) (this app formerly lived at `horner/artipod-sync`; it was imported here with full history).
+
 Playground: https://artipod-bash.os.mieweb.org/
 
 [<img width="250" alt="bash on browser" src="https://github.com/user-attachments/assets/fbaa33c8-790b-461a-8dac-69440c08238c" />](https://youtube.com/shorts/XJp-WK_KTAU?feature=share)
@@ -8,7 +10,7 @@ Playground: https://artipod-bash.os.mieweb.org/
 
 A browser bash + git sandbox: [just-bash](https://github.com/vercel-labs/just-bash) (a full bash interpreter in TypeScript) over a persistent ZenFS filesystem, with isomorphic-git, xterm.js, Monaco, and an LLM agent loop that runs `bash` tool calls inside the same sandbox.
 
-See [just-bash-plan.md](just-bash-plan.md) for the architecture, design decisions, security notes, and phase-by-phase status (the checkboxes there track what is implemented).
+See [attic/just-bash-plan.md](../../attic/just-bash-plan.md) for the original architecture/design notes (historical — superseded by [artipod-layer-plan.md](../../artipod-layer-plan.md) and [sync-demo-plan.md](../../sync-demo-plan.md)).
 
 ## Features
 
