@@ -34,6 +34,14 @@
       "types": "./dist/agent/local/worker.d.ts",
       "default": "./dist/agent/local/worker.js"
     },
+    "./host": {
+      "types": "./dist/host/index.d.ts",
+      "default": "./dist/host/index.js"
+    },
+    "./console": {
+      "types": "./dist/console/index.d.ts",
+      "default": "./dist/console/index.js"
+    },
     "./docker": {
       "types": "./dist/docker/index.d.ts",
       "default": "./dist/docker/index.js"

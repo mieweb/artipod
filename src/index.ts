@@ -2,6 +2,18 @@ export { ArtiPod } from './artipod.js';
 export { ArtiMount } from './artimount.js';
 export type { PodFs, PodDirent, PodStats } from './podfs.js';
 export { nodePodFs } from './nodePodFs.js';
+export { PodEvents } from './events.js';
+export type {
+  PodEventMap,
+  PodEventName,
+  ExecStartEvent,
+  ExecEndEvent,
+  FsChangedEvent,
+  EditRequestEvent,
+  AgentToolCallEvent,
+  ApprovalRequestEvent,
+} from './events.js';
+export { normalizePosix, resolvePosix, joinPosix, dirnamePosix, relativePosix } from './pathUtils.js';
 export { 
   findAllContainers, 
   removeContainer,
