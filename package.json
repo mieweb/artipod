@@ -51,6 +51,12 @@
   "publishConfig": {
     "access": "public"
   },
+  "browser": {
+    "./dist/docker/index.js": false,
+    "./dist/docker/containerUtils.js": false,
+    "./dist/docker/containerRuntime.js": false,
+    "dockerode": false
+  },
   "files": [
     "dist"
   ],
