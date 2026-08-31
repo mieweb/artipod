@@ -1,5 +1,7 @@
 import { ArtiMount } from '../artimount.js';
-import { promises as fs } from 'fs';
+import { nodePodFs } from '../nodePodFs.js';
+
+const fs = nodePodFs();
 import * as path from 'path';
 import {
   ReadFileTool,
@@ -615,13 +617,13 @@ describe('Tools', () => {
 
     it('should get all tools', () => {
       const tools = registry.getAll();
-      expect(tools.length).toBe(1);
+      expect(tools.length).toBe(2); // run_in_terminal + bash
     });
 
     it('should get all definitions', () => {
       const definitions = registry.getDefinitions();
-      expect(definitions.length).toBe(1);
-      expect(definitions[0].name).toBe('run_in_terminal');
+      expect(definitions.length).toBe(2);
+      expect(definitions.map((d) => d.name).sort()).toEqual(['bash', 'run_in_terminal']);
     });
   });
 

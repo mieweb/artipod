@@ -1,6 +1,8 @@
 import { ArtiPod } from '../artipod.js';
 import { ArtiMount } from '../artimount.js';
-import { promises as fs } from 'fs';
+import { nodePodFs } from '../nodePodFs.js';
+
+const fs = nodePodFs();
 import * as path from 'path';
 
 describe('ArtiPod', () => {

@@ -6,7 +6,7 @@
  */
 
 import { ArtiPod } from '../artipod.js';
-import { CommandResult } from '../containerUtils.js';
+import { CommandResult } from '../docker/containerUtils.js';
 import {
   ToolHandler,
   ToolName,
@@ -15,7 +15,8 @@ import {
   IRunInTerminalParams,
 } from './types.js';
 import { runInTerminalDefinition } from './definitions.js';
-
+import { BashTool, BashExecutor, containerBashExecutor } from './bashTool.js';
+import { createPodFileTools, MountTableEntry, PodPathResolver } from './podFileTools.js';
 /**
  * run_in_terminal tool - execute bash commands in container
  */
@@ -87,14 +88,41 @@ export class RunTerminalTool implements ToolHandler<IRunInTerminalParams, Comman
 }
 
 /**
- * Pod-level tool registry for container operations
+ * Options for the pod-level tool registry.
+ */
+export interface PodToolRegistryOptions {
+  /**
+   * Mount table for pod-level file tools. Core enforces no prefix scheme:
+   * the application declares each mount's absolute path (Decision #3).
+   * When provided, the VS Code-schema file tools (read_file, create_file,
+   * list_dir, create_directory, replace_string_in_file,
+   * multi_replace_string_in_file, apply_patch) are registered pod-wide.
+   */
+  mountTable?: MountTableEntry[];
+  /**
+   * bash execution backend. Defaults to the pod's running container
+   * (docker backend); Phase 2 injects the just-bash sandbox here.
+   */
+  bashExecutor?: BashExecutor;
+}
+
+/**
+ * Pod-level tool registry: container execution, bash, and (with a mount
+ * table) pod-wide file tools resolved against each mount's declared path.
  */
 export class PodToolRegistry {
   private tools: Map<string, ToolHandler> = new Map();
 
-  constructor(pod: ArtiPod) {
+  constructor(pod: ArtiPod, options?: PodToolRegistryOptions) {
     // Register all pod-level tools
     this.register(new RunTerminalTool(pod));
+    this.register(new BashTool(options?.bashExecutor ?? containerBashExecutor(pod)));
+    if (options?.mountTable?.length) {
+      const resolver = new PodPathResolver(options.mountTable);
+      for (const tool of createPodFileTools(resolver)) {
+        this.register(tool);
+      }
+    }
   }
 
   /**
@@ -158,15 +186,20 @@ export class PodToolRegistry {
 /**
  * Create a pod tool registry for a pod
  */
-export function createPodToolRegistry(pod: ArtiPod): PodToolRegistry {
-  return new PodToolRegistry(pod);
+export function createPodToolRegistry(pod: ArtiPod, options?: PodToolRegistryOptions): PodToolRegistry {
+  return new PodToolRegistry(pod, options);
 }
 
 /**
  * Create all pod-level tools for a pod (returns array of handlers)
  */
-export function createPodTools(pod: ArtiPod): ToolHandler[] {
-  return [
+export function createPodTools(pod: ArtiPod, options?: PodToolRegistryOptions): ToolHandler[] {
+  const tools: ToolHandler[] = [
     new RunTerminalTool(pod),
+    new BashTool(options?.bashExecutor ?? containerBashExecutor(pod)),
   ];
+  if (options?.mountTable?.length) {
+    tools.push(...createPodFileTools(new PodPathResolver(options.mountTable)));
+  }
+  return tools;
 }
