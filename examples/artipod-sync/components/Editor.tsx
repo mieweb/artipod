@@ -1,57 +1,68 @@
 'use client';
 
+/**
+ * Thin Monaco shell over @artipod/core/host's FileBuffer (plan Phase 2):
+ * Monaco, save/close chrome and the dirty dot live here; open/save/dirty
+ * tracking and external-change detection (fs:changed) live in the package.
+ */
 import { useState, useEffect } from 'react';
-import { fs } from '@/lib/filesystem';
 import MonacoEditor from '@monaco-editor/react';
+import { FileBuffer } from '@artipod/core/host';
+import type { PodEvents } from '@artipod/core/host';
+import { fs } from '@/lib/filesystem';
 
 interface EditorProps {
   filepath: string;
   onClose: () => void;
+  events?: PodEvents;
+  readOnly?: boolean;
 }
 
-export default function Editor({ filepath, onClose }: EditorProps) {
+export default function Editor({ filepath, onClose, events, readOnly }: EditorProps) {
+  const [buffer, setBuffer] = useState<FileBuffer | null>(null);
   const [content, setContent] = useState('');
+  const [isDirty, setIsDirty] = useState(false);
+  const [externallyChanged, setExternallyChanged] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
-    const loadFile = async () => {
-      try {
-        if (await fs.promises.exists(filepath)) {
-          const data = await fs.promises.readFile(filepath, 'utf8');
-          setContent(data as string);
-        } else {
-          // New file
-          setContent('');
+    let disposed = false;
+    let current: FileBuffer | null = null;
+    setLoading(true);
+    setError('');
+    FileBuffer.open({ zfs: fs, path: filepath, events, readOnly })
+      .then((b) => {
+        if (disposed) {
+          b.dispose();
+          return;
         }
-      } catch (e: any) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
-      }
+        current = b;
+        setBuffer(b);
+        setContent(b.content);
+        setIsDirty(b.isDirty);
+        b.onChange((buf) => {
+          setContent(buf.content);
+          setIsDirty(buf.isDirty);
+          setExternallyChanged(buf.externallyChanged);
+        });
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false));
+    return () => {
+      disposed = true;
+      current?.dispose();
+      setBuffer(null);
     };
-    loadFile();
-  }, [filepath]);
+  }, [filepath, events, readOnly]);
 
   const handleSave = async () => {
+    if (!buffer) return;
     try {
-      await fs.promises.writeFile(filepath, content);
-      setIsDirty(false);
-      // Optional: Show success message
-    } catch (e: any) {
-      setError(e.message);
+      await buffer.save();
+    } catch (e) {
+      setError((e as Error).message);
     }
-  };
-
-  const getLanguage = (path: string) => {
-    if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'typescript';
-    if (path.endsWith('.js') || path.endsWith('.jsx')) return 'javascript';
-    if (path.endsWith('.json')) return 'json';
-    if (path.endsWith('.css')) return 'css';
-    if (path.endsWith('.html')) return 'html';
-    if (path.endsWith('.md')) return 'markdown';
-    return 'plaintext';
   };
 
   return (
@@ -62,13 +73,13 @@ export default function Editor({ filepath, onClose }: EditorProps) {
           {isDirty && <span className="text-xs text-yellow-500">●</span>}
         </div>
         <div className="flex gap-2">
-          <button 
+          <button
             onClick={handleSave}
             className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
           >
             Save
           </button>
-          <button 
+          <button
             onClick={onClose}
             className="px-3 py-1 text-xs bg-gray-700 rounded hover:bg-gray-600"
           >
@@ -76,9 +87,20 @@ export default function Editor({ filepath, onClose }: EditorProps) {
           </button>
         </div>
       </div>
-      
+
       {error && <div className="bg-red-900 text-white p-2 text-xs">{error}</div>}
-      
+      {externallyChanged && (
+        <div className="flex items-center justify-between bg-yellow-900 text-yellow-100 p-2 text-xs">
+          <span>File changed on disk while you have unsaved edits.</span>
+          <button
+            onClick={() => void buffer?.reload()}
+            className="px-2 py-0.5 bg-yellow-700 rounded hover:bg-yellow-600"
+          >
+            Reload (discard my edits)
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex-1 flex items-center justify-center">Loading...</div>
       ) : (
@@ -87,16 +109,14 @@ export default function Editor({ filepath, onClose }: EditorProps) {
             height="100%"
             theme="vs-dark"
             path={filepath}
-            defaultLanguage={getLanguage(filepath)}
+            defaultLanguage={buffer?.language ?? 'plaintext'}
             value={content}
-            onChange={(value) => {
-              setContent(value || '');
-              setIsDirty(true);
-            }}
+            onChange={(value) => buffer?.setContent(value || '')}
             options={{
               minimap: { enabled: false },
               fontSize: 14,
               scrollBeyondLastLine: false,
+              readOnly: readOnly ?? false,
             }}
           />
         </div>

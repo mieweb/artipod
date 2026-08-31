@@ -1,13 +1,14 @@
 /**
- * ZenFS bootstrap — thin back-compat wrapper over lib/sandbox/storage.ts
- * (backend selection, OPFS/IndexedDB/memory, migration, multi-tab guard).
+ * ZenFS bootstrap — thin back-compat wrapper over @artipod/core/sandbox
+ * storage (backend selection, OPFS/IndexedDB/memory, migration, multi-tab
+ * guard).
  *
  * Async-only on purpose: the OPFS backend (WebAccess) is async-mixin based,
  * so no existsSync/mkdirSync may be used anywhere in the app.
  */
-import type { InitResult, StorageBackend } from './sandbox/storage';
+import type { InitResult, StorageBackend, ZenFsLike } from '@artipod/core/sandbox';
 
-export type ZenFs = (typeof import('@zenfs/core'))['fs'];
+export type ZenFs = ZenFsLike;
 
 /** Live binding, assigned by initFileSystem(). Use only after init resolves. */
 export let fs: ZenFs;
@@ -29,9 +30,11 @@ export function initFileSystem(pref?: StorageBackend): Promise<InitResult | null
 }
 
 async function init(pref?: StorageBackend): Promise<InitResult> {
-  const storage = await import('./sandbox/storage');
+  const storage = await import('@artipod/core/sandbox');
   const result = await storage.initFileSystem(pref);
-  fs = (await import('@zenfs/core')).fs;
+  // Adopt the instance the package configured — importing '@zenfs/core' here
+  // would bind a SECOND singleton under file:/link installs (disjoint stores).
+  fs = result.zfs;
   fsInfo = result;
   console.log(`FileSystem initialized (${result.backend}${result.isPrimaryTab ? '' : ', secondary tab'})`);
   return result;

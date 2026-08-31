@@ -6,12 +6,13 @@ import type { ChatMessage } from '@/lib/agent/types';
 import type { LocalModelClient } from '@/lib/agent/local/client';
 import { CURATED_MODELS, DEFAULT_LOCAL_MODEL, type LocalModelInfo } from '@/lib/agent/local/model-registry';
 import { formatBytes, listCachedModels, type CachedModel } from '@/lib/agent/local/model-cache';
+import type { PodEvents } from '@artipod/core/host';
 import { Send, Square } from 'lucide-react';
 
 interface AgentPanelProps {
   getSandbox: () => Sandbox | null;
-  /** Mirrors agent tool calls into the xterm terminal. */
-  echoToTerminal?: (text: string) => void;
+  /** Pod event bus: tool calls surface as agent:tool-call (replaces registerWriter). */
+  events?: PodEvents;
 }
 
 interface DisplayItem {
@@ -63,10 +64,12 @@ You have a persistent bash shell over a virtual filesystem (ZenFS). The working
 directory /repo may contain a git repository; 'git' (clone/status/add/commit/
 log/branch/checkout/diff/push...) and ~90 coreutils are available via the bash
 tool. cwd, variables and aliases persist between bash calls; shell functions do
-not. Prefer read_file/write_file/list_files over cat/echo for file content.
-Keep commands non-interactive (no pagers or prompts).`;
+not. For file content prefer the file tools (read_file, create_file, list_dir,
+replace_string_in_file, apply_patch) over cat/echo; they take absolute pod
+paths like /repo/src/main.ts. Keep commands non-interactive (no pagers or
+prompts). sudo is denied in this environment.`;
 
-export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelProps) {
+export default function AgentPanel({ getSandbox, events }: AgentPanelProps) {
   const [config, setConfig] = useState<AgentConfig>(DEFAULT_CONFIG);
   const [rememberKey, setRememberKey] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
@@ -185,18 +188,34 @@ export default function AgentPanel({ getSandbox, echoToTerminal }: AgentPanelPro
             // keep raw arguments
           }
           append({ kind: 'tool', text: `$ ${display}` });
-          echoToTerminal?.(`\r\n\x1b[2m[agent] $ ${display}\x1b[0m\r\n`);
+          events?.emit('agent:tool-call', {
+            phase: 'call',
+            name: call.function.name,
+            arguments: call.function.arguments,
+            id: call.id,
+          });
         },
         onToolResult: (call, result) => {
+          let summary: string | undefined;
           if (call.function.name === 'bash' && result.success) {
             try {
               const parsed = JSON.parse(result.content);
-              if (parsed.stdout) echoToTerminal?.(parsed.stdout.replace(/\r?\n/g, '\r\n'));
-              if (parsed.stderr) echoToTerminal?.(`\x1b[31m${parsed.stderr.replace(/\r?\n/g, '\r\n')}\x1b[0m`);
+              summary = `${parsed.stdout ?? ''}${parsed.stderr ?? ''}` || undefined;
             } catch {
-              // non-JSON tool output: skip terminal echo
+              // non-JSON tool output: no summary
             }
+          } else {
+            // file tools changed the store — let tree/editor refresh
+            events?.emit('fs:changed', { origin: 'agent' });
           }
+          events?.emit('agent:tool-call', {
+            phase: 'result',
+            name: call.function.name,
+            arguments: call.function.arguments,
+            id: call.id,
+            ok: result.success,
+            summary,
+          });
           if (!result.success) append({ kind: 'error', text: result.error ?? 'tool failed' });
         },
       });
