@@ -21,11 +21,17 @@ export const dynamic = 'force-dynamic';
 
 type ViewMode = 'terminal' | 'tree' | 'editor' | 'settings' | 'agent';
 
+/** undefined = start screen pending; null = blank workspace; string = basis ref. */
+type BasisChoice = string | null | undefined;
+
 export default function Home() {
   const [fsReady, setFsReady] = useState(false);
   const [fsInfo, setFsInfo] = useState<InitResult | null>(null);
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewMode>('terminal');
+  const [availableRefs, setAvailableRefs] = useState<string[] | null>(null);
+  const [basisChoice, setBasisChoice] = useState<BasisChoice>(undefined);
+  const [workspaceRoot, setWorkspaceRoot] = useState('/repo');
   const sandboxRef = useRef<Sandbox | null>(null);
   const podRef = useRef<Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>> | null>(null);
   // One event bus per pod: terminal, tree, editor and agent stay coherent.
@@ -33,7 +39,30 @@ export default function Home() {
   if (!eventsRef.current) eventsRef.current = new PodEvents();
   const events = eventsRef.current;
 
+  // The demo's front door: published artipods on this server (sync plan D).
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/pods/refs');
+        const refs = res.ok ? ((await res.json()) as { ref: string }[]).map((r) => r.ref) : [];
+        if (cancelled) return;
+        setAvailableRefs(refs);
+        if (refs.length === 0) setBasisChoice(null); // nothing published — skip the picker
+      } catch {
+        if (!cancelled) {
+          setAvailableRefs([]);
+          setBasisChoice(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (basisChoice === undefined) return; // start screen still open
     let cancelled = false;
     (async () => {
       const info = await initFileSystem();
@@ -68,11 +97,21 @@ export default function Home() {
         {
           adopt: fs,
           events,
-          cwd: '/repo',
+          // A chosen basis becomes the workspace (cwd follows the overlay).
+          cwd: basisChoice ? undefined : '/repo',
           // browser pulls go through the /api/oci relay (allowlist server-side)
           oci: { transport: new ArtipodRegistryProxyTransport('/api/oci') },
           // push/pull/clone talk to this deployment's manager store
-          sync: { remote: new HttpPodStore('/api/pods') },
+          sync: {
+            remote: new HttpPodStore('/api/pods'),
+            ...(basisChoice ? { basis: { ref: basisChoice } } : {}),
+          },
+          // The demo reads transparently hydrate (sync plan D6); find/ls stay zero-fetch.
+          hydration: {
+            policy: { default: 'lazy' },
+            onDemand: 'fetch',
+            ...(basisChoice ? { defaultRef: basisChoice } : {}),
+          },
           onEdit: (path) => {
             setEditingFile(path);
             setActiveView('editor');
@@ -81,12 +120,13 @@ export default function Home() {
       );
       sandboxRef.current = pod.createSandbox();
       podRef.current = pod;
+      if (pod.basis) setWorkspaceRoot(pod.basis.at);
       setFsReady(true);
     })().catch((e) => console.error('Sandbox init failed:', e));
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [basisChoice]);
 
   // iOS Safari: the keyboard shrinks only the *visual* viewport, so mirror its
   // height into --app-height and keep the page pinned to the top.
@@ -196,6 +236,37 @@ export default function Home() {
           </div>
         )}
 
+        {/* Start screen (sync plan D): pick a published artipod as the basis */}
+        {basisChoice === undefined && (availableRefs?.length ?? 0) > 0 && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#1e1e1e]">
+            <div className="w-full max-w-md rounded-lg border border-gray-700 bg-[#252526] p-6">
+              <h2 className="text-lg font-bold mb-1">Open an artipod</h2>
+              <p className="text-sm text-gray-400 mb-4">
+                This server publishes folders as artipods. Opening one adds a writable layer on top —
+                files list instantly and download only when read.
+              </p>
+              <ul className="space-y-2 mb-4">
+                {availableRefs!.map((ref) => (
+                  <li key={ref}>
+                    <button
+                      onClick={() => setBasisChoice(ref)}
+                      className="w-full text-left px-3 py-2 rounded bg-[#333] hover:bg-[#3d3d3d] font-mono text-sm"
+                    >
+                      {ref}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={() => setBasisChoice(null)}
+                className="w-full px-3 py-2 rounded border border-gray-600 text-gray-300 hover:bg-[#333] text-sm"
+              >
+                Blank workspace
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Terminal View - Always mounted to preserve state */}
         <div 
           className={`absolute inset-0 ${activeView === 'terminal' ? 'z-10' : 'z-0 invisible'}`}
@@ -226,7 +297,20 @@ export default function Home() {
         <div 
           className={`absolute inset-0 ${activeView === 'tree' ? 'z-10' : 'z-0 invisible'}`}
         >
-          {fsReady && <FileTree onSelectFile={handleFileSelect} events={events} />}
+          {fsReady && (
+            <FileTree
+              onSelectFile={handleFileSelect}
+              events={events}
+              roots={[workspaceRoot]}
+              getDehydratedPaths={async () => {
+                const pod = podRef.current;
+                if (!pod?.hydrator || !pod.basis) return [];
+                // basis paths are view-relative; the tree shows them under the overlay
+                const paths = await pod.hydrator.dehydratedPaths(pod.basis.ref);
+                return paths.map((p) => `${pod.basis!.at}${p}`);
+              }}
+            />
+          )}
         </div>
 
         {/* Editor - mounted while a file is open, so external changes land even when hidden */}

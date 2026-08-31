@@ -42,7 +42,7 @@ const nextConfig = {
     // a file: SYMLINK for @artipod/core would resolve its @zenfs/core outside
     // the app's node_modules and Next would silently bundle that copy.
     experimental: {
-        serverComponentsExternalPackages: ['@zenfs/core', 'just-bash', 'isomorphic-git'],
+        serverComponentsExternalPackages: ['@artipod/core', '@zenfs/core', 'just-bash', 'isomorphic-git'],
     },
     webpack: (config, { isServer }) => {
         // Client only: just-bash's gzip/gunzip/zcat use node:zlib; they are
