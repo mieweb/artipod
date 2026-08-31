@@ -36,9 +36,9 @@ export default function Home() {
     let cancelled = false;
     (async () => {
       const info = await initFileSystem();
-      // just-bash is loaded lazily so it stays out of the first-load bundle
-      const [{ createSandbox }, { fs }] = await Promise.all([
-        import('@/lib/sandbox'),
+      // just-bash + the pod layer load lazily so they stay out of the first-load bundle
+      const [{ createZenFsPod }, { fs }] = await Promise.all([
+        import('@artipod/core'),
         import('@/lib/filesystem'),
       ]);
       if (cancelled) return;
@@ -48,14 +48,31 @@ export default function Home() {
       setAuthPrompt(async (origin) =>
         window.prompt(`Personal access token for ${origin} (stored in memory):`),
       );
-      sandboxRef.current = createSandbox({
-        zfs: fs,
-        events,
-        onEdit: (path) => {
-          setEditingFile(path);
-          setActiveView('editor');
+      // Phase 3: the app's layout is a declarative manifest; initFileSystem
+      // already realized the store (backend choice, migration, tab lock), so
+      // the pod adopts it. The manifest shows up at /proc/pod/manifest.json.
+      const pod = await createZenFsPod(
+        {
+          mounts: [
+            {
+              name: 'root',
+              path: '/',
+              source: { kind: 'backend', backend: info?.backend ?? 'indexeddb' },
+              mode: 'rw',
+            },
+          ],
         },
-      });
+        {
+          adopt: fs,
+          events,
+          cwd: '/repo',
+          onEdit: (path) => {
+            setEditingFile(path);
+            setActiveView('editor');
+          },
+        },
+      );
+      sandboxRef.current = pod.createSandbox();
       setFsReady(true);
     })().catch((e) => console.error('Sandbox init failed:', e));
     return () => {
