@@ -1,32 +1,25 @@
 /**
- * POST /api/exec — server-side sandbox exec.
+ * POST /api/exec — server-side sandbox exec. Generic handler + validation
+ * live in @artipod/core/server; THIS deployment's policy numbers below.
  * Body: { sessionId, command } → { stdout, stderr, exitCode, cwd }.
- *
- * Sessions are isolated in-memory sandboxes (git included) with TTL
- * eviction; see lib/server/exec-sessions.ts. Optional bearer auth: set
- * EXEC_API_TOKEN to require `Authorization: Bearer <token>` (recommended —
- * this endpoint is arbitrary compute).
+ * Set EXEC_API_TOKEN to require `Authorization: Bearer <token>`
+ * (recommended — this endpoint is arbitrary compute).
  */
-import { execInSession } from '@/lib/server/exec-sessions';
+import { PodSessionHost } from '@artipod/core/manager';
+import { bearerAuth, createExecSessionHandler } from '@artipod/core/server';
 
 export const runtime = 'nodejs';
 
+const handler = createExecSessionHandler({
+  host: new PodSessionHost({
+    ttlMs: 15 * 60 * 1000,
+    maxSessions: 50,
+    execTimeoutMs: 30_000,
+    maxFsBytes: 256 * 1024 * 1024,
+  }),
+  auth: bearerAuth(() => process.env.EXEC_API_TOKEN),
+});
+
 export async function POST(req: Request): Promise<Response> {
-  const requiredToken = process.env.EXEC_API_TOKEN;
-  if (requiredToken) {
-    const auth = req.headers.get('authorization') ?? '';
-    if (auth !== `Bearer ${requiredToken}`) {
-      return Response.json({ error: 'unauthorized' }, { status: 401 });
-    }
-  }
-
-  let payload: { sessionId?: unknown; command?: unknown };
-  try {
-    payload = await req.json();
-  } catch {
-    return Response.json({ error: 'invalid JSON body' }, { status: 400 });
-  }
-
-  const { status, body } = await execInSession(payload.sessionId, payload.command);
-  return Response.json(body, { status });
+  return handler(req);
 }

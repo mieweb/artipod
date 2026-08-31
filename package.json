@@ -34,6 +34,10 @@
       "types": "./dist/manager/index.d.ts",
       "default": "./dist/manager/index.js"
     },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "default": "./dist/server/index.js"
+    },
     "./agent": {
       "types": "./dist/agent/index.d.ts",
       "default": "./dist/agent/index.js"
@@ -60,6 +64,7 @@
     "access": "public"
   },
   "browser": {
+    "./dist/server/index.js": false,
     "./dist/docker/index.js": false,
     "./dist/docker/containerUtils.js": false,
     "./dist/docker/containerRuntime.js": false,

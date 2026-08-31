@@ -1,0 +1,111 @@
+/**
+ * createPodStoreHandler — a manager's HTTP sync surface over any PodStore
+ * (sync plan Phase B; graduated from the artipod-sync /api/pods route).
+ * Wire shape matches HttpPodStore:
+ *
+ *   HEAD/GET <base>/blobs/<digest>          → 200 bytes | 404   (GET honors Range: bytes=N- → 206)
+ *   PUT      <base>/blobs/<digest>  body    → 201 (digest-verified — tampered uploads bounce)
+ *   GET      <base>/refs[?name=]            → StoredRef[] | StoredRef | 404
+ *   PUT      <base>/refs {ref, manifestDigest, mediaType} → 201 (409 until the manifest blob exists)
+ *
+ * Digests verify on both ends, so the wire never needs trust. Auth and rate
+ * policy are the deployment's concern — the `auth` hook is the seam.
+ */
+
+import type { Digest } from '../oci/digest.js';
+import type { PodStore } from '../manager/pod-store.js';
+import { authorize, json, type AuthHook, type PathHandler } from './common.js';
+
+const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const OCTET_STREAM = 'application/octet-stream';
+
+export interface PodStoreHandlerOptions {
+  store: PodStore;
+  auth?: AuthHook;
+  /** Fires after a successful ref update — the folder-materialize hook (sync plan Phase E). */
+  onRefPut?: (ref: string, manifestDigest: Digest) => void | Promise<void>;
+}
+
+export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHandler {
+  const { store, auth, onRefPut } = options;
+  return async (req, path) => {
+    const denied = await authorize(req, auth);
+    if (denied) return denied;
+    const [kind, digest] = path;
+    const method = req.method.toUpperCase();
+
+    if (kind === 'blobs' && digest && DIGEST_RE.test(digest)) {
+      if (method === 'HEAD') {
+        return new Response(null, { status: (await store.hasBlob(digest as Digest)) ? 200 : 404 });
+      }
+      if (method === 'GET') {
+        let bytes: Uint8Array;
+        try {
+          bytes = await store.getBlob(digest as Digest);
+        } catch {
+          return json({ error: 'not found' }, 404);
+        }
+        // Byte-offset resume (plan 6.6): open-ended suffix ranges only; any
+        // other shape falls back to 200-full, which the client handles.
+        const match = /^bytes=(\d+)-$/.exec(req.headers.get('range') ?? '');
+        if (match) {
+          const start = Number(match[1]);
+          if (start >= bytes.length) {
+            return new Response(null, { status: 416, headers: { 'content-range': `bytes */${bytes.length}` } });
+          }
+          return new Response(bytes.subarray(start) as BodyInit, {
+            status: 206,
+            headers: {
+              'content-type': OCTET_STREAM,
+              'content-range': `bytes ${start}-${bytes.length - 1}/${bytes.length}`,
+            },
+          });
+        }
+        return new Response(bytes as BodyInit, { headers: { 'content-type': OCTET_STREAM } });
+      }
+      if (method === 'PUT') {
+        const bytes = new Uint8Array(await req.arrayBuffer());
+        try {
+          await store.putBlob(bytes, digest as Digest);
+        } catch (e) {
+          return json({ error: (e as Error).message }, 400);
+        }
+        return new Response(null, { status: 201 });
+      }
+    }
+
+    if (kind === 'refs') {
+      if (method === 'GET') {
+        const name = new URL(req.url).searchParams.get('name');
+        if (name) {
+          const ref = await store.getRef(name);
+          return ref ? json(ref) : json({ error: 'not found' }, 404);
+        }
+        return json(await store.listRefs());
+      }
+      if (method === 'PUT') {
+        let body: { ref?: string; manifestDigest?: string; mediaType?: string };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return json({ error: 'invalid JSON body' }, 400);
+        }
+        if (!body.ref || !body.manifestDigest || !DIGEST_RE.test(body.manifestDigest)) {
+          return json({ error: 'ref and manifestDigest required' }, 400);
+        }
+        if (!(await store.hasBlob(body.manifestDigest as Digest))) {
+          return json({ error: 'push the manifest blob before the ref' }, 409);
+        }
+        await store.putRef(
+          body.ref,
+          body.manifestDigest as Digest,
+          body.mediaType ?? 'application/vnd.oci.image.manifest.v1+json',
+        );
+        await onRefPut?.(body.ref, body.manifestDigest as Digest);
+        return new Response(null, { status: 201 });
+      }
+    }
+
+    return json({ error: 'usage: <base>/blobs/<digest> | <base>/refs[?name=]' }, 400);
+  };
+}

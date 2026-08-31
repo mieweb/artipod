@@ -1,11 +1,13 @@
 /**
- * Self-hosted git CORS proxy validation + header filtering (port of the
- * @isomorphic-git/cors-proxy rules). Pure functions — the route handler in
- * app/api/git/[...path]/route.ts is a thin wrapper; tested directly.
+ * Git CORS proxy — validation + header filtering (a port of the
+ * @isomorphic-git/cors-proxy rules) and the fetch-style handler over them
+ * (sync plan Phase B; graduated from artipod-sync's lib/server/git-proxy).
  *
  * Egress control for git (which bypasses just-bash's network firewall by
- * design): only known git hosts, only smart-HTTP endpoints.
+ * design): only allowlisted hosts, only smart-HTTP endpoints.
  */
+
+import { json, type PathHandler } from './common.js';
 
 export const DEFAULT_ALLOWED_HOSTS = [
   'github.com',
@@ -112,4 +114,35 @@ export function filterResponseHeaders(upstream: Headers): Headers {
   out.set('Access-Control-Allow-Headers', REQUEST_HEADER_ALLOWLIST.join(', '));
   out.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   return out;
+}
+
+export interface GitProxyHandlerOptions {
+  /** Defaults to allowedHosts() — the env-driven list. */
+  allowlist?: string[];
+  fetchFn?: typeof fetch;
+}
+
+export function createGitProxyHandler(options: GitProxyHandlerOptions = {}): PathHandler {
+  const hosts = options.allowlist ?? allowedHosts();
+  const fetchFn = options.fetchFn ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args));
+  return async (req, segments) => {
+    if (req.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: filterResponseHeaders(new Headers()) });
+    }
+    const url = new URL(req.url);
+    const validation = validateProxyRequest(req.method, segments, url.searchParams, hosts);
+    if (!validation.ok) {
+      return json({ error: validation.message }, validation.status);
+    }
+    const upstream = await fetchFn(validation.upstream, {
+      method: req.method,
+      headers: filterRequestHeaders(req.headers),
+      body: req.method === 'POST' ? await req.arrayBuffer() : undefined,
+      redirect: 'follow',
+    });
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: filterResponseHeaders(upstream.headers),
+    });
+  };
 }
