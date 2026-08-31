@@ -1,6 +1,9 @@
 {
   "name": "@artipod/core",
   "version": "0.1.0",
+  "bin": {
+    "artipod": "dist/cli.js"
+  },
   "description": "A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize — in the browser and on Linux",
   "type": "module",
   "main": "dist/index.js",

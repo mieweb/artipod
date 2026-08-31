@@ -1,6 +1,6 @@
 # artipod docs
 
-Design-and-status documentation for `@artipod/core`. Every doc carries a status banner; ✅ marks behavior shipped today (here or in [artipod-sync](https://github.com/horner/artipod-sync)), 🔮 marks design. Implementation order and progress live in [../artipod-layer-plan.md](../artipod-layer-plan.md) — these docs are the *what*, the plan is the *when/how*.
+Design-and-status documentation for `@artipod/core`. Every doc carries a status banner; ✅ marks behavior shipped in this repo today (the browser app lives at [examples/artipod-sync](../examples/artipod-sync)), 🔮 marks design. Implementation order and progress live in [../artipod-layer-plan.md](../artipod-layer-plan.md) — these docs are the *what*, the plan is the *when/how*.
 
 | Doc | Scope | Plan phases |
 |---|---|---|

@@ -1,6 +1,6 @@
 # Security model: agent confinement, sudo, and admin policy
 
-> **Status: 🔮 design** (normative). Confinement default lands with plan Phase 2 (deny-by-default stub); the approval/policy machinery lands in Phase 6.5. Encryption/key mechanics are in [encryption.md](encryption.md).
+> **Status: ✅ implemented** (normative). The confinement default landed with plan Phase 2 (deny-by-default stub); the approval/policy machinery landed in Phase 6.5 (`@artipod/core/manager`: policy, approval broker, audit log). Encryption/key mechanics are in [encryption.md](encryption.md).
 
 ## The three principals
 

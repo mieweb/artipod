@@ -2,7 +2,7 @@
 
 **A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize — in the browser and on Linux.**
 
-> **Status: design + convergence in progress.** This README describes the target `@artipod/core` system. The Node/Docker core and the browser sandbox exist today (in this repo — the browser app lives at [examples/artipod-sync](examples/artipod-sync)); their merge and the OCI/encryption layers are tracked phase-by-phase in [artipod-layer-plan.md](artipod-layer-plan.md). Sections are marked ✅ (shipped somewhere today) or 🔮 (design). Previous implementation-state READMEs are archived in `attic/` ([v0.1](attic/v0.1-node.README.md), [v0.3](attic/v0.3-node.README.md) — the v0.3 one documents the full current Node/Docker API, including podman support, read-only mounts, and the main mount).
+> **Status: shipped through plan Phase 6.6.** Everything below marked ✅ ships in `@artipod/core` today — the Node/Docker core, the browser sandbox, OCI layering, encryption & authority, and sync (the browser app lives at [examples/artipod-sync](examples/artipod-sync)). 🔮 marks the remaining design work (Phase 7 live streams), tracked phase-by-phase in [artipod-layer-plan.md](artipod-layer-plan.md). Previous implementation-state READMEs are archived in `attic/` ([v0.1](attic/v0.1-node.README.md), [v0.3](attic/v0.3-node.README.md) — the v0.3 one documents the pre-merge Node/Docker API, including podman support, read-only mounts, and the main mount).
 
 ## What is an artipod?
 
@@ -10,9 +10,9 @@ An **artipod** is a self-contained, portable workspace — a declarative set of 
 
 - a **bash isolate** (real bash semantics, browser and server) ✅
 - **AI agent tools** with VS Code-compatible schemas, an agent loop, and context/prompt building ✅
-- **OCI layering** for revision control: every pod is image/volume layers + a writable upper; snapshot, checkout, diff, commit, push, pull 🔮
-- **encryption & authority**: ciphertext at rest, leased keys, offline grants, delegated managers 🔮
-- **sync**: content-addressed, resumable, relay-friendly — browser ↔ server ↔ home base 🔮
+- **OCI layering** for revision control: every pod is image/volume layers + a writable upper; snapshot, checkout, diff, commit, push, pull ✅
+- **encryption & authority**: ciphertext at rest, leased keys, offline grants, delegated managers ✅
+- **sync**: content-addressed, resumable, relay-friendly — browser ↔ server ↔ home base ✅
 
 Three consumer surfaces, one layer:
 
@@ -24,7 +24,20 @@ Three consumer surfaces, one layer:
 
 ## Quick starts
 
-### Browser pod with a shell (✅ shipped in examples/artipod-sync today)
+### The CLI: a pod in your terminal (✅)
+
+```sh
+npx github:mieweb/artipod run -it              # fresh empty pod → artipod-bash
+npx github:mieweb/artipod run -it alpine:3.22  # a registry image, cloned in writable
+artipod run -it field/notes:1                  # a ref you pushed earlier (npm i -g @artipod/core)
+```
+
+Ephemeral by default (docker `run` semantics); `--dir <path>` persists the pod on the real
+filesystem, `--store <path>` (default `~/.artipod/store`) backs `push`/`pull`/`clone` and REF
+lookup, `-c '<cmd>'` runs one line and exits. Inside the shell, `artipod` lists the pod verbs
+(snapshot, commit, push, hydrate, …).
+
+### Browser pod with a shell (✅ `@artipod/core/sandbox`)
 
 ```ts
 import { initFileSystem, createSandbox } from '@artipod/core/sandbox';
@@ -50,7 +63,7 @@ const out = await pod.executeCommand('grep -r TODO /context/src | wc -l');
 
 See [docs/linux.md](docs/linux.md) for the full server story (realizers, OCI-layout store, systemd).
 
-### An agent working inside a pod (✅ loop shipped in examples/artipod-sync)
+### An agent working inside a pod (✅ `@artipod/core/agent`)
 
 ```ts
 import { createToolRegistry } from '@artipod/core/tools';
@@ -59,18 +72,18 @@ import { ToolCallingLoop } from '@artipod/core/agent';
 const tools = createToolRegistry(pod);      // read_file, apply_patch, bash, … — pod-confined
 const loop = new ToolCallingLoop(client, tools);
 await loop.run('Summarize the README, then fix the failing test.');
-// every tool-executing turn auto-snapshots (🔮) — `artipod snapshot diff` shows what the model did
+// tool-executing turns auto-snapshot (pod.agentLoopOptions(), default on) — `artipod snapshot diff` shows what the model did
 ```
 
 The agent is **confined to the pod**. Anything outside it requires `sudo` — which the agent cannot self-approve. See [docs/security-model.md](docs/security-model.md).
 
-### The Ctrl+~ console (🔮 design)
+### The Ctrl+~ console (✅)
 
 One line to give any web app a drop-down artipod console (Quake-style):
 
 ```ts
 import { installConsole } from '@artipod/core/console';
-installConsole({ hotkey: 'Ctrl+`', pod });   // Ctrl+` / Ctrl+~ toggles the overlay
+installConsole({ sandbox, hotkey: 'Ctrl+`' });   // Ctrl+` / Ctrl+~ toggles the overlay
 ```
 
 See [docs/console.md](docs/console.md).
@@ -87,10 +100,10 @@ Single package, ESM subpath exports (browser/node split via export conditions):
 @artipod/core/agent      tool-calling loop, OpenAI-compatible + local ONNX clients
 @artipod/core/proc       /proc providers (host state as files)
 @artipod/core/host       headless UI controllers (terminal session, file buffer, tree)
-@artipod/core/console    Ctrl+~ drop-in overlay console          (🔮)
-@artipod/core/manager    pod hosting, PodStore, keyring, leases, policy (🔮)
+@artipod/core/console    Ctrl+~ drop-in overlay console
+@artipod/core/manager    pod hosting, PodStore, keyring, leases, policy
 @artipod/core/server     fetch-style hosting handlers: pod store, exec, git/OCI proxies (node-only)
-@artipod/core/oci        blob store, layer FS, snapshots, transports    (🔮)
+@artipod/core/oci        blob store, layer FS, snapshots, transports
 @artipod/core/docker     hardened Docker execution (node-only)
 ```
 
