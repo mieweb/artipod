@@ -37,6 +37,7 @@ import { PodLocker } from '../manager/locker.js';
 import { AuditLog } from '../manager/audit.js';
 import { ApprovalBroker } from '../manager/approval.js';
 import { Hydrator, makePrefetchTool, type HydrationPolicy } from '../manager/hydration.js';
+import { pushOverlay } from '../manager/overlay-sync.js';
 import { OciStore } from '../oci/store.js';
 import { makeArtipodCommand } from '../oci/command.js';
 import type { OciTransport } from '../oci/transport.js';
@@ -164,6 +165,14 @@ export interface ZenFsPodOptions
      * `at` (default /open/<ref-slug>); default cwd moves there.
      */
     basis?: { ref: string; at?: string };
+    /** LWW identity on pushed layers (Decision D8). Default: random per boot. */
+    actor?: string;
+    /**
+     * Debounced overlay write-back (sync plan Phase E, Decision D7): after
+     * a quiet window every workspace change pushes as appended per-file
+     * layers (rm → whiteouts). Default ON when basis + remote are set.
+     */
+    autoPush?: boolean | { debounceMs?: number };
   };
   /**
    * Phase 6.5 (docs/encryption.md + docs/security-model.md): encrypt the
@@ -215,6 +224,8 @@ export interface ZenFsPod {
   readonly hydrator?: Hydrator;
   /** Present when `sync.basis` opened at boot (sync plan Phase D). */
   readonly basis?: { ref: string; at: string };
+  /** Push the overlay's changes now (the auto-push path, awaitable). */
+  pushBasis(): Promise<import('../manager/overlay-sync.js').OverlayPushResult | null>;
   /**
    * Loop options implementing the default-ON agent auto-snapshot (plan
    * Decision #5): a diff snapshot lands before every tool-executing turn;
@@ -327,6 +338,56 @@ export async function createZenFsPod(
     }
   }
 
+  // Sync plan Phase E: debounced overlay write-back.
+  const actor = options.sync?.actor ?? `actor:${Math.random().toString(36).slice(2, 10)}`;
+  const autoPushOpt = options.sync?.autoPush;
+  const debounceMs = typeof autoPushOpt === 'object' ? (autoPushOpt.debounceMs ?? 2000) : 2000;
+  let pushTimer: ReturnType<typeof setTimeout> | null = null;
+  let pushing = false;
+  let pushQueued = false;
+  const pushBasis = async () => {
+    const remote = options.sync?.remote;
+    if (!basis || !hydrator || !remote) return null;
+    const overlay = hydrator.overlays.get(basis.ref);
+    if (!overlay) return null;
+    if (pushing) {
+      pushQueued = true;
+      return null;
+    }
+    pushing = true;
+    try {
+      const result = await pushOverlay({
+        store: ociStore,
+        zfs,
+        ref: basis.ref,
+        upperAt: overlay.upperAt,
+        deletions: hydrator.overlayDeletions(basis.ref),
+        actor,
+        remote,
+      });
+      if (result.pushed) {
+        events.emit('sync:push', { ref: basis.ref, ok: true, layers: result.overlayLayers, movedBytes: result.sync?.movedBytes ?? 0 });
+      }
+      return result;
+    } catch (e) {
+      console.warn(`artipod: overlay push for '${basis.ref}' failed — ${(e as Error).message}`);
+      events.emit('sync:push', { ref: basis.ref, ok: false, layers: 0, movedBytes: 0, error: (e as Error).message });
+      return null;
+    } finally {
+      pushing = false;
+      if (pushQueued) {
+        pushQueued = false;
+        schedulePush();
+      }
+    }
+  };
+  const schedulePush = () => {
+    if (pushTimer) clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => void pushBasis(), debounceMs);
+  };
+  const autoPushOn = basis && options.sync?.remote && autoPushOpt !== false;
+  const offAutoPush = autoPushOn ? events.on('fs:changed', schedulePush) : null;
+
   const podFs = zfs.promises as unknown as PodFs;
   const resolver = () =>
     new PodPathResolver(
@@ -348,6 +409,7 @@ export async function createZenFsPod(
     approvals,
     hydrator,
     basis,
+    pushBasis,
     agentLoopOptions(opts?: { autoSnapshot?: boolean }) {
       if (opts?.autoSnapshot === false) return {};
       return {
@@ -401,6 +463,8 @@ export async function createZenFsPod(
       return tools;
     },
     dispose() {
+      if (pushTimer) clearTimeout(pushTimer);
+      offAutoPush?.();
       disposeProc?.();
       disposeKeysProc?.();
       disposeHydrationProc?.();

@@ -39,6 +39,8 @@ export {
   ANNOTATION_PATH,
   DEFAULT_PUBLISH_IGNORE,
   publishDirectory,
+  materializeRef,
+  type MaterializeRefResult,
   type PublishDirectoryOptions,
   type PublishResult,
 } from './folder.js';
