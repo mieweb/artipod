@@ -16,6 +16,7 @@
 import type { ZenFsLike } from '../sandbox/types.js';
 import { sha256, verifyDigest, isDigest, digestHex, type Digest } from './digest.js';
 import { decryptBlob, encryptBlob, isEncryptedBlob } from './cipher.js';
+import { PodLockedError } from '../manager/keyring.js';
 import { makeLayerIndexArtifact, parseLayerIndexArtifact, type LayerEntry, type LayerIndexArtifact } from './tar.js';
 
 export const OCI_ROOT = '/.artipod/oci';
@@ -49,11 +50,39 @@ function randomPodId(): string {
 }
 
 export class OciStore {
-  /** Set via enableEncryption — Phase 6.5 moves custody to the keyring. */
-  private key: CryptoKey | null = null;
+  /** Key custody (Phase 6.5): a provider so the keyring owns the KEK — an
+   * expired lease makes the provider throw and the pod is simply locked. */
+  private keySource: (() => CryptoKey) | null = null;
   private superblock: PodSuperblock | null = null;
 
   constructor(private readonly zfs: ZenFsLike) {}
+
+  /** The live KEK, or null when encryption is off. Throws when locked. */
+  private get key(): CryptoKey | null {
+    return this.keySource ? this.keySource() : null;
+  }
+
+  /** True when the pod is encrypted but no usable key is available. */
+  get locked(): boolean {
+    if (!this.keySource) return false;
+    try {
+      this.keySource();
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
+  /** True when this store writes ciphertext (regardless of lock state). */
+  get encrypted(): boolean {
+    return this.keySource !== null;
+  }
+
+  /** The live session KEK (non-extractable). Throws PodLockedError when locked. */
+  get sessionKey(): CryptoKey {
+    if (!this.keySource) throw new Error('this pod is not encrypted');
+    return this.keySource();
+  }
 
   private get p() {
     return this.zfs.promises;
@@ -90,12 +119,13 @@ export class OciStore {
   }
 
   /**
-   * Per-pod encryption opt-in (default off until Phase 6.5): subsequent blob
-   * writes are stored as chunked-AEAD ciphertext addressed by ciphertext
-   * digest, with the plaintext digest resolvable via the alias map.
+   * Per-pod encryption opt-in: subsequent blob writes are stored as
+   * chunked-AEAD ciphertext addressed by ciphertext digest, with the
+   * plaintext digest resolvable via the alias map. Pass a provider to put
+   * the keyring in custody — key evaporation IS the lock.
    */
-  async enableEncryption(key: CryptoKey): Promise<void> {
-    this.key = key;
+  async enableEncryption(key: CryptoKey | (() => CryptoKey)): Promise<void> {
+    this.keySource = typeof key === 'function' ? key : () => key;
     this.getSuperblock().cipher = 'aes-256-gcm-chunked';
     await this.writeSuperblock();
   }
@@ -150,16 +180,33 @@ export class OciStore {
       const cipherDigest = (await this.p.readFile(this.aliasPath(digest), 'utf8')) as Digest;
       raw = asBytes((await this.p.readFile(this.blobPath(cipherDigest))) as Uint8Array);
       await verifyDigest(raw, cipherDigest, 'ciphertext blob');
-      if (!this.key) throw new Error(`Blob ${digest} is encrypted and the pod is locked (no key in this session)`);
-      return decryptBlob(raw, this.key, digest);
+      if (!this.keySource) throw new PodLockedError(`blob ${digest} is encrypted and this session holds no key`);
+      return decryptBlob(raw, this.keySource(), digest);
     }
-    if (isEncryptedBlob(raw) && this.key) {
+    if (isEncryptedBlob(raw) && this.keySource) {
       // Addressed directly by ciphertext digest.
       await verifyDigest(raw, digest, 'ciphertext blob');
-      return decryptBlob(raw, this.key);
+      return decryptBlob(raw, this.keySource());
     }
     await verifyDigest(raw, digest);
     return raw;
+  }
+
+  /** Stored bytes exactly as they sit on disk (ciphertext for encrypted
+   * pods) — what relays and encrypted sync move. Never decrypts. */
+  async getRawBlob(digest: Digest): Promise<Uint8Array> {
+    const raw = asBytes((await this.p.readFile(this.blobPath(digest))) as Uint8Array);
+    await verifyDigest(raw, digest, 'raw blob');
+    return raw;
+  }
+
+  /** plaintext digest → ciphertext digest, or null when stored plain. */
+  async resolveAlias(digest: Digest): Promise<Digest | null> {
+    try {
+      return (await this.p.readFile(this.aliasPath(digest), 'utf8')) as Digest;
+    } catch {
+      return null;
+    }
   }
 
   async deleteBlob(digest: Digest): Promise<void> {
@@ -167,17 +214,32 @@ export class OciStore {
     await this.p.rm(this.aliasPath(digest), { force: true });
   }
 
+  /** Kiosk (`purge`) lock mode: drop every blob; ciphertext restore = re-sync. */
+  async purgeBlobs(): Promise<number> {
+    const dir = `${OCI_ROOT}/blobs/sha256`;
+    const names = (await this.p.readdir(dir)) as string[];
+    for (const name of names) await this.p.rm(`${dir}/${name}`, { force: true });
+    return names.length;
+  }
+
   // --- decompress-once twins (addressed by diff ID) --------------------------
 
   async putUncompressed(diffId: Digest, bytes: Uint8Array): Promise<void> {
     await verifyDigest(bytes, diffId, 'uncompressed layer');
-    await this.p.writeFile(`${OCI_ROOT}/uncompressed/sha256/${digestHex(diffId)}`, bytes);
+    // Twins hold the same content as layers — ciphertext at rest too
+    // (docs/encryption.md: layer-only encryption is theater).
+    const out = this.key ? (await encryptBlob(bytes, this.key)).bytes : bytes;
+    await this.p.writeFile(`${OCI_ROOT}/uncompressed/sha256/${digestHex(diffId)}`, out);
   }
 
   async getUncompressed(diffId: Digest): Promise<Uint8Array> {
     const bytes = asBytes(
       (await this.p.readFile(`${OCI_ROOT}/uncompressed/sha256/${digestHex(diffId)}`)) as Uint8Array,
     );
+    if (isEncryptedBlob(bytes)) {
+      if (!this.keySource) throw new PodLockedError(`layer ${diffId} is encrypted and this session holds no key`);
+      return decryptBlob(bytes, this.keySource(), diffId);
+    }
     await verifyDigest(bytes, diffId, 'uncompressed layer');
     return bytes;
   }

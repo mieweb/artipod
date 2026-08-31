@@ -1,8 +1,9 @@
 /**
- * Agent-confinement stub tests (plan Phase 2, Decision #10): sudo is
- * recognized, always denied with EPERM until Phase 6.5, never prompts, and
- * surfaces the attempt as approval:request. docs/security-model.md is
- * normative.
+ * Agent-confinement default (plan Phase 2, Decision #10): without an
+ * approval broker, sudo is recognized, always denied with EPERM, never
+ * prompts, and surfaces the attempt as approval:request. The Phase 6.5
+ * broker path is covered in src/manager/approval.test.ts.
+ * docs/security-model.md is normative.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { configure, InMemory, fs as zfs, umount } from '@zenfs/core';
@@ -25,11 +26,11 @@ beforeEach(async () => {
 });
 
 describe('sudo confinement stub', () => {
-  it('denies sudo with EPERM and the Phase 6.5 pointer', async () => {
+  it('denies sudo with EPERM when no approval broker is configured', async () => {
     const r = await sandbox.exec('sudo rm -rf /');
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toContain('EPERM');
-    expect(r.stderr).toContain('Phase 6.5');
+    expect(r.stderr).toContain('no approval broker');
     expect(r.stdout).toBe('');
   });
 

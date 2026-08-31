@@ -15,6 +15,7 @@ import { loadImageLayers } from '../oci/pull.js';
 import type { OciStore } from '../oci/store.js';
 import type { ZenFsLike } from '../sandbox/types.js';
 import type { PodStore } from './pod-store.js';
+import { AUDIT_MEDIA_TYPE, walkAuditDigests } from './audit.js';
 
 const decoder = new TextDecoder();
 
@@ -33,27 +34,55 @@ export interface SyncResult {
   moved: number;
   skipped: number;
   movedBytes: number;
+  /** false when a byte budget stopped the transfer before every blob moved. */
+  complete: boolean;
+  remaining: number;
+}
+
+export interface SyncOptions {
+  /**
+   * Bandwidth budget for this pass (constrained-link profiles). Blobs move
+   * in priority order — manifest → config (small metadata) → bulk layers —
+   * and blobs that would exceed the budget are left for the next pass (the
+   * first blob always moves, guaranteeing progress). The ref pointer is only
+   * written on completion; anti-entropy makes resume free (already-moved
+   * digests skip). Sub-blob chunk-offset resume arrives with Phase 6.6 Range
+   * support.
+   */
+  maxBytes?: number;
 }
 
 /** Copy one ref (and every blob it reaches) src → dst; only missing digests move. */
-export async function syncRef(src: PodStore, dst: PodStore, ref: string): Promise<SyncResult> {
+export async function syncRef(src: PodStore, dst: PodStore, ref: string, options: SyncOptions = {}): Promise<SyncResult> {
   const stored = await src.getRef(ref);
   if (!stored) throw new Error(`ref '${ref}' not found in the source store`);
+  // Priority order: the walk yields metadata first (manifest, config), bulk
+  // layer blobs after — audit chains are all-metadata by construction.
+  const digests =
+    stored.mediaType === AUDIT_MEDIA_TYPE
+      ? await walkAuditDigests(src, stored.manifestDigest)
+      : await walkImageDigests(src, stored.manifestDigest);
   let moved = 0;
   let skipped = 0;
   let movedBytes = 0;
-  for (const digest of await walkImageDigests(src, stored.manifestDigest)) {
+  let remaining = 0;
+  for (const digest of digests) {
     if (await dst.hasBlob(digest)) {
       skipped++;
       continue;
     }
     const bytes = await src.getBlob(digest);
+    if (options.maxBytes !== undefined && movedBytes + bytes.length > options.maxBytes && moved + skipped > 0) {
+      remaining++;
+      continue;
+    }
     await dst.putBlob(bytes, digest);
     moved++;
     movedBytes += bytes.length;
   }
-  await dst.putRef(ref, stored.manifestDigest, stored.mediaType);
-  return { ref, manifestDigest: stored.manifestDigest, moved, skipped, movedBytes };
+  const complete = remaining === 0;
+  if (complete) await dst.putRef(ref, stored.manifestDigest, stored.mediaType);
+  return { ref, manifestDigest: stored.manifestDigest, moved, skipped, movedBytes, complete, remaining };
 }
 
 /** Sync every ref src → dst (manager-driven anti-entropy). */

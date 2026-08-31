@@ -46,6 +46,10 @@ export interface ApprovalRequestEvent {
   verb: string;
   target?: string;
   justification?: string;
+  /** Phase 6.5 approval flow: who is asking, for exactly what. */
+  principal?: string;
+  capability?: { class: string; mode?: string; ttlMs?: number };
+  command?: string;
 }
 
 export interface PodEventMap {

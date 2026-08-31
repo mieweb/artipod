@@ -9,6 +9,7 @@
  */
 import type { Sandbox } from '../sandbox/types.js';
 import type { PodEvents } from '../events.js';
+import type { ApprovalPrompt } from '../manager/approval.js';
 
 export interface InstallConsoleOptions {
   sandbox: Sandbox;
@@ -19,6 +20,9 @@ export interface InstallConsoleOptions {
   readOnly?: boolean;
   /** Overlay height as a CSS size. Default: '45vh'. */
   height?: string;
+  /** Who approves from this console (docs/security-model.md: approval
+   * rights are policy-granted — the broker checks these roles). */
+  approver?: { principal: string; roles?: string[] };
 }
 
 export interface ConsoleHandle {
@@ -27,6 +31,9 @@ export interface ConsoleHandle {
   hide(): void;
   dispose(): void;
   readonly isOpen: boolean;
+  /** Wire into pod options `authority.prompt`: renders the capability and
+   * awaits y/N on the console input when the host has no richer UI. */
+  readonly approvalPrompt: ApprovalPrompt;
 }
 
 const NOOP_HANDLE: ConsoleHandle = {
@@ -35,6 +42,7 @@ const NOOP_HANDLE: ConsoleHandle = {
   hide() {},
   dispose() {},
   isOpen: false,
+  approvalPrompt: async () => ({ approved: false, approver: { principal: 'user:nobody' } }),
 };
 
 /** Strip ANSI SGR sequences — the builtin renderer is plain text. */
@@ -100,7 +108,7 @@ export function installConsole(options: InstallConsoleOptions): ConsoleHandle {
         if (e.phase === 'call') append(`⚙ ${e.name} ${e.arguments}\n`);
       }),
       events.on('approval:request', (e) => {
-        append(`⛔ approval requested: ${e.verb}${e.target ? ` ${e.target}` : ''} — denied (Phase 6.5 lands the flow)\n`);
+        append(`⛔ approval requested: ${e.verb}${e.target ? ` ${e.target}` : ''}${e.principal ? ` (by ${e.principal})` : ''}\n`);
       }),
     );
   }
@@ -120,6 +128,7 @@ export function installConsole(options: InstallConsoleOptions): ConsoleHandle {
       const r = await sandbox.exec(cmd, { signal: abortController.signal });
       if (r.stdout) append(r.stdout);
       if (r.stderr) append(r.stderr);
+      if (r.stderr.includes('pod locked')) append('🔒 pod locked — run `artipod login` to restore access\n');
     } catch (e) {
       append(`${String(e)}\n`);
     } finally {
@@ -129,8 +138,35 @@ export function installConsole(options: InstallConsoleOptions): ConsoleHandle {
     }
   };
 
+  // Approval ceremony: hijack the input line for one y/N answer.
+  let pendingApproval: ((line: string) => void) | null = null;
+  const approvalPrompt: ApprovalPrompt = async (req) => {
+    show();
+    append(
+      [
+        `⛔ ${req.principal} requests: ${req.command}`,
+        `   capability: ${req.capability.class}${req.capability.target ? ` → ${req.capability.target}` : ''}${req.capability.mode ? ` (${req.capability.mode})` : ''}${req.capability.ttlMs ? `, ttl ${Math.round(req.capability.ttlMs / 1000)}s` : ''}`,
+        `   justification: ${req.justification ?? '—'}`,
+        '   approve? [y/N] ',
+      ].join('\n'),
+    );
+    const line = await new Promise<string>((resolve) => {
+      pendingApproval = resolve;
+    });
+    const approved = /^y(es)?$/i.test(line.trim());
+    append(approved ? '✔ approved\n' : '✘ denied\n');
+    return { approved, approver: options.approver ?? { principal: 'user:console' } };
+  };
+
   const onInputKey = async (e: KeyboardEvent) => {
-    if (e.key === 'Enter' && !busy) {
+    if (e.key === 'Enter' && pendingApproval) {
+      const line = input.value;
+      input.value = '';
+      append(`${line}\n`);
+      const resolve = pendingApproval;
+      pendingApproval = null;
+      resolve(line);
+    } else if (e.key === 'Enter' && !busy) {
       const cmd = input.value;
       input.value = '';
       await run(cmd);
@@ -196,5 +232,6 @@ export function installConsole(options: InstallConsoleOptions): ConsoleHandle {
     get isOpen() {
       return open;
     },
+    approvalPrompt,
   };
 }

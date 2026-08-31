@@ -31,6 +31,11 @@ import type { ToolHandler } from '../tools/types.js';
 import { createSandboxTools } from '../agent/tools.js';
 import type { ToolHandler as AgentToolHandler } from '../agent/types.js';
 import { registerPodManifestProvider } from '../proc/pod-provider.js';
+import { registerProcProvider } from '../proc/registry.js';
+import { Keyring, makeKeysProcProvider } from '../manager/keyring.js';
+import { PodLocker } from '../manager/locker.js';
+import { AuditLog } from '../manager/audit.js';
+import { ApprovalBroker } from '../manager/approval.js';
 import { OciStore } from '../oci/store.js';
 import { makeArtipodCommand } from '../oci/command.js';
 import type { OciTransport } from '../oci/transport.js';
@@ -151,6 +156,24 @@ export interface ZenFsPodOptions
   oci?: { transport?: OciTransport };
   /** Manager sync: the remote PodStore push/pull/clone talk to. */
   sync?: { remote?: import('../manager/pod-store.js').PodStore };
+  /**
+   * Phase 6.5 (docs/encryption.md + docs/security-model.md): encrypt the
+   * pod's store with keyring custody and wire login/lock + the sudo
+   * approval flow. `login` is app-provided (it crosses an authenticated
+   * channel in real deployments).
+   */
+  authority?: {
+    login: () => Promise<import('../manager/authority.js').LoginResult>;
+    /** Encrypt this pod's blobs; reads while locked fail EACCES. */
+    encrypt?: boolean;
+    lockMode?: import('../manager/locker.js').LockMode;
+    /** Signed admin policy enabling the sudo approval flow. */
+    policy?: import('../manager/policy.js').AdminPolicy;
+    /** The human approval channel (console/panel). */
+    prompt?: import('../manager/approval.js').ApprovalPrompt;
+    /** Requesting principal for sudo. Default `agent:pod`. */
+    principal?: string;
+  };
 }
 
 export interface ZenFsPod {
@@ -162,6 +185,12 @@ export interface ZenFsPod {
   readonly oci: { store: OciStore; transport?: OciTransport };
   /** Pod revision control: snapshots, checkout, commit, compact, gc. */
   readonly snapshots: SnapshotManager;
+  /** Phase 6.5: session keyring / lock lifecycle / provenance (always present). */
+  readonly keyring: Keyring;
+  readonly locker: PodLocker;
+  readonly audit: AuditLog;
+  /** Present when `authority.policy` is configured. */
+  readonly approvals?: ApprovalBroker;
   /**
    * Loop options implementing the default-ON agent auto-snapshot (plan
    * Decision #5): a diff snapshot lands before every tool-executing turn;
@@ -211,6 +240,32 @@ export async function createZenFsPod(
     roots: mountTable.filter((e) => !e.readonly).map((e) => e.path),
   });
 
+  // Phase 6.5: keyring custody, lock lifecycle, provenance, approvals.
+  const keyring = new Keyring();
+  const audit = new AuditLog(ociStore);
+  const podId = ociStore.getSuperblock().podId;
+  const locker = new PodLocker({
+    keyring,
+    stores: new Map([[podId, ociStore]]),
+    audit,
+    mode: options.authority?.lockMode,
+  });
+  if (options.authority?.encrypt) await locker.bind(podId);
+  const approvals = options.authority?.policy
+    ? new ApprovalBroker({ policy: options.authority.policy, keyring, events, audit, prompt: options.authority.prompt })
+    : undefined;
+  const authorityContext = options.authority
+    ? { login: options.authority.login, locker, keyring }
+    : undefined;
+  let disposeKeysProc: (() => void) | null = null;
+  if (proc) {
+    try {
+      disposeKeysProc = registerProcProvider(makeKeysProcProvider(keyring));
+    } catch {
+      // another live pod already projects /proc/keys; that one wins
+    }
+  }
+
   const podFs = zfs.promises as unknown as PodFs;
   const resolver = () =>
     new PodPathResolver(
@@ -226,6 +281,10 @@ export async function createZenFsPod(
     events,
     mountTable,
     oci,    snapshots,
+    keyring,
+    locker,
+    audit,
+    approvals,
     agentLoopOptions(opts?: { autoSnapshot?: boolean }) {
       if (opts?.autoSnapshot === false) return {};
       return {
@@ -234,12 +293,19 @@ export async function createZenFsPod(
         },
       };
     },    createSandbox() {
-      return createSandbox({
+      const sandbox: Sandbox = createSandbox({
         zfs,
         events,
         proc,
         cwd: defaultCwd,
         onEdit: options.onEdit,
+        sudo: approvals
+          ? {
+              broker: approvals,
+              principal: options.authority?.principal ?? 'agent:pod',
+              execute: (command) => sandbox.exec(command),
+            }
+          : undefined,
         extraCommands: [
           makeArtipodCommand({
             store: ociStore,
@@ -248,6 +314,7 @@ export async function createZenFsPod(
             events,
             snapshots,
             remote: options.sync?.remote,
+            authority: authorityContext,
           }),
           ...(options.extraCommands ?? []),
         ],
@@ -255,6 +322,7 @@ export async function createZenFsPod(
         executionLimits: options.executionLimits,
         executionLimitProfile: options.executionLimitProfile,
       });
+      return sandbox;
     },
     createFileTools() {
       return createPodFileTools(resolver());
@@ -266,6 +334,7 @@ export async function createZenFsPod(
     },
     dispose() {
       disposeProc?.();
+      disposeKeysProc?.();
     },
   };
 }
