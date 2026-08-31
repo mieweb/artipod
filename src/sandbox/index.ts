@@ -28,10 +28,24 @@ import type { PodEvents } from '../events.js';
 import type { CompletionResult, Sandbox, SandboxExecOptions, ZenFsLike } from './types.js';
 import { ZenFsAdapter } from './zenfs-adapter.js';
 
-export type { CompletionResult, Sandbox, SandboxExecOptions, SandboxExecResult } from './types.js';
+export type { CompletionResult, Sandbox, SandboxExecOptions, SandboxExecResult, ZenFsLike } from './types.js';
 export { SHELL_NOTES } from './notes-command.js';
 export { ZenFsAdapter } from './zenfs-adapter.js';
 export { SUDO_DENIED_MESSAGE } from './sudo-command.js';
+// App-facing sandbox infrastructure: storage backends, git ops + auth.
+export * from './storage.js';
+export { createGitOps, getAuthor, setAuthor, setCorsProxy, getCorsProxy } from './git.js';
+export type { GitOps, GitStatusResult, StatusEntry } from './git.js';
+export {
+  setAuthPrompt,
+  persistenceEnabled,
+  setPersistence,
+  setToken,
+  getToken,
+  clearToken,
+  onAuthForUrl,
+  onAuthFailureForUrl,
+} from './git-auth.js';
 
 export interface CreateSandboxOptions {
   /** The ZenFS node-like fs object backing the sandbox. */

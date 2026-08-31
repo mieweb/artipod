@@ -36,7 +36,7 @@ export class LocalModelClient implements ChatCompletionClient {
 
   private getWorker(): Worker {
     if (!this.worker) {
-      this.worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+      this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
       this.worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
         const msg = event.data;
         if (msg.type === 'progress') {

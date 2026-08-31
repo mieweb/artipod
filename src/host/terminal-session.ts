@@ -58,9 +58,12 @@ export class TerminalSession {
     if (events) {
       this.disposers.push(
         events.on('agent:tool-call', (e) => {
-          if (e.phase !== 'call') return;
-          const args = e.arguments.length > 120 ? `${e.arguments.slice(0, 120)}…` : e.arguments;
-          io.write(`\r\n${DIM}⚙ ${e.name} ${args}${RESET}\r\n`);
+          if (e.phase === 'call') {
+            const args = e.arguments.length > 120 ? `${e.arguments.slice(0, 120)}…` : e.arguments;
+            io.write(`\r\n${DIM}⚙ ${e.name} ${args}${RESET}\r\n`);
+          } else if (e.summary) {
+            io.write(`${DIM}${toCrLf(e.summary)}${RESET}`);
+          }
         }),
       );
     }

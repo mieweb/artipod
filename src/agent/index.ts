@@ -35,9 +35,11 @@ export { LocalModelClient, webGpuAvailable } from './local/client.js';
 export type { LocalModelClientOptions } from './local/client.js';
 export {
   CURATED_MODELS,
+  DEFAULT_LOCAL_MODEL,
   listLocalModels,
   modelInfo,
   type LocalModelInfo,
   type OnnxDtype,
 } from './local/model-registry.js';
 export { formatBytes, listCachedModels, modelIdFromCacheKey } from './local/model-cache.js';
+export type { CachedModel } from './local/model-cache.js';
