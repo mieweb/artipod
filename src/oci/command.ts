@@ -39,6 +39,8 @@ export interface ArtipodCommandContext {
   remote?: PodStore;
   /** Phase 6.6: lazy hydration — index pulls, hydrate/dehydrate. */
   hydrator?: Hydrator;
+  /** Phase E/F: push the open overlay's changes (merge-on-push joins heads). */
+  pushBasis?: () => Promise<unknown>;
   /** Phase 6.5: login/lock/status against the pod's authority. */
   authority?: {
     /** App-provided authentication → lease + keys (crosses the wire in real deployments). */
@@ -97,7 +99,7 @@ async function resolveStoredRef(store: OciStore, refArg: string): Promise<{ disp
 
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
   defineCommand('artipod', async (args) => {
-    const { store, zfs, transport, events, snapshots, remote, authority, hydrator } = podContext;
+    const { store, zfs, transport, events, snapshots, remote, authority, hydrator, pushBasis } = podContext;
     const [group, sub, ...rest] = args;
 
     try {
@@ -244,6 +246,9 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
         if (!sub) return fail('usage: artipod open <ref> [path]');
         let state = await hydrator.stateFor(sub);
         let pulled = '';
+        // Diverged local changes push first — the manager joins heads
+        // (merge-on-push, Phase F) and the pull below adopts the merged head.
+        if (state && hydrator.overlays.has(sub) && pushBasis) await pushBasis();
         // Refresh when the manager's head moved (a republish or another actor's push).
         const remoteHead = remote ? await remote.getRef(sub).catch(() => null) : null;
         if (!state || (remoteHead && remoteHead.manifestDigest !== state.manifestDigest)) {

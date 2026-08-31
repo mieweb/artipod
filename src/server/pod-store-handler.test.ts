@@ -144,4 +144,71 @@ describe('createPodStoreHandler', () => {
     expect((await open(req('wat'), ['wat'])).status).toBe(400);
     expect((await open(req('blobs/not-a-digest'), ['blobs', 'not-a-digest'])).status).toBe(400);
   });
+
+  it('merge-on-push (Phase F): divergent heads join, stale pushes keep the newer head', async () => {
+    const { mkdtemp, mkdir, rm, utimes, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { publishDirectory } = await import('./folder.js');
+    const { isAncestor } = await import('../manager/merge.js');
+
+    const store = new MemoryPodStore();
+    const seen: Digest[] = [];
+    const handler = createPodStoreHandler({ store, onRefPut: (_r, d) => void seen.push(d) });
+    const dir = await mkdtemp(join(tmpdir(), 'handler-merge-'));
+    const REF = 'folder/hm:latest';
+    const stamp = async (rel: string, at: Date) => utimes(join(dir, rel), at, at);
+    const t0 = new Date('2026-08-30T10:00:00Z');
+    try {
+      await mkdir(join(dir, 'docs'), { recursive: true });
+      await writeFile(join(dir, 'docs/a.md'), 'a v0\n');
+      await writeFile(join(dir, 'docs/b.md'), 'b v0\n');
+      await stamp('docs/a.md', t0);
+      await stamp('docs/b.md', t0);
+      const v0 = (await publishDirectory(store, dir, REF, { actor: 'srv' })).manifestDigest;
+
+      await writeFile(join(dir, 'docs/a.md'), 'a by A\n');
+      await stamp('docs/a.md', new Date('2026-08-30T11:00:00Z'));
+      const headA = (await publishDirectory(store, dir, REF, { actor: 'actor-a' })).manifestDigest;
+
+      // Divergent head B: also a child of v0 (rewind the ref, restore the tree).
+      await store.putRef(REF, v0, 'application/vnd.oci.image.manifest.v1+json');
+      await writeFile(join(dir, 'docs/a.md'), 'a v0\n');
+      await stamp('docs/a.md', t0);
+      await writeFile(join(dir, 'docs/b.md'), 'b by B\n');
+      await stamp('docs/b.md', new Date('2026-08-30T12:00:00Z'));
+      const headB = (await publishDirectory(store, dir, REF, { actor: 'actor-b' })).manifestDigest;
+
+      // Wire state: ref currently at A; B arrives over the wire → join.
+      await store.putRef(REF, headA, 'application/vnd.oci.image.manifest.v1+json');
+      const put = await handler(
+        req('refs', { method: 'PUT', body: JSON.stringify({ ref: REF, manifestDigest: headB }) }),
+        ['refs'],
+      );
+      expect(put.status).toBe(201);
+      const body = (await put.json()) as { manifestDigest: Digest; merged: boolean };
+      expect(body.merged).toBe(true);
+      expect(body.manifestDigest).not.toBe(headA);
+      expect(body.manifestDigest).not.toBe(headB);
+      expect(await isAncestor(store, headA, body.manifestDigest)).toBe(true);
+      expect(await isAncestor(store, headB, body.manifestDigest)).toBe(true);
+      expect((await store.getRef(REF))!.manifestDigest).toBe(body.manifestDigest);
+      expect(seen.at(-1)).toBe(body.manifestDigest); // materialize hook sees the merged head
+
+      // Stale push (v0 is an ancestor of the merged head) leaves the ref alone.
+      const stale = await handler(
+        req('refs', { method: 'PUT', body: JSON.stringify({ ref: REF, manifestDigest: v0 }) }),
+        ['refs'],
+      );
+      expect(((await stale.json()) as { manifestDigest: string }).manifestDigest).toBe(body.manifestDigest);
+      expect((await store.getRef(REF))!.manifestDigest).toBe(body.manifestDigest);
+
+      // merge:false restores Phase E overwrite semantics.
+      const overwrite = createPodStoreHandler({ store, merge: false });
+      await overwrite(req('refs', { method: 'PUT', body: JSON.stringify({ ref: REF, manifestDigest: v0 }) }), ['refs']);
+      expect((await store.getRef(REF))!.manifestDigest).toBe(v0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

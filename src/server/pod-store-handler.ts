@@ -14,6 +14,7 @@
 
 import type { Digest } from '../oci/digest.js';
 import type { PodStore } from '../manager/pod-store.js';
+import { isAncestor, mergeHeads, type MergeOptions } from '../manager/merge.js';
 import { authorize, json, type AuthHook, type PathHandler } from './common.js';
 
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
@@ -24,10 +25,19 @@ export interface PodStoreHandlerOptions {
   auth?: AuthHook;
   /** Fires after a successful ref update — the folder-materialize hook (sync plan Phase E). */
   onRefPut?: (ref: string, manifestDigest: Digest) => void | Promise<void>;
+  /**
+   * Merge-on-push (sync plan Phase F): a pushed head that has diverged from
+   * the current one joins via mergeHeads instead of overwriting; a stale
+   * push (current already contains it) leaves the head alone. Default ON;
+   * pass `false` to overwrite like Phase E, or MergeOptions to add D9
+   * content mergers.
+   */
+  merge?: boolean | MergeOptions;
 }
 
 export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHandler {
   const { store, auth, onRefPut } = options;
+  const mergeOptions: MergeOptions | null = options.merge === false ? null : typeof options.merge === 'object' ? options.merge : {};
   return async (req, path) => {
     const denied = await authorize(req, auth);
     if (denied) return denied;
@@ -96,13 +106,26 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
         if (!(await store.hasBlob(body.manifestDigest as Digest))) {
           return json({ error: 'push the manifest blob before the ref' }, 409);
         }
+        let finalDigest = body.manifestDigest as Digest;
+        let merged = false;
+        const current = mergeOptions ? await store.getRef(body.ref) : null;
+        if (current && current.manifestDigest !== finalDigest && mergeOptions) {
+          if (await isAncestor(store, finalDigest, current.manifestDigest)) {
+            finalDigest = current.manifestDigest; // stale push — keep the newer head
+          } else if (!(await isAncestor(store, current.manifestDigest, finalDigest))) {
+            const result = await mergeHeads(store, current.manifestDigest, finalDigest, mergeOptions);
+            finalDigest = result.manifestDigest;
+            merged = result.kind === 'merged';
+          }
+          // else: fast-forward — the incoming head wins as-is
+        }
         await store.putRef(
           body.ref,
-          body.manifestDigest as Digest,
+          finalDigest,
           body.mediaType ?? 'application/vnd.oci.image.manifest.v1+json',
         );
-        await onRefPut?.(body.ref, body.manifestDigest as Digest);
-        return new Response(null, { status: 201 });
+        await onRefPut?.(body.ref, finalDigest);
+        return json({ manifestDigest: finalDigest, merged }, 201);
       }
     }
 

@@ -172,6 +172,63 @@ describe('overlay write-back', () => {
     pod.dispose();
   });
 
+  it('§1 finale: browser edits while the server republishes — both converge (merge-on-push)', async () => {
+    const { createPodStoreHandler } = await import('../server/index.js');
+    const { isAncestor } = await import('../manager/merge.js');
+    // The wire shape: ref puts route through the handler, like HttpPodStore → route.
+    const handler = createPodStoreHandler({ store: remote });
+    const wired: PodStore = {
+      hasBlob: (d) => remote.hasBlob(d),
+      getBlob: (d) => remote.getBlob(d),
+      putBlob: (b, e) => remote.putBlob(b, e),
+      getRef: (r) => remote.getRef(r),
+      listRefs: () => remote.listRefs(),
+      async putRef(ref, manifestDigest, mediaType) {
+        const res = await handler(
+          new Request('http://manager/api/pods/refs', {
+            method: 'PUT',
+            body: JSON.stringify({ ref, manifestDigest, mediaType }),
+          }),
+          ['refs'],
+        );
+        if (!res.ok) throw new Error(`putRef via handler: ${res.status}`);
+      },
+    };
+
+    const pod = await createZenFsPod(podManifest, {
+      adopt: zfs,
+      sync: { remote: wired, basis: { ref: REF, at: '/work' }, actor: 'browser:test', autoPush: false },
+      hydration: { policy: { default: 'lazy' }, onDemand: 'fetch' },
+    });
+    const shell = pod.createSandbox();
+    const v0 = (await remote.getRef(REF))!.manifestDigest;
+
+    // Browser edits a NEW file while, concurrently, the server folder gains
+    // an edit and republishes (a divergent head — parents [v0] on both sides).
+    await shell.exec('echo from-browser > /work/browser-note.md');
+    await writeFile(join(dir, 'docs', 'a.md'), 'server v2\n');
+    await utimes(join(dir, 'docs', 'a.md'), new Date('2026-08-31T10:00:00Z'), new Date('2026-08-31T10:00:00Z'));
+    const serverHead = (await publishDirectory(remote, dir, REF, { actor: 'server:test' })).manifestDigest;
+
+    // The browser's push arrives second → the handler joins the heads.
+    const push = await pod.pushBasis();
+    expect(push?.pushed).toBe(true);
+    const mergedHead = (await remote.getRef(REF))!.manifestDigest;
+    expect(mergedHead).not.toBe(serverHead);
+    expect(await isAncestor(remote, serverHead, mergedHead)).toBe(true);
+    expect(await isAncestor(remote, v0, mergedHead)).toBe(true); // full lineage preserved
+
+    // Converged: the real folder gets BOTH sides…
+    await materializeRef(remote, REF, dir);
+    expect(await nodeReadFile(join(dir, 'browser-note.md'), 'utf8')).toBe('from-browser\n');
+    expect(await nodeReadFile(join(dir, 'docs', 'a.md'), 'utf8')).toBe('server v2\n');
+
+    // …and so does the browser on refresh, with its own edit intact.
+    const reopen = await shell.exec('artipod open folder/demo:latest /work && cat /work/docs/a.md && cat /work/browser-note.md');
+    expect(reopen.stdout).toContain('server v2');
+    expect(reopen.stdout).toContain('from-browser');
+  });
+
   it('materialize refuses traversal and never follows symlinks', async () => {
     // Hand-rolled malicious head: a path that escapes the folder.
     const evil = await buildFileLayer(
