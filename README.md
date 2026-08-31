@@ -89,6 +89,7 @@ Single package, ESM subpath exports (browser/node split via export conditions):
 @artipod/core/host       headless UI controllers (terminal session, file buffer, tree)
 @artipod/core/console    Ctrl+~ drop-in overlay console          (🔮)
 @artipod/core/manager    pod hosting, PodStore, keyring, leases, policy (🔮)
+@artipod/core/server     fetch-style hosting handlers: pod store, exec, git/OCI proxies (node-only)
 @artipod/core/oci        blob store, layer FS, snapshots, transports    (🔮)
 @artipod/core/docker     hardened Docker execution (node-only)
 ```
