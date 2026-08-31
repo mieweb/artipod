@@ -14,6 +14,20 @@ export type {
   ApprovalRequestEvent,
 } from './events.js';
 export { normalizePosix, resolvePosix, joinPosix, dirnamePosix, relativePosix } from './pathUtils.js';
+// Pod manifest + realizers (plan Phase 3). realizeDocker is a pure mapping
+// (no dockerode); the ZenFS realizer dynamic-imports its optional peers.
+export {
+  MANIFEST_FORMAT_VERSION,
+  MANIFEST_MEDIA_TYPE,
+  validateManifest,
+  serializeManifest,
+  parseManifest,
+} from './manifest.js';
+export type { PodManifest, PodMountDeclaration, MountSource, MountMode } from './manifest.js';
+export { realizeDocker } from './realize/docker.js';
+export type { DockerRealization, DockerMountRealization } from './realize/docker.js';
+export { realizeZenFs, createZenFsPod } from './realize/zenfs.js';
+export type { ZenFsPod, ZenFsPodOptions, ZenFsRealization, RealizedZenFsMount } from './realize/zenfs.js';
 // Docker runtime VALUES live in '@artipod/core/docker' only — re-exporting
 // them here would drag dockerode (native ssh2) into browser bundles.
 export type {
