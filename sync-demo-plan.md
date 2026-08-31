@@ -23,8 +23,8 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): sync phas
 
 | Phase | Branch | Status | PR |
 |---|---|---|---|
-| A — repo consolidation (move artipod-sync in, keep history) | `sync-a-move` | in review | [#47](https://github.com/mieweb/artipod/pull/47) |
-| B — `@artipod/core/server` subpath (the heft leaves the app) | `sync-b-server` | todo | |
+| A — repo consolidation (move artipod-sync in, keep history) | `sync-a-move` | done | [#47](https://github.com/mieweb/artipod/pull/47) |
+| B — `@artipod/core/server` subpath (the heft leaves the app) | `sync-b-server` | in progress | |
 | C — folder → artipod publish (per-file layers) | `sync-c-publish` | todo | |
 | D — browser opens a basis lazily; fetch-on-read | `sync-d-lazy-open` | todo | |
 | E — write-back: auto-push layers, server materializes | `sync-e-writeback` | todo | |
@@ -173,13 +173,13 @@ Formal shape: pod state = join-semilattice of
 ## 4. Phases — checklists
 
 ### Phase A — repo consolidation (`sync-a-move`)
-- [ ] Owner go-ahead on the merge push + archive plan (ask-first) — **PR #47 open, awaiting owner merge (merge commit, NOT squash)**
+- [x] Owner go-ahead on the merge push + archive plan (ask-first) — merged 2026-08-31 as merge commit 6f0dedf
 - [x] filter-repo import per §3.1; `git log --follow` shows pre-move history for `app/page.tsx` and `lib/server/exec-sessions.ts`
 - [x] Tidy commit (attic moves, nested `.github` folded, READMEs)
 - [x] Wiring commit: `file:../..` + `.npmrc` intact; `npm ci && npm run build && npx vitest run` green **inside `examples/artipod-sync`**
 - [x] CI `example-app` job green on the PR
 - [x] Root suite untouched: `npm test` green, package `files`/exports unchanged
-- [ ] horner/artipod-sync: pointer README pushed; owner archives
+- [x] horner/artipod-sync: pointer README pushed; owner archives
 - **Done when**: both CI jobs green on `main`; old repo archived; a fresh `git clone` + documented steps boot the example against `@artipod/core` from the repo root.
 - Worklog:
   - 2026-08-31 — brew wedged on an unrelated untrusted tap; installed filter-repo via `pip install --user git-filter-repo`. Rewrote 43 commits (`--to-subdirectory-filter examples/artipod-sync`, 4 screenshots dropped) on a `/tmp` clone; merged `--allow-unrelated-histories`. Verify: `git log --follow --oneline -- examples/artipod-sync/app/page.tsx | wc -l` → 15.
@@ -187,6 +187,7 @@ Formal shape: pod state = join-semilattice of
   - 2026-08-31 — **nesting gotcha**: the app never had an ESLint config, so at the old location `next lint`/`next build` found nothing up the tree and linted as a no-op; nested under the core repo the cascade found `.eslintrc.cjs` and `next build` died on an unknown `react-hooks` rule. Added `.eslintrc.json` `root:true` + `next/core-web-vitals`; real lint then caught 2 `react/no-unescaped-entities` errors in page.tsx — fixed.
   - 2026-08-31 — verify: example `npm run lint` 0 errors, `npx vitest run` 11/11, `npm run build` green; root `npx vitest run` 373/373, lint 0. PR #47 opened (merge-commit warning in title block).
   - 2026-08-31 — CI: first `example-app` run failed — `npm ci` in the app packs the `file:../..` dep, whose `prepare` runs `tsc` in the **repo root** where devDeps weren't installed (TS2688 no @types/node). Fix: job installs core deps first (`npm ci` at `working-directory: .`). Run 33360200267: all 3 jobs pass (`gh pr checks 47` exit 0, unpiped).
+  - 2026-08-31 — gate: #47 merged with a merge commit (6f0dedf); pointer README pushed to horner/artipod-sync main and repo archived (`gh repo view -q .isArchived` → true). Sample-site redeploy from the new path stays an open owner action (deploy checklist in the unit file header).
 
 ### Phase B — server subpath (`sync-b-server`)
 - [ ] `./server` export + `browser:false` stubs; guard test that browser entries never reach `dist/server`
