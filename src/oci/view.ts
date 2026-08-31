@@ -94,6 +94,13 @@ export class DehydratedError extends ErrnoError {
 export class OciViewFS extends IndexFS {
   private content: Map<string, ResolvedContent & { linkTarget?: string; type: LayerEntry['type'] }>;
 
+  /**
+   * Fetch-on-read (sync plan D6, `hydration.onDemand: 'fetch'`): supplies a
+   * dehydrated layer's uncompressed bytes. Only the async read path can
+   * consult it — sync reads keep failing fast.
+   */
+  onDehydrated?: (path: string, layer: number) => Promise<Uint8Array | null>;
+
   constructor(
     name: string,
     view: MergedView,
@@ -160,7 +167,16 @@ export class OciViewFS extends IndexFS {
   }
 
   async read(path: string, buffer: Uint8Array, offset = 0, end: number): Promise<void> {
-    this.readSync(path, buffer, offset, end);
+    try {
+      this.readSync(path, buffer, offset, end);
+    } catch (e) {
+      const c = this.content.get(path);
+      if (!(e instanceof DehydratedError) || !this.onDehydrated || !c) throw e;
+      const bytes = await this.onDehydrated(path, c.layer);
+      if (!bytes) throw e;
+      this.layerBytes[c.layer] = bytes; // in place — the live mount needs no remount
+      this.readSync(path, buffer, offset, end);
+    }
   }
 
   readSync(path: string, buffer: Uint8Array, offset = 0, end: number): void {
@@ -195,13 +211,22 @@ export interface MountViewOptions {
   /** Merge only the first N layers (issue #1 `--through N`). */
   through?: number;
   name?: string;
+  /** Fetch-on-read hook — see OciViewFS.onDehydrated. */
+  onDehydrated?: OciViewFS['onDehydrated'];
+}
+
+/** Build the flattened view fs without mounting (CoW lowers, sync plan D). */
+export function buildOciView(options: Omit<MountViewOptions, 'zfs' | 'at'>): OciViewFS {
+  const n = options.through !== undefined ? Math.max(0, Math.min(options.through, options.layers.length)) : options.layers.length;
+  const view = mergeLayerEntries(options.layers.slice(0, n));
+  const fs = new OciViewFS(options.name ?? 'oci-view', view, options.layerBytes.slice(0, n));
+  fs.onDehydrated = options.onDehydrated;
+  return fs;
 }
 
 /** Build + mount a flattened read-only view; returns its unmount function. */
 export async function mountOciView(options: MountViewOptions): Promise<() => void> {
-  const n = options.through !== undefined ? Math.max(0, Math.min(options.through, options.layers.length)) : options.layers.length;
-  const view = mergeLayerEntries(options.layers.slice(0, n));
-  const fs = new OciViewFS(options.name ?? 'oci-view', view, options.layerBytes.slice(0, n));
+  const fs = buildOciView(options);
   await options.zfs.promises.mkdir(options.at, { recursive: true });
   zenMount(options.at, fs as never);
   return () => zenUmount(options.at);

@@ -26,7 +26,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): sync phas
 | A — repo consolidation (move artipod-sync in, keep history) | `sync-a-move` | done | [#47](https://github.com/mieweb/artipod/pull/47) |
 | B — `@artipod/core/server` subpath (the heft leaves the app) | `sync-b-server` | done | [#48](https://github.com/mieweb/artipod/pull/48) |
 | C — folder → artipod publish (per-file layers) | `sync-c-publish` | done | [#49](https://github.com/mieweb/artipod/pull/49) |
-| D — browser opens a basis lazily; fetch-on-read | `sync-d-lazy-open` | todo | |
+| D — browser opens a basis lazily; fetch-on-read | `sync-d-lazy-open` | done | [#50](https://github.com/mieweb/artipod/pull/50) |
 | E — write-back: auto-push layers, server materializes | `sync-e-writeback` | todo | |
 | F — CRDT convergence: per-file LWW merge | `sync-f-crdt` | todo | |
 
@@ -218,14 +218,20 @@ Formal shape: pod state = join-semilattice of
   - 2026-08-31 — verify: root 402 tests / build 0 / tsc clean; app 6 tests / lint 0 / build 0. Live: published repo `docs/` → "7 layers (0 reused, 22527 new bytes)", immediate republish → "unchanged"; store = `oci-layout` + `index.json` (ref annotated) + 16 blobs (7 layers + 7 indexes + config + manifest). (skopeo not installed locally — layout verified with ls + index.json inspection; the format IS the skopeo dir format.) npm gotcha: `npm --prefix <dir> exec` does NOT chdir (ran the root vitest config) — use `npm --prefix <dir> run`.
 
 ### Phase D — lazy open + fetch-on-read (`sync-d-lazy-open`)
-- [ ] `artipod open <ref>` verb + `sync.basis` option: index pull → lazy view → CoW upper rw mount
-- [ ] `hydration.onDemand: 'fetch'` mode (default remains `'fail'`; zero-fetch grep test still passes)
-- [ ] Fetch-on-read at the fs boundary: `DehydratedError` → interactive-lane hydrate → retried read; per-file layer = per-file fetch (pin with fetch counters)
-- [ ] `find` zero-transfer test; `cat` transfers exactly one blob test
-- [ ] FileTree cloud badges via `/proc/hydration` + `fetch:*`; `artipod status` per-path local/remote
-- [ ] Example start screen: ref picker from `GET /api/pods/refs`
+- [x] `artipod open <ref>` verb + `sync.basis` option: index pull → lazy view → CoW upper rw mount
+- [x] `hydration.onDemand: 'fetch'` mode (default remains `'fail'`; zero-fetch grep test still passes)
+- [x] Fetch-on-read at the fs boundary: `DehydratedError` → interactive-lane hydrate → retried read; per-file layer = per-file fetch (pin with fetch counters)
+- [x] `find` zero-transfer test; `cat` transfers exactly one blob test
+- [x] FileTree cloud badges via `/proc/hydration` + `fetch:*`; `artipod files` per-path local/remote
+- [x] Example start screen: ref picker from `GET /api/pods/refs`
 - **Done when**: §1 sentences 1–4 pass scripted (open basis, find=0 fetches, cat=1 fetch, cached re-read=0).
 - Worklog:
+  - 2026-08-31 — seam decision: fetch-on-read lives INSIDE `OciViewFS` — `read()` is async-over-sync, so an optional `onDehydrated(path, ordinal)` hook awaits the layer bytes and patches `this.layerBytes[ordinal]` **in place** (no remount, every consumer covered: just-bash cat, file tools, Monaco, tree). Sync reads keep failing fast by construction. `buildOciView` extracted so overlays can use the view as a CoW lower without mounting.
+  - 2026-08-31 — hydrator: `onDemand: 'fail'|'fetch'` option; `fetchLayer` extracted from `hydrate()` (per-layer fetch/verify/persist/state-flip, no remount — `hydrate()` keeps its remount for the explicit verb); `dehydratedPaths(ref)` (winning-layer placeholder files); `openOverlay(ref, at)` = lazy view lower + `CopyOnWrite` upper (InMemory v1 — durability arrives with Phase E push), tracked in `hydrator.overlays` for E's diffing.
+  - 2026-08-31 — verbs: `artipod open <ref> [path]` (pulls index if absent, default `/open/<slug>`) and `artipod files [<ref>]` (STATE/SIZE/PATH; ref optional with one overlay). **Deviation (rule 6): plan said `artipod status` — that verb was already taken by 6.5's keyring status; renamed to `files`.** Pod: `sync.basis {ref, at?}` opens at boot (offline-tolerant warn), default cwd follows the overlay, `pod.basis` exposed.
+  - 2026-08-31 — openPod.spec (2): the §1 script — open → `find` = 0 layer reads → `cat` = exactly 1 → re-read = 0 (cached) → `files` ledger local/remote → overlay writes (`echo > new`, basis overwrite) → boot-basis cwd → `'fail'` pod still EREMOTEs with 0 fetches. Passed first run. 404 root tests total.
+  - 2026-08-31 — app: start screen picker (refs from `/api/pods/refs`, blank option, auto-skip when none), pod boots with `basis`+`onDemand:'fetch'`+`defaultRef`, FileTree `roots` prop + ☁︎ badges (`getDehydratedPaths` → overlay-prefixed, refreshed on `fetch:done`/`fs:changed`). **next.config gotcha: `@artipod/core` was never in `serverComponentsExternalPackages` (only its deps were) — webpack bundled `/server` for the publish route and its export analysis broke (`Attempted import error: publishDirectory`); externalizing the package fixes it and matches the existing ZenFS reasoning.**
+  - 2026-08-31 — live (browser at :3599, docs/ published): picker → click → terminal at `/open/folder_docs_latest`, `ls` lists 7 files zero-fetch, `artipod files` all `remote`, `head -2 browser.md` prints content and flips it `local` (console.md stays `remote`), `echo demo-note > note.txt && cat` works in the overlay. Screenshots in PR.
 
 ### Phase E — write-back (`sync-e-writeback`)
 - [ ] Debounced auto-push: `fs:changed` → quiet window → diff snapshot (whiteouts incl.) → `syncRef` push; `skipIfClean`; explicit `artipod push` unchanged

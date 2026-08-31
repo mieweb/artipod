@@ -22,17 +22,23 @@ import { fs } from '@/lib/filesystem';
 interface FileTreeProps {
   onSelectFile: (path: string) => void;
   events?: PodEvents;
+  /** Tree roots. Default: /repo (a basis workspace passes its overlay path). */
+  roots?: string[];
+  /** Absolute paths still remote (sync plan D) — rendered with a cloud badge. */
+  getDehydratedPaths?: () => Promise<string[]>;
 }
 
-export default function FileTree({ onSelectFile, events }: FileTreeProps) {
+export default function FileTree({ onSelectFile, events, roots, getDehydratedPaths }: FileTreeProps) {
   const sourceRef = useRef<TreeSource | null>(null);
+  const dehydratedRef = useRef<Set<string>>(new Set());
+  const rootsKey = (roots ?? ['/repo']).join(',');
 
   const dataProvider = useMemo<TreeDataProvider>(() => {
     sourceRef.current?.dispose();
     // Bus subscription lives in the effect below, not the constructor:
     // StrictMode replays effect cleanup, which would strand a memoized
     // instance whose constructor-time subscription was disposed.
-    const source = new TreeSource({ zfs: fs, roots: ['/repo'] });
+    const source = new TreeSource({ zfs: fs, roots: rootsKey.split(',') });
     sourceRef.current = source;
     return {
       getTreeItem: async (itemId: TreeItemIndex): Promise<TreeItem> =>
@@ -42,7 +48,28 @@ export default function FileTree({ onSelectFile, events }: FileTreeProps) {
         return { dispose: off };
       },
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rootsKey]);
+
+  useEffect(() => {
+    if (!getDehydratedPaths) return;
+    let cancelled = false;
+    const refresh = () =>
+      getDehydratedPaths()
+        .then((paths) => {
+          if (cancelled) return;
+          dehydratedRef.current = new Set(paths);
+          sourceRef.current?.invalidate();
+        })
+        .catch(() => {});
+    refresh();
+    const offs = [events?.on('fetch:done', refresh), events?.on('fs:changed', refresh)];
+    return () => {
+      cancelled = true;
+      for (const off of offs) off?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, rootsKey]);
 
   useEffect(() => {
     if (!events) return;
@@ -65,10 +92,12 @@ export default function FileTree({ onSelectFile, events }: FileTreeProps) {
       </div>
       <UncontrolledTreeEnvironment
         dataProvider={dataProvider}
-        getItemTitle={(item) => item.data as string}
+        getItemTitle={(item) =>
+          `${item.data as string}${dehydratedRef.current.has(String(item.index)) ? ' ☁︎' : ''}`
+        }
         viewState={{
           'tree-1': {
-            expandedItems: ['/repo'],
+            expandedItems: rootsKey.split(','),
           },
         }}
         onPrimaryAction={(item) => {

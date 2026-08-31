@@ -12,7 +12,7 @@ import { gunzip, isGzip } from '../oci/gzip.js';
 import { indexTar, parseLayerIndexArtifact, ANNOTATION_HYDRATION, ANNOTATION_LAYER_INDEX, ANNOTATION_LAYER_GROUP, type LayerEntry } from '../oci/tar.js';
 
 export { ANNOTATION_HYDRATION, ANNOTATION_LAYER_INDEX, ANNOTATION_LAYER_GROUP };
-import { mergeLayerEntries, mountOciView } from '../oci/view.js';
+import { mergeLayerEntries, mountOciView, buildOciView } from '../oci/view.js';
 import type { ImageManifest } from '../oci/pull.js';
 import { parseImageRef, type OciTransport } from '../oci/transport.js';
 import type { OciStore } from '../oci/store.js';
@@ -266,12 +266,20 @@ export interface HydratorOptions {
   scheduler?: BandwidthScheduler;
   /** Applied when pullIndex gets no explicit policy. */
   policy?: HydrationPolicy;
+  /**
+   * Dehydrated READ behavior (sync plan D6): 'fail' (default, the pinned
+   * zero-fetch guarantee) or 'fetch' — reads transparently hydrate their
+   * layer on the interactive lane. stat/ls/find stay zero-fetch either way.
+   */
+  onDemand?: 'fail' | 'fetch';
 }
 
 export class Hydrator {
   readonly scheduler: BandwidthScheduler;
   private readonly inflight = new Set<string>();
   private readonly mounts = new Map<string, { at: string; unmount: () => void }>();
+  /** ref → writable overlay opened over the lazy basis (sync plan Phase D/E). */
+  readonly overlays = new Map<string, { at: string; upper: unknown; unmount: () => void }>();
 
   constructor(private readonly options: HydratorOptions) {
     this.scheduler = options.scheduler ?? new BandwidthScheduler();
@@ -409,13 +417,61 @@ export class Hydrator {
   async mount(ref: string, at: string): Promise<void> {
     const { layers, layerBytes } = await this.loadView(ref);
     this.mounts.get(ref)?.unmount();
-    const unmount = await mountOciView({ zfs: this.options.zfs, at, layers, layerBytes, name: `hydrated:${ref}` });
+    const unmount = await mountOciView({
+      zfs: this.options.zfs,
+      at,
+      layers,
+      layerBytes,
+      name: `hydrated:${ref}`,
+      onDehydrated: this.onDemandHook(ref),
+    });
     this.mounts.set(ref, { at, unmount });
   }
 
   unmount(ref: string): void {
     this.mounts.get(ref)?.unmount();
     this.mounts.delete(ref);
+  }
+
+  /** Pod-absolute file paths whose winning layer is still a placeholder. */
+  async dehydratedPaths(ref: string): Promise<string[]> {
+    const { layers, state } = await this.loadView(ref);
+    const merged = mergeLayerEntries(layers);
+    const out: string[] = [];
+    for (const [path, entry] of merged.entries) {
+      if (entry.type !== 'dir' && state.layers[entry.layer]?.state === 'placeholder') out.push(path);
+    }
+    return out.sort();
+  }
+
+  /**
+   * "Open a new layer on top of that artipod" (sync plan Phase D): mount a
+   * WRITABLE CopyOnWrite overlay whose lower is the ref's lazy view. Writes
+   * land in the upper (Phase E pushes them as diff layers); reads pass
+   * through — fetch-on-read when onDemand is 'fetch'.
+   */
+  async openOverlay(ref: string, at: string): Promise<void> {
+    const { layers, layerBytes } = await this.loadView(ref);
+    const view = buildOciView({ layers, layerBytes, name: `basis:${ref}`, onDehydrated: this.onDemandHook(ref) });
+    const zen = await import('@zenfs/core');
+    const cow = await zen.resolveMountConfig({
+      backend: (zen as unknown as { CopyOnWrite: never }).CopyOnWrite,
+      readable: view,
+      writable: { backend: zen.InMemory, label: `upper:${ref}` },
+    } as never);
+    await this.p.mkdir(at, { recursive: true });
+    this.overlays.get(ref)?.unmount();
+    (zen.mount as (path: string, fs: unknown) => void)(at, cow);
+    this.overlays.set(ref, {
+      at,
+      upper: (cow as unknown as { writable: unknown }).writable,
+      unmount: () => zen.umount(at),
+    });
+  }
+
+  closeOverlay(ref: string): void {
+    this.overlays.get(ref)?.unmount();
+    this.overlays.delete(ref);
   }
 
   /** Placeholder layers whose winning entries match the glob/path. */
@@ -431,6 +487,53 @@ export class Hydrator {
     return state.layers.filter((l) => ordinals.has(l.ordinal) && l.state === want);
   }
 
+  /** One layer, whole blob: fetch → verify → persist → flip state. No remount. */
+  private async fetchLayer(ref: string, layer: HydrationLayerState, lane: Lane): Promise<number> {
+    let bytes = 0;
+    await this.scheduler.schedule(
+      lane,
+      async () => {
+        const { store, events, zfs, remote } = this.options;
+        events?.emit('fetch:start', { digest: layer.digest, lane, size: layer.size });
+        this.inflight.add(layer.digest);
+        try {
+          const compressed =
+            remote && hasRange(remote)
+              ? await fetchBlobResumable({ digest: layer.digest, zfs, events, lane, fetchRange: (start) => remote.getBlobRange(layer.digest, start) })
+              : await this.transport().fetchBlob(parseImageRef(ref), layer.digest);
+          await store.putBlob(compressed, layer.digest);
+          const tar = isGzip(compressed) ? await gunzip(compressed) : compressed;
+          await verifyDigest(tar, layer.diffId, 'hydrated layer diff');
+          await store.putUncompressed(layer.diffId, tar);
+          bytes = compressed.length;
+          events?.emit('fetch:done', { digest: layer.digest, ok: true, bytes: compressed.length });
+        } catch (e) {
+          events?.emit('fetch:done', { digest: layer.digest, ok: false, bytes: 0 });
+          throw e;
+        } finally {
+          this.inflight.delete(layer.digest);
+        }
+      },
+      layer.digest,
+    );
+    const state = (await this.stateFor(ref))!;
+    state.layers[layer.ordinal].state = 'hydrated';
+    await this.writeState(state);
+    return bytes;
+  }
+
+  /** Fetch-on-read hook for views — present only in 'fetch' mode. */
+  private onDemandHook(ref: string): ((path: string, ordinal: number) => Promise<Uint8Array | null>) | undefined {
+    if (this.options.onDemand !== 'fetch') return undefined;
+    return async (_path, ordinal) => {
+      const state = await this.stateFor(ref);
+      const layer = state?.layers[ordinal];
+      if (!layer) return null;
+      if (layer.state === 'placeholder') await this.fetchLayer(ref, layer, 'interactive');
+      return this.options.store.getUncompressed(layer.diffId);
+    };
+  }
+
   /**
    * Hydrate every lazy layer backing `pattern`: whole blob per layer,
    * byte-offset resume when the source supports Range, digest-verified,
@@ -440,38 +543,10 @@ export class Hydrator {
     const targets = await this.backingLayers(ref, pattern, 'placeholder');
     let bytes = 0;
     for (const layer of targets) {
-      await this.scheduler.schedule(
-        lane,
-        async () => {
-          const { store, events, zfs, remote } = this.options;
-          events?.emit('fetch:start', { digest: layer.digest, lane, size: layer.size });
-          this.inflight.add(layer.digest);
-          try {
-            const compressed =
-              remote && hasRange(remote)
-                ? await fetchBlobResumable({ digest: layer.digest, zfs, events, lane, fetchRange: (start) => remote.getBlobRange(layer.digest, start) })
-                : await this.transport().fetchBlob(parseImageRef(ref), layer.digest);
-            await store.putBlob(compressed, layer.digest);
-            const tar = isGzip(compressed) ? await gunzip(compressed) : compressed;
-            await verifyDigest(tar, layer.diffId, 'hydrated layer diff');
-            await store.putUncompressed(layer.diffId, tar);
-            bytes += compressed.length;
-            events?.emit('fetch:done', { digest: layer.digest, ok: true, bytes: compressed.length });
-          } catch (e) {
-            events?.emit('fetch:done', { digest: layer.digest, ok: false, bytes: 0 });
-            throw e;
-          } finally {
-            this.inflight.delete(layer.digest);
-          }
-        },
-        layer.digest,
-      );
+      bytes += await this.fetchLayer(ref, layer, lane);
       layer.state = 'hydrated';
     }
     if (targets.length > 0) {
-      const state = (await this.stateFor(ref))!;
-      for (const t of targets) state.layers[t.ordinal].state = 'hydrated';
-      await this.writeState(state);
       const mount = this.mounts.get(ref);
       if (mount) await this.mount(ref, mount.at);
     }
