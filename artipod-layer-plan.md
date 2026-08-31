@@ -43,8 +43,8 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 |---|---|---|---|
 | 0 — repo prep | `phase-0-esm-vitest` | done (owner npm actions pending) | [#33](https://github.com/mieweb/artipod/pull/33), [#34](https://github.com/mieweb/artipod/pull/34) |
 | 1 — fs injection | `phase-1-podfs-injection` | done | [#35](https://github.com/mieweb/artipod/pull/35) |
-| 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | done (shim deletion + ui PR landing pending) | mieweb/artipod#37, [horner/artipod-sync#2](https://github.com/horner/artipod-sync/pull/2), [mieweb/ui#404](https://github.com/mieweb/ui/pull/404) |
-| 3 — manifest + realizers | `phase-3-manifest-realizers` | not started | |
+| 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | done (shim deletion + ui PR landing pending) | [#37](https://github.com/mieweb/artipod/pull/37)+[#38](https://github.com/mieweb/artipod/pull/38), [horner/artipod-sync#2](https://github.com/horner/artipod-sync/pull/2), [mieweb/ui#404](https://github.com/mieweb/ui/pull/404) |
+| 3 — manifest + realizers | `phase-3-manifest-realizers` | done | mieweb/artipod#39, [horner/artipod-sync#3](https://github.com/horner/artipod-sync/pull/3) |
 | 4 — OCI store | `phase-4-oci-store` | not started | |
 | 5 — snapshots + commit | `phase-5-snapshots` | not started | |
 | 6 — sync + manager | `phase-6-sync-manager` | not started | |
@@ -319,9 +319,9 @@ The one structural refactor everything else depends on. `ArtiMount` already uses
 
 ### Phase 3 — Pod manifest + realizers
 
-> **Branch** `phase-3-manifest-realizers` · **Status** _not started_
+> **Branch** `phase-3-manifest-realizers` · **Status** _done_
 
-- [ ] Manifest type in core (aligned with issue #1's "Artipod mount declaration"):
+- [x] Manifest type in core (aligned with issue #1's "Artipod mount declaration"):
 
 ```ts
 interface PodManifest {
@@ -338,20 +338,22 @@ interface PodManifest {
 }
 ```
 
-- [ ] `realizeZenFs(manifest)` → ZenFS mount configuration (browser + Node); `realizeDocker(manifest)` → bind each `hostDir` mount at its manifest `path` (the historical fixed `/context/<name>` layout becomes just the default template our apps use); reject virtual sources with a clear error — collision #4.
-- [ ] `buildPrompt`/tools/sandbox operate on the realized pod; `/proc/pod/manifest.json` provider exposes it to shell + model.
-- [ ] artipod-sync boots from a manifest (its current single-`/` layout expressed as one `rw` mount) instead of bespoke init.
+- [x] `realizeZenFs(manifest)` → ZenFS mount configuration (browser + Node); `realizeDocker(manifest)` → bind each `hostDir` mount at its manifest `path` (the historical fixed `/context/<name>` layout becomes just the default template our apps use); reject virtual sources with a clear error — collision #4. Implementation notes: hostDir → ZenFS `Passthrough` (Node only; actionable browser error), `cow` → `CopyOnWrite` upper over the source (writes never reach the host — pinned by test); zenfs `ro` is tool-layer-enforced until OciViewFS (Phase 4) while docker enforces `:ro` for real — documented. `createZenFsPod` also closes the `pod.createSandbox()` item deferred from Phase 2 (realize-or-**adopt**, pod-scoped sandbox/file-tools/agent-tools).
+- [x] `buildPrompt`/tools/sandbox operate on the realized pod; `/proc/pod/manifest.json` provider exposes it to shell + model (`registerPodManifestProvider`, replace-on-re-realize).
+- [x] artipod-sync boots from a manifest (its current single-`/` layout expressed as one `rw` mount) instead of bespoke init — adopt mode: `initFileSystem` keeps backend choice/migration/tab-lock, the pod wraps the returned store.
 
 **Done when:**
 
-- [ ] Contract test: the same manifest produces the same file view in a browser-style (ZenFS) sandbox and a Node sandbox
-- [ ] Docker realizer runs a command against `hostDir` mounts with the existing hardening tests still green
-- [ ] A manifest with a virtual source fails fast on the docker realizer with an actionable error (test)
-- [ ] artipod-sync boots from a manifest (its current single-`/` layout expressed as one `rw` mount)
+- [x] Contract test: the same manifest produces the same file view in a browser-style (ZenFS) sandbox and a Node sandbox — verified two ways: zenfs realizer's `find /context/src` equals the host walk (zenfs-realizer.test), and the identical hostDir manifest realized via docker lists the identical view at the manifest paths (manifestDocker.spec)
+- [x] Docker realizer runs a command against `hostDir` mounts with the existing hardening tests still green — manifestDocker.spec runs against the hardened container (seccomp profile), full suite 20 files / 327 tests green
+- [x] A manifest with a virtual source fails fast on the docker realizer with an actionable error (test) — realizeDocker + ArtiPod.fromManifest both pinned ("sync the pod to this host first")
+- [x] artipod-sync boots from a manifest (its current single-`/` layout expressed as one `rw` mount) — verified live: `/proc/pod/manifest.json` renders in the shell with formatVersion 1 and the actually-chosen backend
 
 **Worklog:**
 
-- _(empty)_
+- 2026-08-30 — implemented: `src/manifest.ts` (formatVersion 1 per §5 schema-regret mitigation, `application/vnd.artipod.manifest.v1+json`, normalizing validation, serialize/parse round-trip), `src/realize/docker.ts` (pure bind mapping, no dockerode — exportable from the root safely), `src/realize/zenfs.ts` (realizeZenFs + createZenFsPod), `src/proc/pod-provider.ts`. ZenFS 2.4.4 ships `Passthrough` and `CopyOnWrite` — hostDir and cow both work first try (cow isolation pinned: sandbox overwrite leaves the host file untouched). `ArtiPod.fromManifest` + manifest-declared container paths (`containerPaths` map; `/context/<name>` remains the non-manifest default).
+- 2026-08-30 — tests: 13 realizer tests (validation, parity contract, cow, /proc/pod, tools over mount table incl. ro create_file denial, adopt mode, Phase-4 deferrals) + 4 docker contract tests (manifest-path binds, `:ro` boundary enforcement + rw write-through, prompt echo, virtual fail-fast). Package: 20 files / **327 tests**. Caught by the build: `*.test.ts` files had been compiling into dist since Phase 2 — excluded now.
+- 2026-08-30 — artipod-sync boots from a manifest (horner/artipod-sync#3, merged): adopt mode + `/proc` now mounted by default; verified live in the browser (manifest.json in the shell; the secondary-tab read-only guard incidentally proven while doing it — a stale background tab held the Web Lock and got the read-only banner).
 
 ### Phase 4 — OCI store + layer filesystems (issue #1 steps 1–5)
 
