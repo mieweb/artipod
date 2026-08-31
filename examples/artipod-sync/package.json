@@ -21,6 +21,7 @@
     "@zenfs/core": "^2.3.11",
     "@zenfs/dom": "^1.0.0",
     "diff": "^8.0.2",
+    "fflate": "^0.8.3",
     "isomorphic-git": "^1.25.0",
     "just-bash": "^3.2.0",
     "lucide-react": "^0.292.0",

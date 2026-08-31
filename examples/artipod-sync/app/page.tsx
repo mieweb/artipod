@@ -38,9 +38,10 @@ export default function Home() {
     (async () => {
       const info = await initFileSystem();
       // just-bash + the pod layer load lazily so they stay out of the first-load bundle
-      const [{ createZenFsPod }, { ArtipodRegistryProxyTransport }, { fs }] = await Promise.all([
+      const [{ createZenFsPod }, { ArtipodRegistryProxyTransport }, { HttpPodStore }, { fs }] = await Promise.all([
         import('@artipod/core'),
         import('@artipod/core/oci'),
+        import('@artipod/core/manager'),
         import('@/lib/filesystem'),
       ]);
       if (cancelled) return;
@@ -70,6 +71,8 @@ export default function Home() {
           cwd: '/repo',
           // browser pulls go through the /api/oci relay (allowlist server-side)
           oci: { transport: new ArtipodRegistryProxyTransport('/api/oci') },
+          // push/pull/clone talk to this deployment's manager store
+          sync: { remote: new HttpPodStore('/api/pods') },
           onEdit: (path) => {
             setEditingFile(path);
             setActiveView('editor');
