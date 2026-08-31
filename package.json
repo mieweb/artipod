@@ -77,7 +77,8 @@
     "lint:fix": "eslint src --ext .ts --fix",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build",
-    "example:basic": "npx tsx examples/basic/basic-pod-usage.ts"
+    "example:basic": "npx tsx examples/basic/basic-pod-usage.ts",
+    "prepare": "npm run build"
   },
   "keywords": [
     "ai",
