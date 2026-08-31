@@ -17,27 +17,18 @@
  * but node ≥18 always has CompressionStream).
  */
 
-import { readdir, readFile, lstat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, readFile, lstat, mkdir, rm, writeFile, utimes, chmod, realpath } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
 import { sha256, type Digest } from '../oci/digest.js';
-import { gzip } from '../oci/gzip.js';
-import {
-  ANNOTATION_HYDRATION,
-  ANNOTATION_LAYER_GROUP,
-  ANNOTATION_LAYER_INDEX,
-  indexTar,
-  makeLayerIndexArtifact,
-  writeTar,
-  type TarWriteEntry,
-} from '../oci/tar.js';
+import { gunzip, isGzip } from '../oci/gzip.js';
+import { indexTar, type LayerEntry } from '../oci/tar.js';
+import { mergeLayerEntries } from '../oci/view.js';
+import { buildFileLayer, ANNOTATION_ACTOR, ANNOTATION_MTIME, ANNOTATION_PARENTS, ANNOTATION_PATH } from '../oci/file-layer.js';
 import type { ImageManifest } from '../oci/pull.js';
 import type { PodStore } from '../manager/pod-store.js';
 import { pathGlobMatch } from '../manager/hydration.js';
 
-export const ANNOTATION_PATH = 'org.artipod.path';
-export const ANNOTATION_MTIME = 'org.artipod.mtime';
-export const ANNOTATION_ACTOR = 'org.artipod.actor';
-export const ANNOTATION_PARENTS = 'org.artipod.parents';
+export { ANNOTATION_ACTOR, ANNOTATION_MTIME, ANNOTATION_PARENTS, ANNOTATION_PATH };
 
 export const DEFAULT_PUBLISH_IGNORE = ['node_modules/**', '.git/**', '.artipod/**', '.next/**'];
 
@@ -158,42 +149,28 @@ export async function publishDirectory(
   };
 
   for (const bucket of buckets) {
-    const entries: TarWriteEntry[] = [];
+    const entries = [];
     for (const file of bucket.files) {
       entries.push({
         path: file.path,
-        type: 'file',
+        type: 'file' as const,
         content: new Uint8Array(await readFile(file.full)),
         mode: file.mode,
         mtimeMs: file.mtimeMs,
       });
     }
-    const tar = writeTar(entries);
-    const diffId = await sha256(tar);
-    const compressed = await gzip(tar);
-    const layerDigest = await sha256(compressed);
-    const wrote = await putIfAbsent(compressed, layerDigest);
-    if (!wrote) reusedLayers += 1;
-
-    const indexBytes = encoder.encode(JSON.stringify(makeLayerIndexArtifact(indexTar(tar))));
-    const indexDigest = await sha256(indexBytes);
-    await putIfAbsent(indexBytes, indexDigest);
-
     const mtime = Math.max(...bucket.files.map((f) => f.mtimeMs));
-    layerDescriptors.push({
-      mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
-      digest: layerDigest,
-      size: compressed.length,
-      annotations: {
-        [ANNOTATION_HYDRATION]: 'lazy',
-        [ANNOTATION_LAYER_INDEX]: indexDigest,
-        [ANNOTATION_PATH]: bucket.group ?? bucket.files[0].path,
-        [ANNOTATION_MTIME]: String(Math.round(mtime)),
-        [ANNOTATION_ACTOR]: actor,
-        ...(bucket.group ? { [ANNOTATION_LAYER_GROUP]: bucket.group } : {}),
-      },
+    const layer = await buildFileLayer(entries, {
+      path: bucket.group ?? bucket.files[0].path,
+      mtimeMs: mtime,
+      actor,
+      group: bucket.group,
     });
-    diffIds.push(diffId);
+    const wrote = await putIfAbsent(layer.compressed, layer.layerDigest);
+    if (!wrote) reusedLayers += 1;
+    await putIfAbsent(layer.indexBytes, layer.indexDigest);
+    layerDescriptors.push(layer.descriptor);
+    diffIds.push(layer.diffId);
   }
 
   const config = encoder.encode(
@@ -243,4 +220,129 @@ export async function publishDirectory(
   await store.putRef(ref, manifestDigest, manifest.mediaType!);
 
   return { manifestDigest, ref, layers: layerDescriptors.length, reusedLayers, bytes, warnings, unchanged: false };
+}
+
+// --- materialize (sync plan Phase E: browser layers land in the real folder) --
+
+export interface MaterializeRefResult {
+  written: number;
+  deleted: number;
+  skipped: number;
+  warnings: string[];
+}
+
+async function loadMergedView(
+  store: PodStore,
+  manifestDigest: Digest,
+): Promise<{ merged: ReturnType<typeof mergeLayerEntries>; bytesByLayer: Uint8Array[]; manifest: ImageManifest }> {
+  const manifest = JSON.parse(decoder.decode(await store.getBlob(manifestDigest))) as ImageManifest;
+  const layers: LayerEntry[][] = [];
+  const bytesByLayer: Uint8Array[] = [];
+  for (const layer of manifest.layers) {
+    const compressed = await store.getBlob(layer.digest);
+    const tar = isGzip(compressed) ? await gunzip(compressed) : compressed;
+    layers.push(indexTar(tar));
+    bytesByLayer.push(tar);
+  }
+  return { merged: mergeLayerEntries(layers), bytesByLayer, manifest };
+}
+
+/** '../'-free, non-absolute relative path or null. */
+function safeRelPath(podPath: string): string | null {
+  const rel = podPath.replace(/^\/+/, '');
+  if (!rel || rel.split('/').some((s) => s === '..' || s === '' || s === '.')) return null;
+  return rel;
+}
+
+/**
+ * Write the ref's merged tree into a real directory: changed files land,
+ * whiteout-deleted paths (vs the parent head) are removed, file mtimes come
+ * from the tar entries so the next publishDirectory reproduces identical
+ * blobs (the D7 loop-prevention round trip).
+ *
+ * Safety invariants (test-pinned): targets must resolve under `dir` after
+ * symlink resolution of `dir` itself; traversal segments are rejected;
+ * existing symlinks at a target are REPLACED, never followed.
+ */
+export async function materializeRef(store: PodStore, ref: string, dir: string): Promise<MaterializeRefResult> {
+  const head = await store.getRef(ref);
+  if (!head) throw new Error(`materializeRef: no such ref '${ref}'`);
+  const realDir = await realpath(resolve(dir));
+  const warnings: string[] = [];
+  let written = 0;
+  let deleted = 0;
+  let skipped = 0;
+
+  const { merged, bytesByLayer, manifest } = await loadMergedView(store, head.manifestDigest);
+
+  const guard = (rel: string): string | null => {
+    const target = resolve(realDir, rel);
+    if (target !== realDir && !target.startsWith(realDir + sep)) return null;
+    return target;
+  };
+
+  for (const [podPath, entry] of [...merged.entries.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    if (entry.type === 'dir') continue;
+    if (entry.type === 'symlink' || entry.type === 'hardlink') {
+      warnings.push(`skipped ${entry.type}: ${podPath}`);
+      skipped += 1;
+      continue;
+    }
+    const rel = safeRelPath(podPath);
+    const target = rel ? guard(rel) : null;
+    if (!rel || !target) {
+      warnings.push(`unsafe path refused: ${podPath}`);
+      skipped += 1;
+      continue;
+    }
+    const bytes = bytesByLayer[entry.layer].subarray(entry.offset, entry.offset + entry.size);
+    const mtime = new Date(entry.mtimeMs || Number(manifest.layers[entry.layer]?.annotations?.[ANNOTATION_MTIME] ?? Date.now()));
+    // skip identical content so untouched files keep their timestamps
+    try {
+      const stats = await lstat(target);
+      if (stats.isSymbolicLink()) await rm(target); // never write through a link
+      else if (stats.isFile() && stats.size === bytes.length && Math.floor(stats.mtimeMs / 1000) === Math.floor(mtime.getTime() / 1000)) {
+        skipped += 1;
+        continue;
+      }
+    } catch {
+      // new file
+    }
+    await mkdir(join(target, '..'), { recursive: true });
+    await writeFile(target, bytes);
+    if (entry.mode) await chmod(target, entry.mode & 0o7777);
+    await utimes(target, mtime, mtime);
+    written += 1;
+  }
+
+  // Deletions: paths present in the parent head's view but absent now.
+  const parents = manifest.annotations?.[ANNOTATION_PARENTS];
+  if (parents) {
+    for (const parentDigest of JSON.parse(parents) as Digest[]) {
+      let parentView: Awaited<ReturnType<typeof loadMergedView>>;
+      try {
+        parentView = await loadMergedView(store, parentDigest);
+      } catch {
+        warnings.push(`parent ${parentDigest} unreadable — deletions vs it skipped`);
+        continue;
+      }
+      for (const [podPath, entry] of parentView.merged.entries) {
+        if (entry.type === 'dir' || merged.entries.has(podPath)) continue;
+        const rel = safeRelPath(podPath);
+        const target = rel ? guard(rel) : null;
+        if (!rel || !target) continue;
+        try {
+          const stats = await lstat(target);
+          if (!stats.isSymbolicLink()) {
+            await rm(target);
+            deleted += 1;
+          }
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }
+
+  return { written, deleted, skipped, warnings };
 }

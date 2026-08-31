@@ -71,6 +71,16 @@ export interface FetchDoneEvent {
   bytes: number;
 }
 
+/** Sync plan Phase E: an overlay write-back push settled. */
+export interface SyncPushEvent {
+  ref: string;
+  ok: boolean;
+  /** Overlay layers on the pushed head (files + whiteouts). */
+  layers: number;
+  movedBytes: number;
+  error?: string;
+}
+
 export interface PodEventMap {
   'exec:start': ExecStartEvent;
   'exec:end': ExecEndEvent;
@@ -81,6 +91,7 @@ export interface PodEventMap {
   'fetch:start': FetchStartEvent;
   'fetch:progress': FetchProgressEvent;
   'fetch:done': FetchDoneEvent;
+  'sync:push': SyncPushEvent;
 }
 
 export type PodEventName = keyof PodEventMap;

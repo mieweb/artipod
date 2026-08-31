@@ -12,6 +12,8 @@ export type { SyncResult, SyncOptions, MaterializeOptions } from './sync.js';
 export { HttpPodStore } from './http-store.js';
 export { PodSessionHost, SESSION_ID_PATTERN } from './session-host.js';
 export type { SessionHostOptions, SessionAcquire } from './session-host.js';
+export { buildOverlayHead, pushOverlay } from './overlay-sync.js';
+export type { OverlayHeadOptions, OverlayHeadResult, OverlayPushResult } from './overlay-sync.js';
 
 // --- Phase 6.5: encryption custody + authority ------------------------------
 export { Keyring, PodLockedError, makeKeysProcProvider } from './keyring.js';

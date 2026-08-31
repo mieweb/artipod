@@ -279,7 +279,19 @@ export class Hydrator {
   private readonly inflight = new Set<string>();
   private readonly mounts = new Map<string, { at: string; unmount: () => void }>();
   /** ref → writable overlay opened over the lazy basis (sync plan Phase D/E). */
-  readonly overlays = new Map<string, { at: string; upper: unknown; unmount: () => void }>();
+  readonly overlays = new Map<
+    string,
+    {
+      at: string;
+      /** The upper fs is also mounted here — the write-back diff source. */
+      upperAt: string;
+      upper: unknown;
+      journal: { isDeleted(path: string): boolean; entries: { op: string; path: string }[] };
+      /** Deleted pod path → first-seen ms (the whiteout LWW clock). */
+      deletionStamps: Map<string, number>;
+      unmount: () => void;
+    }
+  >();
 
   constructor(private readonly options: HydratorOptions) {
     this.scheduler = options.scheduler ?? new BandwidthScheduler();
@@ -365,12 +377,14 @@ export class Hydrator {
 
       if (lazy && entries) {
         await store.putLayerIndex(diffId as Digest, entries);
+        // A re-pull keeps layers whose bytes are already local (twin present).
+        const cached = await store.hasUncompressed(diffId as Digest);
         layers.push({
           ordinal: i,
           digest: layer.digest,
           diffId: diffId as Digest,
           size: layer.size,
-          state: 'placeholder',
+          state: cached ? 'hydrated' : 'placeholder',
           ...(ann[ANNOTATION_LAYER_GROUP] ? { group: ann[ANNOTATION_LAYER_GROUP] } : {}),
         });
         continue;
@@ -454,19 +468,51 @@ export class Hydrator {
     const { layers, layerBytes } = await this.loadView(ref);
     const view = buildOciView({ layers, layerBytes, name: `basis:${ref}`, onDehydrated: this.onDemandHook(ref) });
     const zen = await import('@zenfs/core');
+    // Re-opening (a basis refresh) keeps the upper and its deletion journal:
+    // local changes stay overlaid on the new basis.
+    const existing = this.overlays.get(ref);
     const cow = await zen.resolveMountConfig({
       backend: (zen as unknown as { CopyOnWrite: never }).CopyOnWrite,
       readable: view,
-      writable: { backend: zen.InMemory, label: `upper:${ref}` },
+      writable: existing ? (existing.upper as never) : { backend: zen.InMemory, label: `upper:${ref}` },
+      ...(existing ? { journal: existing.journal as never } : {}),
     } as never);
+    const upperAt = `/.artipod/upper/${encodeURIComponent(ref)}`;
     await this.p.mkdir(at, { recursive: true });
-    this.overlays.get(ref)?.unmount();
-    (zen.mount as (path: string, fs: unknown) => void)(at, cow);
+    await this.p.mkdir(upperAt, { recursive: true });
+    existing?.unmount();
+    const zenMount = zen.mount as (path: string, fs: unknown) => void;
+    const upper = (cow as unknown as { writable: unknown }).writable;
+    zenMount(at, cow);
+    zenMount(upperAt, upper);
     this.overlays.set(ref, {
       at,
-      upper: (cow as unknown as { writable: unknown }).writable,
-      unmount: () => zen.umount(at),
+      upperAt,
+      upper,
+      journal: (cow as unknown as { journal: { isDeleted(p: string): boolean; entries: { op: string; path: string }[] } }).journal,
+      deletionStamps: existing?.deletionStamps ?? new Map(),
+      unmount: () => {
+        zen.umount(at);
+        zen.umount(upperAt);
+      },
     });
+  }
+
+  /** Current deletions (journal → stamped map; stamps survive re-opens). */
+  overlayDeletions(ref: string): Map<string, number> {
+    const overlay = this.overlays.get(ref);
+    if (!overlay) return new Map();
+    const live = new Set<string>();
+    for (const entry of overlay.journal.entries) {
+      if (overlay.journal.isDeleted(entry.path)) live.add(entry.path);
+    }
+    for (const path of live) {
+      if (!overlay.deletionStamps.has(path)) overlay.deletionStamps.set(path, Date.now());
+    }
+    for (const path of [...overlay.deletionStamps.keys()]) {
+      if (!live.has(path)) overlay.deletionStamps.delete(path); // re-created
+    }
+    return overlay.deletionStamps;
   }
 
   closeOverlay(ref: string): void {

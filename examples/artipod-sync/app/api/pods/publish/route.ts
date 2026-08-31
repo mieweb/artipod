@@ -5,37 +5,13 @@
  * lives in @artipod/core/server; THIS deployment's policy is the
  * ARTIPOD_PUBLISH_ROOTS allowlist — empty = publishing disabled.
  */
-import { realpath } from 'node:fs/promises';
-import path from 'node:path';
 import { publishDirectory } from '@artipod/core/server';
 import { getPodStore } from '@/lib/pods-store';
+import { recordPublishDir, withinPublishRoots } from '@/lib/publish-map';
 
 export const dynamic = 'force-dynamic';
 
 const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._\-/]{0,180}(:[A-Za-z0-9._\-]{1,60})?$/;
-
-/** Resolve symlinks, then require the target to sit under an allowed root. */
-async function withinPublishRoots(dir: string): Promise<string | null> {
-  const roots = (process.env.ARTIPOD_PUBLISH_ROOTS ?? '')
-    .split(',')
-    .map((r) => r.trim())
-    .filter(Boolean);
-  let real: string;
-  try {
-    real = await realpath(path.resolve(dir));
-  } catch {
-    return null;
-  }
-  for (const root of roots) {
-    try {
-      const realRoot = await realpath(path.resolve(root));
-      if (real === realRoot || real.startsWith(realRoot + path.sep)) return real;
-    } catch {
-      // unreadable root entries never authorize anything
-    }
-  }
-  return null;
-}
 
 export async function POST(req: Request): Promise<Response> {
   let body: { dir?: unknown; ref?: unknown; group?: unknown; actor?: unknown };
@@ -60,5 +36,7 @@ export async function POST(req: Request): Promise<Response> {
     group: Array.isArray(body.group) ? (body.group as string[]) : undefined,
     actor: typeof body.actor === 'string' ? body.actor : undefined,
   });
+  // Write-back target (sync plan Phase E): pushed heads materialize here.
+  await recordPublishDir(body.ref, dir);
   return Response.json(result, { status: result.unchanged ? 200 : 201 });
 }

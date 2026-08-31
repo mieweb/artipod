@@ -27,7 +27,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): sync phas
 | B — `@artipod/core/server` subpath (the heft leaves the app) | `sync-b-server` | done | [#48](https://github.com/mieweb/artipod/pull/48) |
 | C — folder → artipod publish (per-file layers) | `sync-c-publish` | done | [#49](https://github.com/mieweb/artipod/pull/49) |
 | D — browser opens a basis lazily; fetch-on-read | `sync-d-lazy-open` | done | [#50](https://github.com/mieweb/artipod/pull/50) |
-| E — write-back: auto-push layers, server materializes | `sync-e-writeback` | todo | |
+| E — write-back: auto-push layers, server materializes | `sync-e-writeback` | done | [#51](https://github.com/mieweb/artipod/pull/51) |
 | F — CRDT convergence: per-file LWW merge | `sync-f-crdt` | todo | |
 
 ## 1. Goal — the demo scenario (north star)
@@ -148,7 +148,7 @@ publishDirectory(store: PodStore, dir: string, ref: string, opts?: {
 
 ### 3.5 Phase E — write-back
 
-- Browser: subscribe `fs:changed` → 2 s quiet window → `SnapshotManager` diff of the CoW upper vs basis (deletes → `.wh.` whiteouts, P5 machinery) → layers annotated with `org.artipod.mtime`/`actor` (browser actor = stable per-profile UUID) → `syncRef` push to `HttpPodStore` under the pod's ref (e.g. `folder/docs@<actor>` until F merges heads). `skipIfClean` avoids empty pushes; anti-entropy makes redundant pushes no-ops.
+- Browser: subscribe `fs:changed` → 2 s quiet window → overlay-diff head (upper files → appended per-file layers, journal deletes → one whiteout layer) → `syncRef` push **to the same ref as a fast-forward with a parents link** — _deviation (rule 6) from the earlier `folder/docs@<actor>` sketch: per-actor refs would drag Phase F's cross-ref winner-picking into E; same-ref + parents DAG keeps E demoable and F adds merge-on-non-descendant_. `skipIfClean` avoids empty pushes; anti-entropy makes redundant pushes no-ops.
 - Server: `createPodStoreHandler`'s `onRefPut` fires → `materializeRef(store, ref, dir)`: compute per-path winners (same merge fn as F), write changed files into the real folder, apply whiteouts as deletes. **Safety invariants** (test-pinned): resolved target must stay under `dir` (reject `..`, absolute, and symlink-traversal escapes); never follow existing symlinks when writing; materialize only inside `ARTIPOD_PUBLISH_ROOTS`.
 - **Loop prevention**: materialize sets file mtimes from layer metadata, so the next `publishDirectory` reproduces identical blobs → CAS dedup → no new layers → no ping-pong. Actor annotations make any residual echo visible in the DAG.
 
@@ -234,12 +234,19 @@ Formal shape: pod state = join-semilattice of
   - 2026-08-31 — live (browser at :3599, docs/ published): picker → click → terminal at `/open/folder_docs_latest`, `ls` lists 7 files zero-fetch, `artipod files` all `remote`, `head -2 browser.md` prints content and flips it `local` (console.md stays `remote`), `echo demo-note > note.txt && cat` works in the overlay. Screenshots in PR.
 
 ### Phase E — write-back (`sync-e-writeback`)
-- [ ] Debounced auto-push: `fs:changed` → quiet window → diff snapshot (whiteouts incl.) → `syncRef` push; `skipIfClean`; explicit `artipod push` unchanged
-- [ ] `materializeRef` + `onRefPut` wiring; traversal/symlink safety tests
-- [ ] Loop prevention: mtime round-trip ⇒ republish is a CAS no-op (test)
-- [ ] Live: `echo hi > testfile.txt` in the browser appears in the server folder; `rm` deletes it; server-side edit + publish appears in the browser
+- [x] Debounced auto-push: `fs:changed` → quiet window → diff snapshot (whiteouts incl.) → `syncRef` push; `skipIfClean`; explicit `artipod push` unchanged
+- [x] `materializeRef` + `onRefPut` wiring; traversal/symlink safety tests
+- [x] Loop prevention: mtime round-trip ⇒ republish is a CAS no-op (test)
+- [x] Live: `echo hi > testfile.txt` in the browser appears in the server folder; `rm` deletes it; server-side edit + publish appears in the browser
 - **Done when**: §1 sentences 5–6 pass scripted both directions.
 - Worklog:
+  - 2026-08-31 — diff source decision: NOT SnapshotManager (it walks pod roots vs its own chain) — the CoW **upper IS the diff**: zenfs CopyOnWrite has a deletion `Journal` (reusable via options) and the upper fs mounts at `/.artipod/upper/<ref>` for a plain promises-API walk. `openOverlay` now reuses upper+journal across re-opens (basis refresh keeps local changes), and `overlayDeletions()` stamps first-seen deletion times (the whiteout LWW clock — the journal has no timestamps).
+  - 2026-08-31 — head shape: new head = basis layers verbatim (group layers + other clients' laziness preserved) + one per-file layer per upper file + one whiteout layer, all annotated `org.artipod.overlay: <actor>` so the next push replaces them wholesale (idempotent; unchanged upper ⇒ byte-identical head ⇒ skip). `buildFileLayer` extracted to src/oci/file-layer.ts — publishDirectory and the overlay push share it. Push = local head build + `syncRef` (remote already holds basis blobs → only new layers move; local placeholders never need fetching — anti-entropy only reads local blobs the remote LACKS).
+  - 2026-08-31 — materializeRef: merged view (whiteouts applied) → real folder; deletions = parent-head paths absent from the new head; mtimes from tar entries (second-granularity) → `publishDirectory` after materialize reuses EVERY layer blob (pinned) and the canonical republish after that is a full no-op. Safety pinned: `../` refused, targets prefix-checked under realpath(dir), squatting symlinks replaced never followed.
+  - 2026-08-31 — pod wiring: `sync.actor` (app persists `browser:<uuid8>` in localStorage), `sync.autoPush` (default ON w/ basis+remote, 2 s debounce, queued re-push, dispose clears), `pod.pushBasis()`, `sync:push` event; push failures console.warn (a silent catch cost an hour of live debugging). `artipod open` now refreshes when the remote head moved; `pullIndex` keeps layers hydrated when their twin is already local. App: publish-map.json (ref→dir beside the store) written by /api/pods/publish; pods route `onRefPut` re-checks roots then materializes (best-effort, warn on failure).
+  - 2026-08-31 — writebackPod.spec (4) all first-run green: echo→layer+parents, rm→whiteout (origin blob kept), materialize+CAS-no-op republish, server-edit→refresh (upper survives), debounce event, traversal/symlink pins. Root 408, app 7 (incl. ref-PUT-resurrects-deleted-file wiring test).
+  - 2026-08-31 — **gotcha (cost the live session an hour): Next's webpack cache serves a STALE copied `file:` package** — `npm install` refreshed node_modules/@artipod/core but `.next/cache` kept old module bytecode (browser pod had no `pushBasis`, D-era overlay shape). `rm -rf .next` before rebuild after ANY core refresh. Also: Playwright-driven pushes log `net::ERR_ABORTED` bursts when an automation snippet ends mid-flight — the pushes complete anyway (files on disk); judge by effects, not the request log.
+  - 2026-08-31 — LIVE both directions (:3599, /tmp/demo-folder published via route): browser `echo hello-from-browser > sync-note.md && rm browser.md` → ~2 s → sync-note.md ON DISK, browser.md DELETED on disk; `echo server-edit v2 >> README.md` + republish (3 layers, 2 reused) → browser re-open pulls 2528 bytes of metadata → `tail -1 README.md` = server-edit v2, sync-note.md intact.
 
 ### Phase F — CRDT merge (`sync-f-crdt`)
 - [ ] `mergeHeads` per §3.6 (ancestor walk, per-path LWW, canonical ordering, parents=[A,B])

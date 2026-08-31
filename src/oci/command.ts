@@ -244,7 +244,9 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
         if (!sub) return fail('usage: artipod open <ref> [path]');
         let state = await hydrator.stateFor(sub);
         let pulled = '';
-        if (!state) {
+        // Refresh when the manager's head moved (a republish or another actor's push).
+        const remoteHead = remote ? await remote.getRef(sub).catch(() => null) : null;
+        if (!state || (remoteHead && remoteHead.manifestDigest !== state.manifestDigest)) {
           const result = await hydrator.pullIndex(sub);
           state = result.state;
           pulled = `index-level pull of ${sub}: ${result.transferredBytes} bytes moved\n`;
@@ -252,8 +254,8 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
         const at = rest.find((a) => a.startsWith('/')) ?? `/open/${sanitizeRefForPath(sub)}`;
         await hydrator.openOverlay(sub, at);
         events?.emit('fs:changed', { origin: 'exec' });
-        const remote = (await hydrator.dehydratedPaths(sub)).length;
-        return ok(`${pulled}opened ${sub} at ${at} — writable overlay on a lazy basis (${remote} file(s) still remote)\ncd ${at}\n`);
+        const remoteCount = (await hydrator.dehydratedPaths(sub)).length;
+        return ok(`${pulled}opened ${sub} at ${at} — writable overlay on a lazy basis (${remoteCount} file(s) still remote)\ncd ${at}\n`);
       }
 
       if (group === 'files') {
