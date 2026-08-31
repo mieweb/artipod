@@ -43,7 +43,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 |---|---|---|---|
 | 0 — repo prep | `phase-0-esm-vitest` | done (owner npm actions pending) | [#33](https://github.com/mieweb/artipod/pull/33), [#34](https://github.com/mieweb/artipod/pull/34) |
 | 1 — fs injection | `phase-1-podfs-injection` | done | [#35](https://github.com/mieweb/artipod/pull/35) |
-| 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | not started | |
+| 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | done (shim deletion + ui PR landing pending) | mieweb/artipod#37, [horner/artipod-sync#2](https://github.com/horner/artipod-sync/pull/2), [mieweb/ui#404](https://github.com/mieweb/ui/pull/404) |
 | 3 — manifest + realizers | `phase-3-manifest-realizers` | not started | |
 | 4 — OCI store | `phase-4-oci-store` | not started | |
 | 5 — snapshots + commit | `phase-5-snapshots` | not started | |
@@ -288,29 +288,34 @@ The one structural refactor everything else depends on. `ArtiMount` already uses
 
 ### Phase 2 — Move sandbox, agent, proc into `@artipod/core` (executes just-bash-plan Phase 6)
 
-> **Branch** `phase-2-import-sandbox` · **Status** _not started_ · includes a consuming PR in `horner/artipod-sync`
+> **Branch** `phase-2-import-sandbox` · **Status** _done_ · includes a consuming PR in `horner/artipod-sync`
 
-- [ ] Move `artipod-sync/lib/sandbox/` → `@artipod/core/sandbox` (incl. `zenfs-adapter`, `git-command`, `edit-command`, `notes/storage/module` commands, `storage.ts`, `table.ts`) with their vitest suites.
-- [ ] Move `artipod-sync/lib/agent/` → `@artipod/core/agent` (loop, ozwell client, `local/` ONNX worker stack). Replace its `read_file`/`write_file`/`list_files` with bindings to `/tools` (schema collision #1 resolved here). Keep `bash` + truncation. Tests must satisfy Decision #8: scripted fakes only — no live model calls, no model downloads, no default AI endpoint shipped (audit the `local/` suite's mocks on the way in).
-- [ ] Move `artipod-sync/lib/proc/` → `@artipod/core/proc`.
-- [ ] Add `pod.events` (core) + extract `/host` controllers (`TerminalSession`, `FileBuffer`, `TreeSource`) from the logic currently embedded in `Terminal.tsx` / `Editor.tsx` / `FileTree.tsx`; rewire those components as thin shells. Acceptance detail: tree auto-refreshes after every command, editor detects external changes to its open file, agent tool-call echo arrives via `agent:tool-call` (no `registerWriter`).
-- [ ] artipod-sync consumes via workspace/path dep; `lib/sandbox` etc. become re-export shims for one release, then delete. `lib/server/`, routes, components stay in the app.
-- [ ] Wire `createSandbox` into the pod: `pod.createSandbox()` mounts the realized fs and registers the pod's custom commands.
-- [ ] **Agent confinement stub (default-deny)**: tools/bash confined to the pod; `sudo` is recognized but returns EPERM with "approval flow lands in Phase 6.5" — pinned by tests (docs/security-model.md is normative).
-- [ ] `/console` module: `installConsole({ pod, hotkey })` — builtin zero-dep renderer, `` Ctrl+` ``/`Ctrl+~` hotkey, SSR-safe no-op, honors `isPrimaryTab`; consumes only `/host` controllers + `pod.events` (docs/console.md).
-- [ ] `ui/` proof: Storybook story where AIChat drives the sandbox via MCPToolCall rendering (the original Phase 6 acceptance).
+- [x] Move `artipod-sync/lib/sandbox/` → `@artipod/core/sandbox` (incl. `zenfs-adapter`, `git-command`, `edit-command`, `notes/storage/module` commands, `storage.ts`, `table.ts`) with their vitest suites. Also pulled in `git.ts`/`git-auth.ts` (git-command's engine) — decoupled from the app fs singleton (factory-only; `NEXT_PUBLIC_GIT_CORS_PROXY` guarded for non-Next bundles).
+- [x] Move `artipod-sync/lib/agent/` → `@artipod/core/agent` (loop, ozwell client, `local/` ONNX worker stack). Replace its `read_file`/`write_file`/`list_files` with bindings to `/tools` (schema collision #1 resolved here). Keep `bash` + truncation. Tests must satisfy Decision #8: scripted fakes only — audit done: `local/` suite touches only parsers/registry/cache math, worker loads transformers from CDN at runtime (types-only devDep), no live calls, no downloads, no default endpoint shipped.
+- [x] Move `artipod-sync/lib/proc/` → `@artipod/core/proc`.
+- [x] Add `pod.events` (core) + extract `/host` controllers (`TerminalSession`, `FileBuffer`, `TreeSource`) from the logic currently embedded in `Terminal.tsx` / `Editor.tsx` / `FileTree.tsx`; rewire those components as thin shells. Acceptance detail: tree auto-refreshes after every command, editor detects external changes to its open file, agent tool-call echo arrives via `agent:tool-call` (no `registerWriter`) — all three verified live (worklog).
+- [x] artipod-sync consumes via workspace/path dep (`file:../artipod` until the npm publish); `lib/sandbox` etc. are re-export shims for one release, then delete (ask-first). `lib/server/`, routes, components stay in the app.
+- [ ] ~~Wire `createSandbox` into the pod: `pod.createSandbox()`~~ — **deferred to Phase 3** (rule-6 deviation): it needs the realized fs, which only exists once manifests + realizers land; a Phase 2 version would hardcode exactly the bespoke init Phase 3 deletes. Tracked as part of the Phase 3 realizer work.
+- [x] **Agent confinement stub (default-deny)**: tools/bash confined to the pod; `sudo` is recognized but returns EPERM with "approval flow lands in Phase 6.5" — pinned by tests (`sudo-command.test.ts`: bare/args/pipeline forms + `approval:request` emission; docs/security-model.md is normative).
+- [x] `/console` module: `installConsole({ sandbox, events, hotkey })` — builtin zero-dep renderer, `` Ctrl+` ``/`Ctrl+~` hotkey, SSR-safe no-op (pinned by test), read-only mode for secondary tabs; consumes only `/host`-style contracts + `pod.events` (docs/console.md). `pod` param arrives with Phase 3's pod↔sandbox unification.
+- [x] `ui/` proof: Storybook story where AIChat drives the sandbox via MCPToolCall rendering (the original Phase 6 acceptance) — mieweb/ui#404 (draft until the package publishes).
 
 **Done when:**
 
-- [ ] All moved vitest suites green in this repo (sandbox, agent, proc — same counts as they had in artipod-sync)
-- [ ] artipod-sync behavior unchanged: clone → pipeline commands → edit → commit → reload persists (Playwright e2e if present, else the manual script — record which in the worklog)
-- [ ] Duplicated tool code deleted from artipod-sync; only re-export shims remain (their deletion is on the ask-first list)
-- [ ] Event wiring proven in the app: tree auto-refreshes after every command, editor detects external changes to its open file, agent echo arrives via `agent:tool-call`
-- [ ] `ui/` Storybook story runs (AIChat driving the sandbox, MCPToolCall rendering)
+- [x] All moved vitest suites green in this repo (sandbox, agent, proc — same counts as they had in artipod-sync) — verified: the 6 moved test files (sandbox, storage, storage-command, zenfs-adapter, git-command, proc, agent, local) all pass; package total 17 files / **306 tests** (up from 197), artipod-sync keeps its 2 server files / 11 tests green
+- [x] artipod-sync behavior unchanged: clone → pipeline commands → edit → commit → reload persists — no Playwright e2e exists, so recorded as a scripted browser session (worklog): shell pipeline ✓, git clone via /api/git ✓ (clone-into-cwd semantics unchanged), Monaco edit + save ✓, IndexedDB persistence across reload ✓, sudo → EPERM ✓
+- [x] Duplicated tool code deleted from artipod-sync; only re-export shims remain (their deletion is on the ask-first list)
+- [x] Event wiring proven in the app: tree auto-refreshes after every command (zero Refresh clicks), editor detects external changes to its open file (clean-buffer reload verified), agent echo arrives via `agent:tool-call` (scripted fake-LLM run: ⚙ create_file + ⚙ bash echoed in xterm)
+- [x] `ui/` Storybook story runs (AIChat driving the sandbox, MCPToolCall rendering) — verified live: pipeline command exit 0 with output block, sudo renders an error tool call; mieweb/ui#404
 
 **Worklog:**
 
-- _(empty)_
+- 2026-08-30 — move executed: lib/{sandbox,proc,agent} + git/git-auth copied verbatim (~2.9k lines, 6 test files / 90 tests), 72 imports got `.js` extensions, `../git` → `./git`. New subpath exports: `./sandbox` `./proc` `./agent` (+ `./agent/local/worker`, `./host`, `./console`). isomorphic-git + diff join the exact-pinned optional peers; @huggingface/transformers is a types-only devDep (worker loads it from CDN).
+- 2026-08-30 — isomorphism fallout fixed while consuming: (1) node `path`/`crypto` were still imported by artimount/artipod — replaced with dependency-free posix helpers (`pathUtils.ts`) + WebCrypto ids; root-mount (`'/'`) traversal boundary had an `'//'` bug caught by the new agent binding tests. (2) dockerode's ssh2 native addon broke webpack builds — docker backend now lazy-imports with `webpackIgnore`, root entry re-exports docker **types only** (values live in `@artipod/core/docker`), plus a `browser` field stubbing the docker graph. (3) `initFileSystem` now returns the configured `zfs` — under `file:` installs the package resolves its own @zenfs/core copy, and artipod-sync's old `import('@zenfs/core')` bound a second, empty store (found live: `/repo` ENOENT).
+- 2026-08-30 — agent rebinding (collision #1): `createSandboxTools` = core `bash` definition (16 KiB truncation preserved) + `createPodFileTools` over an app-declared mount table (default `'/'`), backed by `sandbox.zfs.promises` as PodFs — shell and tools share one store, pinned by a test. Old write_file/list_files shapes deleted; agent suite updated (8-tool surface).
+- 2026-08-30 — app acceptance (horner/artipod-sync#2), scripted browser session on `npm run dev` + Playwright: tree auto-refresh ✓ (StrictMode gotcha: TreeSource's bus subscription must live in a React effect — effect-cleanup replay had stranded the memoized instance's constructor-time subscription), editor external-change reload ✓, agent echo via `agent:tool-call` ✓ using the new `/api/fake-llm` scripted endpoint (Decision #8), sudo EPERM ✓, IndexedDB persistence ✓, git clone through the proxy ✓. `registerWriter` deleted.
+- 2026-08-30 — ui story (mieweb/ui#404, draft): `@artipod/core` installed via `github:` protocol (package gained a `prepare` build script; pnpm `onlyBuiltDependencies` allowlists it); story drives the real sandbox through the agent bash tool with MCPToolCall rendering. Gotcha for the record: vite/storybook caches optional-peer-dep shims — after adding isomorphic-git/diff, `node_modules/.cache/storybook` must be cleared.
+- 2026-08-30 — package totals: 17 files / **306 tests** green (docker suites included), lint clean, Next production build of artipod-sync green. Shim deletion scheduled one release later (ask-first).
 
 ### Phase 3 — Pod manifest + realizers
 
