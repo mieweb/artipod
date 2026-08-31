@@ -8,7 +8,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { configure, InMemory, fs as zfs, umount, mounts as zenMounts, bindContext } from '@zenfs/core';
-import type { PodFs } from '../types.js';
+import type { PodFs } from '../podfs.js';
 import { OciStore } from '../oci/store.js';
 import { isEncryptedBlob } from '../oci/cipher.js';
 import { PodEvents } from '../events.js';
@@ -63,7 +63,10 @@ describe('sudo approval flow (broker rules)', () => {
     const keyring = new Keyring(clock);
     const events = new PodEvents();
     const audit = new AuditLog(store);
-    const prompt = vi.fn(async () => ({ approved: true, approver: { principal: 'user:dr-lead' } }));
+    const prompt = vi.fn(async (): Promise<import('./approval.js').ApprovalPromptResult> => ({
+      approved: true,
+      approver: { principal: 'user:dr-lead' },
+    }));
     const broker = new ApprovalBroker({ policy, keyring, events, audit, prompt, clock });
     const requests: string[] = [];
     events.on('approval:request', (e) => requests.push(e.verb));
@@ -165,7 +168,6 @@ describe('sudo through the pod surface', () => {
     const pod = await createZenFsPod(
       {
         formatVersion: 1,
-        name: 'approval-pod',
         mounts: [{ name: 'root', path: '/', mode: 'rw', source: { kind: 'backend', backend: 'memory' } }],
       },
       {

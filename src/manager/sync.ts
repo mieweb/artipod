@@ -10,6 +10,7 @@ import type { Digest } from '../oci/digest.js';
 import type { ImageManifest } from '../oci/pull.js';
 import type { ImageRef, OciTransport, ResolvedManifest } from '../oci/transport.js';
 import { sha256, isDigest } from '../oci/digest.js';
+import { ANNOTATION_LAYER_INDEX } from '../oci/tar.js';
 import { mergeLayerEntries } from '../oci/view.js';
 import { loadImageLayers } from '../oci/pull.js';
 import type { OciStore } from '../oci/store.js';
@@ -19,12 +20,17 @@ import { AUDIT_MEDIA_TYPE, walkAuditDigests } from './audit.js';
 
 const decoder = new TextDecoder();
 
-/** Every digest an image ref reaches: manifest → config → layer blobs. */
+/** Every digest an image ref reaches: manifest → config → layers → their
+ * published index artifacts (annotation-referenced — index pulls need them). */
 export async function walkImageDigests(store: PodStore, manifestDigest: Digest): Promise<Digest[]> {
   const digests: Digest[] = [manifestDigest];
   const manifest = JSON.parse(decoder.decode(await store.getBlob(manifestDigest))) as ImageManifest;
   if (manifest.config?.digest) digests.push(manifest.config.digest);
-  for (const layer of manifest.layers ?? []) digests.push(layer.digest);
+  for (const layer of manifest.layers ?? []) {
+    digests.push(layer.digest);
+    const indexDigest = layer.annotations?.[ANNOTATION_LAYER_INDEX];
+    if (indexDigest && isDigest(indexDigest)) digests.push(indexDigest);
+  }
   return digests;
 }
 

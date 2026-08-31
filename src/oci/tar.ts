@@ -29,6 +29,11 @@ export interface LayerEntry {
 /** Published layer-index artifact (plan Phase 4; Phase 6.6's hydration substrate). */
 export const LAYER_INDEX_MEDIA_TYPE = 'application/vnd.artipod.layer.index.v1+json';
 
+/** Layer-descriptor annotations (plan Phase 6.6 — hydration is per-layer). */
+export const ANNOTATION_HYDRATION = 'org.artipod.hydration';
+export const ANNOTATION_LAYER_INDEX = 'org.artipod.layer-index';
+export const ANNOTATION_LAYER_GROUP = 'org.artipod.layer-group';
+
 export interface LayerIndexArtifact {
   formatVersion: 1;
   mediaType: typeof LAYER_INDEX_MEDIA_TYPE;

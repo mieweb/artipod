@@ -32,3 +32,19 @@ export { pushEncryptedRef, pullEncryptedRef, ENCRYPTED_REF_MEDIA_TYPE } from './
 export type { EncryptedSyncResult } from './encrypted-sync.js';
 export { canonicalJson, signJson, verifyJson, generateSigningKeyPair, generateDeviceKeyPair, wrapKeyForDevice, unwrapKeyForDevice, scopeMatch } from './crypto.js';
 export type { SigningKeyPair, WrappedKey } from './crypto.js';
+
+// --- Phase 6.6: lazy hydration & site cache ---------------------------------
+export {
+  Hydrator,
+  BandwidthScheduler,
+  CachingPodStore,
+  fetchBlobResumable,
+  persistPartial,
+  makePrefetchTool,
+  pathGlobMatch,
+  hasRange,
+  ANNOTATION_HYDRATION,
+  ANNOTATION_LAYER_INDEX,
+  ANNOTATION_LAYER_GROUP,
+} from './hydration.js';
+export type { HydrationPolicy, HydrationState, HydrationLayerState, IndexPullResult, Lane, RangeReadable } from './hydration.js';

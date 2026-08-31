@@ -27,6 +27,7 @@ import { pushEncryptedRef, pullEncryptedRef, ENCRYPTED_REF_MEDIA_TYPE } from '..
 import type { LoginResult } from '../manager/authority.js';
 import type { PodLocker } from '../manager/locker.js';
 import type { Keyring } from '../manager/keyring.js';
+import type { Hydrator } from '../manager/hydration.js';
 
 export interface ArtipodCommandContext {
   store: OciStore;
@@ -36,6 +37,8 @@ export interface ArtipodCommandContext {
   snapshots?: SnapshotManager;
   /** The manager this pod syncs with (push/pull/clone). */
   remote?: PodStore;
+  /** Phase 6.6: lazy hydration — index pulls, hydrate/dehydrate. */
+  hydrator?: Hydrator;
   /** Phase 6.5: login/lock/status against the pod's authority. */
   authority?: {
     /** App-provided authentication → lease + keys (crosses the wire in real deployments). */
@@ -64,7 +67,8 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   snapshot diff <id> [id2]             changed paths (vs worktree when id2 omitted)
   snapshot mount <id> [path]           zero-copy read-only mount of a snapshot
   snapshot checkout <id> [path]        materialize a NEW writable branch
-  commit --tag <name>                  freeze the workspace into a volume image
+  commit --tag <name> [--layer-group <glob>]…  freeze the workspace into a volume image
+                                       (groups → dedicated lazy layers, 6.6)
   compact                              squash the snapshot chain into one layer
   gc                                   delete unreachable blobs, report bytes
   push <ref>                           sync a ref to the manager (missing digests only)
@@ -73,6 +77,9 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   login                                authenticate → lease → keyring populated
   lock [--all|<pod>]                   drop keys now (reads fail EACCES until login)
   status                               lease + capability expiries (also /proc/keys)
+  image pull <ref> --index             index-level pull: metadata + placeholders only
+  hydrate <ref> <path|glob>            fetch the lazy layers backing matching paths
+  dehydrate <ref> <glob>               evict layer blobs; placeholders + indexes stay
 `;
 
 function sanitizeRefForPath(ref: string): string {
@@ -88,7 +95,7 @@ async function resolveStoredRef(store: OciStore, refArg: string): Promise<{ disp
 
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
   defineCommand('artipod', async (args) => {
-    const { store, zfs, transport, events, snapshots, remote, authority } = podContext;
+    const { store, zfs, transport, events, snapshots, remote, authority, hydrator } = podContext;
     const [group, sub, ...rest] = args;
 
     try {
@@ -207,10 +214,16 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
       if (group === 'commit' && snapshots) {
         const tagIdx = args.indexOf('--tag');
         const tag = tagIdx !== -1 ? args[tagIdx + 1] : undefined;
-        if (!tag) return fail('usage: artipod commit --tag <name>');
-        const result = await snapshots.commit(tag);
+        if (!tag) return fail('usage: artipod commit --tag <name> [--layer-group <glob>]…');
+        const layerGroups: string[] = [];
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] === '--layer-group' && args[i + 1]) layerGroups.push(args[++i]);
+        }
+        const result = await snapshots.commit(tag, { layerGroups });
         events?.emit('fs:changed', { origin: 'exec' });
-        return ok(`committed ${tag}\n  manifest: ${result.manifestDigest}\n  layer: ${result.size} bytes (gzip)\nmount it with: artipod image mount ${tag}\n`);
+        return ok(
+          `committed ${tag}\n  manifest: ${result.manifestDigest}\n  layers: ${result.layers} (${result.size} bytes gzip total)\nmount it with: artipod image mount ${tag}\n`,
+        );
       }
 
       if (group === 'compact' && snapshots) {
@@ -222,6 +235,34 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
       if (group === 'gc' && snapshots) {
         const result = await snapshots.gc();
         return ok(`gc: deleted ${result.deleted} objects, reclaimed ${result.reclaimedBytes} bytes\n`);
+      }
+
+      if (group === 'hydrate') {
+        if (!hydrator) return fail('artipod: no hydrator configured for this pod (set hydration in pod options)');
+        if (!sub || !rest[0]) return fail('usage: artipod hydrate <ref> <path|glob>');
+        const result = await hydrator.hydrate(sub, rest[0]);
+        events?.emit('fs:changed', { origin: 'exec' });
+        return ok(`hydrated ${result.layers} layer(s), ${result.bytes} bytes fetched\n`);
+      }
+
+      if (group === 'dehydrate') {
+        if (!hydrator) return fail('artipod: no hydrator configured for this pod (set hydration in pod options)');
+        if (!sub || !rest[0]) return fail('usage: artipod dehydrate <ref> <glob>');
+        const result = await hydrator.dehydrate(sub, rest[0]);
+        events?.emit('fs:changed', { origin: 'exec' });
+        return ok(`dehydrated ${result.layers} layer(s) — placeholders + indexes kept, re-hydrate any time\n`);
+      }
+
+      if (group === 'image' && sub === 'pull' && rest.includes('--index')) {
+        const refArg = rest[0];
+        if (!refArg || refArg === '--index') return fail('usage: artipod image pull <ref> --index');
+        if (!hydrator) return fail('artipod: no hydrator configured for this pod (set hydration in pod options)');
+        const result = await hydrator.pullIndex(refArg);
+        events?.emit('fs:changed', { origin: 'exec' });
+        const placeholders = result.state.layers.filter((l) => l.state === 'placeholder').length;
+        return ok(
+          `index-level pull of ${refArg}: ${result.transferredBytes} bytes moved, ${result.state.layers.length} layers (${placeholders} placeholder)\nmount it with: artipod image mount ${refArg}\n`,
+        );
       }
 
       if (group === 'image' && sub === 'pull') {
@@ -289,6 +330,19 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
         const at = restArgs.find((a) => a.startsWith('/')) ?? `/mnt/oci/images/${sanitizeRefForPath(refArg)}${through !== undefined ? `@${through}` : ''}`;
         const found = await resolveStoredRef(store, refArg);
         if (!found) return fail(`artipod: '${refArg}' is not pulled (try: artipod image pull ${refArg})`);
+        // Index-pulled refs mount through the hydrator: placeholders read as
+        // fail-fast, and hydrate/dehydrate refresh the live view in place.
+        const hydrationState = hydrator ? await hydrator.stateFor(refArg) : null;
+        if (hydrationState && hydrator) {
+          await hydrator.mount(refArg, at);
+          activeMounts.get(at)?.();
+          activeMounts.set(at, () => hydrator.unmount(refArg));
+          events?.emit('fs:changed', { origin: 'exec' });
+          const placeholders = hydrationState.layers.filter((l) => l.state === 'placeholder').length;
+          return ok(
+            `mounted ${found.display} (${hydrationState.layers.length} layers, ${placeholders} dehydrated, read-only) at ${at}\n`,
+          );
+        }
         const { layers, layerBytes } = await loadImageLayers(store, found.manifestDigest);
         const unmount = await mountOciView({ zfs, at, layers, layerBytes, through, name: sanitizeRefForPath(found.display) });
         activeMounts.get(at)?.();

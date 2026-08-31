@@ -253,6 +253,11 @@ export class OciStore {
     }
   }
 
+  /** Dehydration evicts the twin; the published index stays. */
+  async deleteUncompressed(diffId: Digest): Promise<void> {
+    await this.p.rm(`${OCI_ROOT}/uncompressed/sha256/${digestHex(diffId)}`, { force: true });
+  }
+
   // --- published layer indexes ------------------------------------------------
 
   async putLayerIndex(diffId: Digest, entries: LayerEntry[]): Promise<void> {

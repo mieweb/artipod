@@ -37,6 +37,18 @@ export class HttpPodStore implements PodStore {
     return bytes;
   }
 
+  /** Byte-offset resume (Phase 6.6): `Range: bytes=<start>-`. Servers that
+   * ignore Range return 200-full; the caller gets the remainder either way.
+   * The completed whole verifies against the digest in fetchBlobResumable. */
+  async getBlobRange(digest: Digest, start: number): Promise<Uint8Array> {
+    const response = await this.fetchFn(`${this.base}/blobs/${digest}`, {
+      headers: start > 0 ? { Range: `bytes=${start}-` } : {},
+    });
+    if (!response.ok && response.status !== 206) throw new Error(`remote blob ${digest}: ${response.status}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return response.status === 206 || start === 0 ? bytes : bytes.subarray(start);
+  }
+
   async putBlob(bytes: Uint8Array, expected?: Digest): Promise<Digest> {
     const digest = expected ?? (await sha256(bytes));
     const response = await this.fetchFn(`${this.base}/blobs/${digest}`, {

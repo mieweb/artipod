@@ -7,7 +7,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { configure, InMemory, fs as zfs, umount, mounts as zenMounts, bindContext } from '@zenfs/core';
-import type { PodFs } from '../types.js';
+import type { PodFs } from '../podfs.js';
 import type { ZenFsLike } from '../sandbox/types.js';
 import { createZenFsPod, type ZenFsPod } from '../realize/zenfs.js';
 import { Authority } from '../manager/authority.js';
@@ -17,8 +17,7 @@ import type { PodManifest } from '../manifest.js';
 
 const manifest = (name: string): PodManifest => ({
   formatVersion: 1,
-  name,
-  mounts: [{ name: 'root', path: '/', mode: 'rw', source: { kind: 'backend', backend: 'memory' } }],
+  mounts: [{ name: `root-${name}`, path: '/', mode: 'rw', source: { kind: 'backend', backend: 'memory' } }],
 });
 
 function unmountAll() {

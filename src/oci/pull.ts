@@ -16,6 +16,7 @@ interface OciDescriptor {
   digest: Digest;
   size: number;
   platform?: { os: string; architecture: string; variant?: string };
+  annotations?: Record<string, string>;
 }
 
 export interface ImageManifest {

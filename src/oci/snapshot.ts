@@ -17,10 +17,11 @@
 import type { ZenFsLike } from '../sandbox/types.js';
 import { sha256, type Digest } from './digest.js';
 import { gzip } from './gzip.js';
-import { indexTar, writeTar, whiteoutPathFor, type TarWriteEntry } from './tar.js';
+import { indexTar, writeTar, whiteoutPathFor, makeLayerIndexArtifact, ANNOTATION_HYDRATION, ANNOTATION_LAYER_INDEX, ANNOTATION_LAYER_GROUP, type TarWriteEntry } from './tar.js';
 import { OciStore, OCI_ROOT } from './store.js';
 import { mergeLayerEntries, mountOciView } from './view.js';
 import type { ImageManifest } from './pull.js';
+import { pathGlobMatch } from '../manager/hydration.js';
 
 export const SNAPSHOT_MEDIA_TYPE = 'application/vnd.artipod.snapshot.v1+json';
 export const VOLUME_CONFIG_MEDIA_TYPE = 'application/vnd.artipod.volume.v1+json';
@@ -339,26 +340,61 @@ export class SnapshotManager {
 
   // --- commit -----------------------------------------------------------------
 
-  /** Freeze the live workspace into a tagged single-layer volume image. */
-  async commit(tag: string): Promise<{ manifestDigest: Digest; diffId: Digest; size: number }> {
+  /**
+   * Freeze the live workspace into a tagged volume image. `layerGroups`
+   * routes matching paths into dedicated layers annotated
+   * `org.artipod.hydration: lazy` (Phase 6.6 — the intelligence lives at
+   * commit time); every layer publishes its index as a digest-addressed
+   * artifact annotated on the descriptor, so index-level pulls can serve
+   * the full namespace without moving a single layer blob.
+   */
+  async commit(
+    tag: string,
+    options: { layerGroups?: string[] } = {},
+  ): Promise<{ manifestDigest: Digest; diffId: Digest; size: number; layers: number }> {
     const current = await this.walk();
-    const tarEntries: TarWriteEntry[] = [...current.entries()].map(([path, r]) => ({
-      path,
-      type: r.type,
-      content: r.bytes,
-      mode: r.mode,
-      linkTarget: r.linkTarget,
-    }));
-    const tar = writeTar(tarEntries);
-    const diffId = await sha256(tar);
-    const compressed = await gzip(tar);
-    const layerDigest = await sha256(compressed);
-    await this.store.putBlob(compressed, layerDigest);
-    await this.store.putUncompressed(diffId, tar);
-    await this.store.putLayerIndex(diffId, indexTar(tar));
+    const groups = options.layerGroups ?? [];
+    const buckets: TarWriteEntry[][] = [[], ...groups.map(() => [] as TarWriteEntry[])];
+    for (const [path, r] of current.entries()) {
+      const entry: TarWriteEntry = { path, type: r.type, content: r.bytes, mode: r.mode, linkTarget: r.linkTarget };
+      const g = groups.findIndex((glob) => pathGlobMatch(glob, path));
+      buckets[g === -1 ? 0 : g + 1].push(entry);
+    }
+
+    const layerDescriptors: ImageManifest['layers'] = [];
+    const diffIds: Digest[] = [];
+    let firstDiffId: Digest | null = null;
+    let totalSize = 0;
+    for (const [b, entries] of buckets.entries()) {
+      if (entries.length === 0 && b > 0) continue; // empty group
+      const tar = writeTar(entries);
+      const diffId = await sha256(tar);
+      const compressed = await gzip(tar);
+      const layerDigest = await sha256(compressed);
+      await this.store.putBlob(compressed, layerDigest);
+      await this.store.putUncompressed(diffId, tar);
+      const indexEntries = indexTar(tar);
+      await this.store.putLayerIndex(diffId, indexEntries);
+      // Publish the index beside the manifest (digest-addressed artifact).
+      const indexBytes = new TextEncoder().encode(JSON.stringify(makeLayerIndexArtifact(indexEntries)));
+      const indexDigest = await sha256(indexBytes);
+      await this.store.putBlob(indexBytes, indexDigest);
+      layerDescriptors.push({
+        mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
+        digest: layerDigest,
+        size: compressed.length,
+        annotations: {
+          [ANNOTATION_LAYER_INDEX]: indexDigest,
+          ...(b > 0 ? { [ANNOTATION_HYDRATION]: 'lazy', [ANNOTATION_LAYER_GROUP]: groups[b - 1] } : {}),
+        },
+      });
+      diffIds.push(diffId);
+      firstDiffId ??= diffId;
+      totalSize += compressed.length;
+    }
 
     const config = new TextEncoder().encode(
-      JSON.stringify({ artipod: { formatVersion: 1, roots: this.roots }, rootfs: { type: 'layers', diff_ids: [diffId] } }),
+      JSON.stringify({ artipod: { formatVersion: 1, roots: this.roots }, rootfs: { type: 'layers', diff_ids: diffIds } }),
     );
     const configDigest = await sha256(config);
     await this.store.putBlob(config, configDigest);
@@ -367,15 +403,13 @@ export class SnapshotManager {
       schemaVersion: 2,
       mediaType: 'application/vnd.oci.image.manifest.v1+json',
       config: { mediaType: VOLUME_CONFIG_MEDIA_TYPE, digest: configDigest, size: config.length },
-      layers: [
-        { mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip', digest: layerDigest, size: compressed.length },
-      ],
+      layers: layerDescriptors,
     };
     const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
     const manifestDigest = await sha256(manifestBytes);
     await this.store.putBlob(manifestBytes, manifestDigest);
     await this.store.putRef(tag, manifestDigest, manifest.mediaType!);
-    return { manifestDigest, diffId, size: compressed.length };
+    return { manifestDigest, diffId: firstDiffId!, size: totalSize, layers: layerDescriptors.length };
   }
 
   // --- compact + gc -----------------------------------------------------------

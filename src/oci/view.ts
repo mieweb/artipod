@@ -76,6 +76,20 @@ const S_MASK = 0o7777;
 type ErrnoCode = ConstructorParameters<typeof ErrnoError>[0];
 const errno = (code: string, message: string) => new ErrnoError(code as unknown as ErrnoCode, message);
 
+/** Read of a dehydrated placeholder — fail fast, never fetch (no grep bombs).
+ * A real ErrnoError (EREMOTE) so zenfs propagates it instead of wrapping
+ * foreign errors as ENOENT. */
+export class DehydratedError extends ErrnoError {
+  constructor(path: string) {
+    super(
+      // kerium Errno.EREMOTE — zenfs doesn't re-export the enum.
+      66 as unknown as ErrnoCode,
+      `${path}: content is dehydrated — run \`artipod hydrate ${path}\` (or click to hydrate)`,
+    );
+    this.name = 'DehydratedError';
+  }
+}
+
 /** Read-only IndexFS over merged layer entries + their uncompressed blobs. */
 export class OciViewFS extends IndexFS {
   private content: Map<string, ResolvedContent & { linkTarget?: string; type: LayerEntry['type'] }>;
@@ -83,7 +97,8 @@ export class OciViewFS extends IndexFS {
   constructor(
     name: string,
     view: MergedView,
-    private readonly layerBytes: Uint8Array[],
+    /** null = dehydrated placeholder layer (metadata only, reads fail fast). */
+    private readonly layerBytes: (Uint8Array | null)[],
   ) {
     const content = new Map<string, ResolvedContent & { linkTarget?: string; type: LayerEntry['type'] }>();
     const index = new Index();
@@ -138,6 +153,7 @@ export class OciViewFS extends IndexFS {
       return new TextEncoder().encode(c.linkTarget).subarray(offset, end);
     }
     const bytes = this.layerBytes[c.layer];
+    if (bytes === null) throw new DehydratedError(path);
     if (!bytes) throw errno('EIO', `${path}: layer bytes unavailable`);
     const start = c.offset + offset;
     return bytes.subarray(start, Math.min(c.offset + c.size, c.offset + end));
@@ -174,8 +190,8 @@ export interface MountViewOptions {
   at: string;
   /** Ordered layer indexes, bottom first. */
   layers: LayerEntry[][];
-  /** Uncompressed layer bytes, same order. */
-  layerBytes: Uint8Array[];
+  /** Uncompressed layer bytes, same order; null = dehydrated placeholder. */
+  layerBytes: (Uint8Array | null)[];
   /** Merge only the first N layers (issue #1 `--through N`). */
   through?: number;
   name?: string;
