@@ -46,7 +46,7 @@ Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 fo
 | 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | done (shim deletion + ui PR landing pending) | [#37](https://github.com/mieweb/artipod/pull/37)+[#38](https://github.com/mieweb/artipod/pull/38), [horner/artipod-sync#2](https://github.com/horner/artipod-sync/pull/2), [mieweb/ui#404](https://github.com/mieweb/ui/pull/404) |
 | 3 — manifest + realizers | `phase-3-manifest-realizers` | done | mieweb/artipod#39, [horner/artipod-sync#3](https://github.com/horner/artipod-sync/pull/3) |
 | 4 — OCI store | `phase-4-oci-store` | done | mieweb/artipod#40, [horner/artipod-sync#4](https://github.com/horner/artipod-sync/pull/4) |
-| 5 — snapshots + commit | `phase-5-snapshots` | not started | |
+| 5 — snapshots + commit | `phase-5-snapshots` | done | mieweb/artipod#41, [horner/artipod-sync#5](https://github.com/horner/artipod-sync/pull/5) |
 | 6 — sync + manager | `phase-6-sync-manager` | not started | |
 | 6.5 — encryption & authority | `phase-6.5-authority` | not started | |
 | 6.6 — lazy hydration + site cache | `phase-6.6-hydration` | not started | |
@@ -389,24 +389,26 @@ All inside `@artipod/core/oci`, implemented as ZenFS backends so every consumer 
 
 ### Phase 5 — Snapshots + commit = pod revision control (issue #1 steps 6–7)
 
-> **Branch** `phase-5-snapshots` · **Status** _not started_
+> **Branch** `phase-5-snapshots` · **Status** _done_
 
-- [ ] Snapshot manifests (references, not copies): `{ image: { manifestDigest, layers, through }, upper: { generation, parent } }`.
-- [ ] `artipod snapshot create|ls|checkout|mount|diff` — checkout creates a **new writable branch** (git-commit-like), never destroys later history.
-- [ ] `artipod commit --tag` — freeze the upper into a tar+gzip diff layer, produce a new manifest (image or `application/vnd.artipod.volume.v1` artifact), store locally; `artipod gc` for unreachable blobs.
-- [ ] `artipod compact` — squash a snapshot chain into a single diff layer (new manifest; superseded blobs become `gc`-able), so long agent sessions don't accumulate hundreds of layers.
-- [ ] **AI-reasoning tie-in:** agent-loop hook (default **on**) snapshotting before each tool-executing turn → `artipod snapshot diff` shows exactly what the model changed; rewind = checkout. Cheap by construction — a snapshot is a manifest reference + upper generation mark, not a file copy. (VS Code chat checkpoints and Claude Code rewind approximate this with shadow copies of *tool-edited files only*; neither captures shell side effects — artipod's layered fs captures everything the turn did.) Opt-out flag + `compact`/`gc` bound storage for huge-churn jobs.
+- [x] Snapshot manifests (references, not copies) — shape deviation (rule 6): today's app pods have no image base under the workspace, so the shipped manifest is `{ id, parent, diff: { diffId, size, entryCount }, roots }` — a parent-linked chain of indexed diff layers (OCI whiteouts for deletions) plus a cumulative index for O(1) diffs. The `image.{manifestDigest,layers,through}` half joins when Phase 6 puts image bases under workspaces; `upper.generation` IS the diff chain.
+- [x] `artipod snapshot create|ls|checkout|mount|diff` — checkout materializes a **new writable branch** (git-commit-like) and never destroys later history (HEAD does not move); `mount` is a zero-copy read-only OciViewFS of the merged chain.
+- [x] `artipod commit --tag` — freezes the workspace into a tar+gzip layer with a `application/vnd.artipod.volume.v1+json` config in a standard image manifest (mountable by `artipod image mount`, pushable by Phase 6); `artipod gc` mark-and-sweeps unreachable blobs/twins/indexes with byte accounting.
+- [x] `artipod compact` — squashes the snapshot chain into a single diff layer (new manifest, parent null; superseded manifests deleted so their blobs become `gc`-able).
+- [x] **AI-reasoning tie-in:** agent-loop hook (default **on**) via `pod.agentLoopOptions()` riding the new `beforeToolTurn` loop option — snapshots before each tool-executing turn (skipIfClean suppresses no-op turns); rewind = mount/checkout the pre-turn snapshot (pinned by test: pre-turn-2 view has t1 but not t2). Opt-out flag + `compact`/`gc` bound storage.
 
 **Done when:**
 
-- [ ] edit → `snapshot create` → keep editing → `checkout` the snapshot → both branches mountable simultaneously
-- [ ] `snapshot diff` between the two branches lists exactly the expected paths
-- [ ] Agent-turn auto-snapshots appear in `snapshot ls` (and the opt-out flag suppresses them)
-- [ ] `compact` squashes a chain into one diff layer; `gc` reclaims the superseded blobs (byte counts verified)
+- [x] edit → `snapshot create` → keep editing → `checkout` the snapshot → both branches mountable simultaneously — pinned: ro mount serves v1 while the live tree holds v2 and the writable branch diverges independently
+- [x] `snapshot diff` between the two branches lists exactly the expected paths — pinned: exact added/modified/deleted sets, snapshot↔snapshot and snapshot↔worktree, plus the shell surface
+- [x] Agent-turn auto-snapshots appear in `snapshot ls` (and the opt-out flag suppresses them) — pinned with a scripted fake client: one snapshot per tool-executing turn, rewind view correct; `autoSnapshot: false` yields zero
+- [x] `compact` squashes a chain into one diff layer; `gc` reclaims the superseded blobs (byte counts verified) — pinned: 3-snapshot chain → 1 manifest (parent null, merged view equals final state), gc deletes >0 objects and >0 bytes while ref-reachable volumes survive
 
 **Worklog:**
 
-- _(empty)_
+- 2026-08-30 — shipped `src/oci/snapshot.ts` (SnapshotManager: create/list/diff/mount/checkout/commit/compact/gc) + `writeTar` in tar.ts (production ustar writer w/ PAX long names + whiteout entries) + `gzip()` in gzip.ts. Snapshot = diff layer vs parent (walk workspace, compare content digests against the parent's cumulative index; deletions become `.wh.` entries) — reuses Phase 4's index/merge/mount machinery wholesale, so `snapshot mount` is a zero-copy OciViewFS. Costs stated honestly: create hashes the workspace (fine at browser-pod scale; Phase 6.6's layer-granular model improves it), checkout copies bytes into the new branch dir (explicit act).
+- 2026-08-30 — agent auto-snapshot: new `beforeToolTurn` option on ToolCallingLoop; `pod.agentLoopOptions()` implements default-ON with `skipIfClean`; artipod-sync AgentPanel spreads it (horner/artipod-sync#5, merged). Rewind pinned by test (pre-turn-2 mount sees turn-1's file only).
+- 2026-08-30 — walk excludes `/.artipod`, `/proc`, `/mnt`, `/dev`, `/branches` (checkout target) by default; roots = the pod's rw mount paths. 8 new tests; package total 23 files / **346 tests**. Wiring gotcha for the record: a multi-edit partially matched and dropped `snapshots` from the command context — caught because the shell subcommands fell through to usage; exit-code-visible verification saved it again.
 
 ### Phase 6 — Browser ↔ server synchronization
 
