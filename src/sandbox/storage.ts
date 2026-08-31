@@ -5,8 +5,11 @@
  * top level). ZenFS backends are dynamically imported so nothing heavy or
  * DOM-bound lands in server bundles.
  *
- * Default stays IndexedDB until OPFS e2e is proven (plan §7 risk table);
- * OPFS is opt-in via the settings UI, persisted in localStorage.
+ * Default is OPFS (real FS semantics, bigger quotas, faster handles) with
+ * automatic fallback to IndexedDB where the probe fails (Safari private
+ * mode, older browsers). First OPFS boot adopts existing IndexedDB data so
+ * flipping the default never strands anyone's files; the settings UI can
+ * still pin either backend explicitly (persisted in localStorage).
  */
 
 import type { ZenFsLike } from './types.js';
@@ -218,7 +221,7 @@ async function acquireSingleWriterLock(): Promise<boolean> {
 }
 
 export async function initFileSystem(pref?: StorageBackend): Promise<InitResult> {
-  const requested = pref ?? loadBackendPref() ?? 'indexeddb';
+  const requested = pref ?? loadBackendPref() ?? 'opfs';
   const backend: StorageBackend =
     requested === 'opfs' && !(await supportsOpfs()) ? 'indexeddb' : requested;
 
@@ -232,7 +235,7 @@ export async function initFileSystem(pref?: StorageBackend): Promise<InitResult>
       throw e;
     }
   }
-  if (backend === 'indexeddb') await adoptLegacyStore();
+  await adoptExistingData(backend);
   if (!(await fs.promises.exists('/repo'))) {
     await fs.promises.mkdir('/repo');
   }
@@ -240,20 +243,35 @@ export async function initFileSystem(pref?: StorageBackend): Promise<InitResult>
 }
 
 /**
- * One-time `browser-git-fs` → `artipodfs` adoption. Only runs when the new
- * store is untouched, so it can never overwrite live data, and the legacy store
- * is never written to — after this the old name is dead.
+ * First-boot adoption — only ever runs when the new root is untouched, so it
+ * can never overwrite live data, and sources are read-only (flipping back
+ * loses nothing). An OPFS root adopts from the IndexedDB store (covers the
+ * default flip from indexeddb→opfs), falling back to the legacy store name;
+ * an IndexedDB root adopts from the legacy store only.
  */
-async function adoptLegacyStore(): Promise<void> {
-  const { fs, mount, mounts, resolveMountConfig, umount } = await import('@zenfs/core');
-  const p = fs.promises;
-  if (mounts.has(LEGACY_MOUNT) || (await p.readdir('/')).length) return;
+async function adoptExistingData(backend: StorageBackend): Promise<void> {
+  if (backend === 'memory') return;
+  const { fs, mounts } = await import('@zenfs/core');
+  if (mounts.has(LEGACY_MOUNT) || (await fs.promises.readdir('/')).length) return;
+  const sources = backend === 'opfs' ? [IDB_STORE, LEGACY_IDB_STORE] : [LEGACY_IDB_STORE];
+  for (const store of sources) {
+    if (await adoptFromIdbStore(store)) return;
+  }
+}
 
+/** Mount an IndexedDB store read-side, copy it in if non-empty. True when adopted. */
+async function adoptFromIdbStore(storeName: string): Promise<boolean> {
+  const { fs, mount, resolveMountConfig, umount } = await import('@zenfs/core');
   const { IndexedDB } = await import('@zenfs/dom');
+  const p = fs.promises;
   await p.mkdir(LEGACY_MOUNT);
-  mount(LEGACY_MOUNT, await resolveMountConfig({ backend: IndexedDB, storeName: LEGACY_IDB_STORE }));
+  mount(LEGACY_MOUNT, await resolveMountConfig({ backend: IndexedDB, storeName }));
   try {
-    if ((await p.readdir(LEGACY_MOUNT)).length) await copyTree(fs, LEGACY_MOUNT, '/');
+    if ((await p.readdir(LEGACY_MOUNT)).length) {
+      await copyTree(fs, LEGACY_MOUNT, '/');
+      return true;
+    }
+    return false;
   } finally {
     umount(LEGACY_MOUNT);
     await p.rmdir(LEGACY_MOUNT).catch(() => undefined);
