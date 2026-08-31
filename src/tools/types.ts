@@ -21,6 +21,7 @@ export enum ToolName {
 
   // Container operations (pod-level)
   RunTerminal = 'run_in_terminal',
+  Bash = 'bash',
 
   // Search operations (optional - can be implemented later)
   FindFiles = 'file_search',
@@ -49,6 +50,7 @@ export const toolCategories: Record<ToolName, ToolCategory> = {
   [ToolName.MultiReplaceString]: ToolCategory.Edit,
   [ToolName.ApplyPatch]: ToolCategory.Edit,
   [ToolName.RunTerminal]: ToolCategory.Container,
+  [ToolName.Bash]: ToolCategory.Container,
   [ToolName.FindFiles]: ToolCategory.Search,
   [ToolName.FindTextInFiles]: ToolCategory.Search,
 };
@@ -138,6 +140,13 @@ export interface IApplyPatchParams {
 export interface IRunInTerminalParams {
   command: string;
   timeout?: number;
+}
+
+/**
+ * bash parameters (schema ported from artipod-sync)
+ */
+export interface IBashParams {
+  command: string;
 }
 
 /**

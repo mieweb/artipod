@@ -1,5 +1,7 @@
 export { ArtiPod } from './artipod.js';
 export { ArtiMount } from './artimount.js';
+export type { PodFs, PodDirent, PodStats } from './podfs.js';
+export { nodePodFs } from './nodePodFs.js';
 export { 
   findAllContainers, 
   removeContainer,
@@ -7,7 +9,7 @@ export {
   getCachedRuntimeInfo,
   clearRuntimeCache,
   isRuntimeAvailable,
-} from './containerUtils.js';
+} from './docker/index.js';
 export type {
   ArtiPodConfig,
   ArtiPodOptions,
@@ -19,7 +21,7 @@ export type {
   ContainerRuntimeInfo,
   ContainerRuntimeType,
   ContainerRuntimeMode,
-} from './containerUtils.js';
+} from './docker/index.js';
 
 // Tools - vscode-copilot-chat compatible tool implementations
 export * from './tools/index.js';

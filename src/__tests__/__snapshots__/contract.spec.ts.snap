@@ -1,0 +1,38 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildPrompt is byte-identical across node fs and ZenFS InMemory > produces the same bytes and matches the fixture snapshot 1`] = `
+"<context>
+<dataSource>
+<name>alpha</name>
+<readme>
+# Alpha
+
+The alpha mount.
+
+</readme>
+<files>
+README.md (26 bytes)
+docs/
+  guide.md (50 bytes)
+src/
+  index.ts (50 bytes)
+  util/
+    helper.ts (52 bytes)
+</files>
+</dataSource>
+
+<dataSource>
+<name>beta</name>
+<readme>
+# Beta
+
+Read-only reference data.
+
+</readme>
+<files>
+data.csv (20 bytes)
+README.md (34 bytes)
+</files>
+</dataSource>
+</context>"
+`;

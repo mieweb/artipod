@@ -1,5 +1,6 @@
-import { promises as fs } from 'fs';
 import * as path from 'path';
+import type { PodFs } from './podfs.js';
+import { nodePodFs } from './nodePodFs.js';
 
 /**
  * ArtiMount - a named storage component containing files
@@ -8,17 +9,20 @@ export class ArtiMount {
   private name: string;
   private rootPath: string;
   private readonly: boolean;
+  private fs: PodFs;
 
   /**
    * Create a new ArtiMount
    * @param name - Mount name
    * @param rootPath - Filesystem location for the mount
    * @param readonly - If true, write operations are disabled (default: false)
+   * @param podFs - Filesystem implementation (default: node:fs/promises adapter)
    */
-  constructor(name: string, rootPath: string, readonly: boolean = false) {
+  constructor(name: string, rootPath: string, readonly: boolean = false, podFs?: PodFs) {
     this.name = name;
     this.rootPath = path.resolve(rootPath);
     this.readonly = readonly;
+    this.fs = podFs ?? nodePodFs();
   }
 
   /**
@@ -27,7 +31,7 @@ export class ArtiMount {
   async initialize(): Promise<void> {
     // Verify rootPath exists
     try {
-      const stats = await fs.stat(this.rootPath);
+      const stats = await this.fs.stat(this.rootPath);
       if (!stats.isDirectory()) {
         throw new Error(`Mount path ${this.rootPath} exists but is not a directory`);
       }
@@ -61,17 +65,25 @@ export class ArtiMount {
   }
 
   /**
+   * Get the filesystem implementation backing this mount
+   */
+  getFs(): PodFs {
+    return this.fs;
+  }
+
+  /**
    * Resolve a relative path to an absolute path within the mount
    * @param relativePath - Path relative to mount root
    */
   private _resolve(relativePath: string): string {
     const resolved = path.resolve(this.rootPath, relativePath);
-    
-    // Prevent path traversal outside mount
-    if (!resolved.startsWith(this.rootPath)) {
+
+    // Prevent path traversal outside mount (exact-boundary check: '/a' must
+    // not admit '/ab/...', only '/a' itself or '/a/...')
+    if (resolved !== this.rootPath && !resolved.startsWith(this.rootPath + path.sep)) {
       throw new Error(`Path ${relativePath} is outside mount root`);
     }
-    
+
     return resolved;
   }
 
@@ -86,7 +98,7 @@ export class ArtiMount {
     
     // Get all files in root to check exact names (case-sensitive)
     try {
-      const allFiles = await fs.readdir(this.rootPath);
+      const allFiles = await this.fs.readdir(this.rootPath);
       for (const variant of readmeVariants) {
         if (allFiles.includes(variant) && !foundFiles.has(variant.toLowerCase())) {
           try {
@@ -116,7 +128,7 @@ export class ArtiMount {
     const fullPath = this._resolve(relativePath);
     
     try {
-      const content = await fs.readFile(fullPath, 'utf-8');
+      const content = await this.fs.readFile(fullPath, 'utf-8');
       
       // If no line range specified, return full content
       if (startLine === undefined && endLine === undefined) {
@@ -152,7 +164,7 @@ export class ArtiMount {
    */
   async write(
     relativePath: string,
-    content: string | Buffer
+    content: string | Uint8Array
   ): Promise<void> {
     if (this.readonly) {
       throw new Error(`Cannot write to read-only mount '${this.name}'`);
@@ -161,14 +173,9 @@ export class ArtiMount {
     const dir = path.dirname(fullPath);
     
     // Ensure parent directories exist
-    await fs.mkdir(dir, { recursive: true });
+    await this.fs.mkdir(dir, { recursive: true });
     
-    // Write file - use utf-8 only for strings, omit encoding for Buffers
-    if (typeof content === 'string') {
-      await fs.writeFile(fullPath, content, 'utf-8');
-    } else {
-      await fs.writeFile(fullPath, content);
-    }
+    await this.fs.writeFile(fullPath, content);
   }
 
   /**
@@ -181,7 +188,7 @@ export class ArtiMount {
       throw new Error(`Cannot create folder in read-only mount '${this.name}'`);
     }
     const fullPath = this._resolve(relativePath);
-    await fs.mkdir(fullPath, { recursive: true });
+    await this.fs.mkdir(fullPath, { recursive: true });
   }
 
   /**
@@ -231,7 +238,7 @@ export class ArtiMount {
     entries: { fullPath: string; size: number; isDirectory: boolean }[]
   ): Promise<void> {
     try {
-      const dirEntries = await fs.readdir(dir, { withFileTypes: true });
+      const dirEntries = await this.fs.readdir(dir, { withFileTypes: true });
       
       for (const entry of dirEntries) {
         const fullPath = path.join(dir, entry.name);
@@ -241,7 +248,7 @@ export class ArtiMount {
           await this._listWithDirectoriesRecursive(fullPath, entries);
         } else if (entry.isFile()) {
           try {
-            const stats = await fs.stat(fullPath);
+            const stats = await this.fs.stat(fullPath);
             entries.push({ fullPath, size: stats.size, isDirectory: false });
           } catch {
             // If we can't stat the file, skip it
@@ -263,7 +270,7 @@ export class ArtiMount {
    */
   private async _listRecursive(dir: string, files: { fullPath: string; size: number }[]): Promise<void> {
     try {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
+      const entries = await this.fs.readdir(dir, { withFileTypes: true });
       
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
@@ -272,7 +279,7 @@ export class ArtiMount {
           await this._listRecursive(fullPath, files);
         } else if (entry.isFile()) {
           try {
-            const stats = await fs.stat(fullPath);
+            const stats = await this.fs.stat(fullPath);
             files.push({ fullPath, size: stats.size });
           } catch {
             // If we can't stat the file, skip it

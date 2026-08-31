@@ -7,10 +7,11 @@ import {
   createContainer,
   executeCommandInContainer,
   stopAndRemoveContainer,
-} from './containerUtils.js';
+} from './docker/containerUtils.js';
 import { ArtiPodOptions } from './types.js';
+import type { PodFs } from './podfs.js';
+import { nodePodFs } from './nodePodFs.js';
 import * as crypto from 'crypto';
-import * as fs from 'fs/promises';
 import * as path from 'path';
 
 interface BuildPromptOptions {
@@ -34,6 +35,7 @@ export class ArtiPod {
   private workspaceDir?: string;
   private useMainMount: boolean;
   private initialized: boolean = false;
+  private fs: PodFs;
 
   /**
    * Format file size in human-readable format
@@ -51,6 +53,7 @@ export class ArtiPod {
     this.id = options?.id || crypto.randomBytes(16).toString('hex');
     this.workspaceDir = options?.workspaceDir;
     this.useMainMount = options?.useMainMount ?? true;
+    this.fs = options?.fs ?? nodePodFs();
 
     // Validate that workspaceDir is provided if main mount should be created
     if (this.useMainMount && !this.workspaceDir) {
@@ -102,10 +105,10 @@ export class ArtiPod {
       const mainMountPath = path.join(this.workspaceDir, `artipod-${this.id}`);
       
       // Create directory (recursive: true means no error if exists)
-      await fs.mkdir(mainMountPath, { recursive: true });
+      await this.fs.mkdir(mainMountPath, { recursive: true });
       
       // Create main mount
-      const mainMount = new ArtiMount('main', mainMountPath, false);
+      const mainMount = new ArtiMount('main', mainMountPath, false, this.fs);
       await mainMount.initialize();
       this.mounts.set('main', mainMount);
     }
@@ -137,7 +140,7 @@ export class ArtiPod {
     // Delete the directory
     if (this.workspaceDir) {
       const mainMountPath = path.join(this.workspaceDir, `artipod-${this.id}`);
-      await fs.rm(mainMountPath, { recursive: true, force: true });
+      await this.fs.rm(mainMountPath, { recursive: true, force: true });
     }
   }
 

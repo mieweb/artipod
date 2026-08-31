@@ -25,6 +25,22 @@ export * from './applyPatchParser.js';
 
 // Re-export pod-level tools
 export { RunTerminalTool, PodToolRegistry, createPodToolRegistry, createPodTools } from './podTools.js';
+export type { PodToolRegistryOptions } from './podTools.js';
+
+// bash tool + executor contract
+export { BashTool, bashDefinition, containerBashExecutor } from './bashTool.js';
+export type { BashExecutor, BashExecutionResult, BashToolResult } from './bashTool.js';
+
+// Pod-level file tools over a declarative mount table (no prefix scheme)
+export { PodPathResolver, createPodFileTools } from './podFileTools.js';
+export type { MountTableEntry } from './podFileTools.js';
+
+// Output truncation (16 KiB head+tail, ported from artipod-sync)
+export { MAX_TOOL_OUTPUT_BYTES, truncateOutput } from './truncation.js';
+
+// OpenAI + MCP serializers
+export { toOpenAiTool, toOpenAiTools, toMcpTool, toMcpTools } from './serializers.js';
+export type { OpenAiToolDefinition, McpToolDescriptor } from './serializers.js';
 
 /**
  * Tool registry for mount-level operations (file reading/editing)

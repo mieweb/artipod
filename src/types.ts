@@ -18,6 +18,8 @@ export interface ArtiPodOptions {
   useMainMount?: boolean;
   /** Initial mounts to add to the pod */
   mounts?: import('./artimount.js').ArtiMount[];
+  /** Filesystem implementation for pod-level operations and the auto-created main mount (default: node:fs/promises adapter) */
+  fs?: import('./podfs.js').PodFs;
 }
 
 /**
