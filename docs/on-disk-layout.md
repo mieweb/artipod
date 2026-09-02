@@ -57,7 +57,7 @@ uncommitted local state. There are three of them:
 |---|---|---|
 | Layered-pod upper | `/.artipod/oci/upper/` (table above) | Persistent — part of the pod store; frozen by `commit`/`snapshot`. |
 | **Basis-overlay upper** (`artipod open <ref>` / `sync.basis`) | Mounted at `/.artipod/upper/<urlencoded-ref>`; backing is **in-memory by default** — safe because auto-push drains it into a new head within ~2 s | Session — unless the embedder passes `sync.basis.upperConfig` (any ZenFS mount config) to place it on persistent storage. A **cow fork** is exactly that: `autoPush: false` + a persistent upper. |
-| Browser-demo cow upper | OPFS `artipod-fs/uppers/<urlencoded-ref>/` (plain real files; IndexedDB store `artipod-upper::<urlencoded-ref>` when OPFS is unavailable) | Persistent until the fork is discarded. |
+| Browser-demo cow upper | OPFS `artipod-fs/.artipod/uppers/<urlencoded-ref>/` (plain real files; IndexedDB store `artipod-upper::<urlencoded-ref>` when OPFS is unavailable). Plural on purpose: the singular `/.artipod/upper/<ref>` is the MOUNT POINT — backing a mount by its own mount-point dir would recurse. | Persistent until the fork is discarded. |
 
 ### The browser's "disk" (artipod-sync demo)
 
@@ -68,8 +68,9 @@ directory (falling back to IndexedDB where OPFS is unavailable):
 artipod-fs/                     ← OPFS sandbox dir (the ZenFS root)
 ├── work/<id>/                  ← blank workspaces (?artipod=<id>); empty+abandoned ones are swept
 ├── open/<sanitized-ref>/       ← overlay mount points for opened pods (view, not data)
-├── uppers/<urlencoded-ref>/    ← persistent cow-fork uppers (real files)
-└── .artipod/…                  ← the pod store, exactly the table above
+└── .artipod/…                  ← the pod store (table above), plus:
+    ├── upper/<urlencoded-ref>/   ← mount points where overlay uppers appear in the shell
+    └── uppers/<urlencoded-ref>/  ← physical cow-fork uppers (real files backing those mounts)
 ```
 
 `/proc/storage` inside the shell renders this same map live (`idb/`,

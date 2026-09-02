@@ -526,14 +526,16 @@ function Workspace({ route }: { route: Route }) {
       setFsInfo(info);
       // cow forks must survive the tab: give the overlay upper its own
       // persistent store ON THE SAME BACKEND as the app fs — an OPFS subdir
-      // when the app runs on OPFS, IndexedDB otherwise. Encoded like the
-      // upper mount (/.artipod/upper/<enc>) so /proc/storage stays aligned.
+      // when the app runs on OPFS, IndexedDB otherwise. Physically under
+      // .artipod/uppers (plural — the mount point /.artipod/upper/<enc> is a
+      // real dir on the root fs, so backing it by itself would recurse) so
+      // nothing leaks into the shell's / listing.
       const { mountConfigForSpec } = await import('@artipod/core/sandbox');
       const cowUpper =
         route.mode === 'cow'
           ? await mountConfigForSpec(
               info?.backend === 'opfs'
-                ? { type: 'opfs', dir: `uppers/${encodeURIComponent(route.id)}` }
+                ? { type: 'opfs', dir: `.artipod/uppers/${encodeURIComponent(route.id)}` }
                 : { type: 'indexeddb', store: `artipod-upper::${encodeURIComponent(route.id)}` },
             )
           : undefined;
