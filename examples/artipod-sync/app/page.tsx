@@ -639,7 +639,7 @@ interface LayerRow {
 }
 
 /** The pod's stack: local upper (top) over the basis manifest's layers. */
-function LayersView({ route, ready, onPublish }: { route: Route; ready: boolean; onPublish?: () => void }) {
+function LayersView({ route, ready, onPublish, onBack }: { route: Route; ready: boolean; onPublish?: () => void; onBack?: () => void }) {
   const [layers, setLayers] = useState<LayerRow[] | null>(null);
   const [upperFiles, setUpperFiles] = useState<string[]>([]);
   const [head, setHead] = useState<{ digest: string; actor?: string; parents?: string } | null>(null);
@@ -700,11 +700,18 @@ function LayersView({ route, ready, onPublish }: { route: Route; ready: boolean;
     <div className="mx-auto max-w-2xl p-6 text-sm">
       <div className="flex items-center justify-between mb-1">
         <h2 className="font-semibold">Layers</h2>
-        {onPublish && (
-          <button onClick={onPublish} className="text-xs bg-blue-800 px-2 py-1 rounded hover:bg-blue-700">
-            Publish
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {onPublish && (
+            <button onClick={onPublish} className="text-xs bg-blue-800 px-2 py-1 rounded hover:bg-blue-700">
+              Publish
+            </button>
+          )}
+          {onBack && (
+            <button onClick={onBack} className="text-xs bg-gray-700 px-2 py-1 rounded hover:bg-gray-600">
+              ← Files
+            </button>
+          )}
+        </div>
       </div>
       <p className="text-gray-400 mb-4">
         top wins on conflicts — the writable upper sits over the basis layers{route.mode === 'cow' ? ' (cow: the upper never pushes)' : route.mode === 'ro' ? ' (ro: the upper stays empty)' : ' (rw: the upper auto-pushes into a new head)'}
@@ -1072,7 +1079,8 @@ function Workspace({ route }: { route: Route }) {
     <button
       onClick={() => setActiveView(view)}
       disabled={disabled}
-      className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+      title={label}
+      className={`flex items-center gap-2 px-2.5 sm:px-4 py-3 text-sm font-medium transition-colors shrink-0 ${
         activeView === view
           ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500'
           : disabled
@@ -1081,7 +1089,8 @@ function Workspace({ route }: { route: Route }) {
       }`}
     >
       {icon}
-      {label}
+      {/* icons carry the tab on phones — labels return at sm */}
+      <span className="hidden sm:inline">{label}</span>
     </button>
   );
 
@@ -1098,7 +1107,7 @@ function Workspace({ route }: { route: Route }) {
         >
           <HomeIcon size={16} />
         </a>
-        <span className="px-2 font-mono text-sm text-gray-300 truncate max-w-[14rem]" title={route.id}>
+        <span className="px-2 font-mono text-sm text-gray-300 truncate min-w-0 max-w-[7rem] sm:max-w-[14rem]" title={route.id}>
           {route.isRef ? route.id : `blank ${route.id}`}
           {route.mode !== 'rw' && (
             <span className="ml-1.5 rounded border border-gray-600 px-1 text-[10px] uppercase text-gray-400">{route.mode}</span>
@@ -1106,32 +1115,18 @@ function Workspace({ route }: { route: Route }) {
         </span>
         {tab('tree', <FolderTree size={16} />, 'Files')}
         {tab('editor', <FileCode size={16} />, `Editor${editingFile ? ` (${editingFile.split('/').pop()})` : ''}`, !editingFile)}
-        {tab('layers', <LayersIcon size={16} />, 'Layers')}
         {tab('agent', <Bot size={16} />, 'Agent')}
-        {route.mode !== 'ro' && (
-          <button
-            onClick={() => (publishOpen ? setPublishOpen(false) : openPublish())}
-            disabled={!fsReady || publishing}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-              publishOpen ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500' : 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
-            } disabled:opacity-40`}
-            title="Publish this workspace to the server (also: `artipod publish` in the terminal)"
-          >
-            <UploadCloud size={16} />
-            {publishing ? 'Publishing…' : 'Publish'}
-          </button>
-        )}
         <div className="ml-auto flex items-center">
           <button
             onClick={() => setTermOpen((o) => !o)}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            title="Toggle terminal (ctrl+`)"
+            className={`flex items-center gap-2 px-2.5 sm:px-4 py-3 text-sm font-medium transition-colors shrink-0 ${
               termOpen ? 'text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
             }`}
-            title="Toggle terminal (ctrl+`)"
           >
             <LucideTerminal size={16} />
-            Terminal
-            <kbd className="hidden sm:inline px-1 rounded bg-[#3d3d3d] border border-gray-600 text-[10px] font-mono">ctrl+`</kbd>
+            <span className="hidden sm:inline">Terminal</span>
+            <kbd className="hidden md:inline px-1 rounded bg-[#3d3d3d] border border-gray-600 text-[10px] font-mono">ctrl+`</kbd>
           </button>
           {tab('settings', <Settings size={16} />, `Storage${fsInfo ? ` (${fsInfo.backend})` : ''}`)}
         </div>
@@ -1205,11 +1200,24 @@ function Workspace({ route }: { route: Route }) {
               events={events}
               roots={[workspaceRoot]}
               headerExtra={
-                route.mode !== 'ro' ? (
-                  <button onClick={openPublish} className="text-xs bg-blue-800 px-2 py-1 rounded hover:bg-blue-700">
-                    Publish
+                <>
+                  <button
+                    onClick={() => setActiveView('layers')}
+                    className="text-xs bg-gray-700 px-2 py-1 rounded hover:bg-gray-600 flex items-center gap-1"
+                    title="The pod's layer stack (basis + local upper)"
+                  >
+                    <LayersIcon size={12} /> Layers
                   </button>
-                ) : undefined
+                  {route.mode !== 'ro' && (
+                    <button
+                      onClick={openPublish}
+                      className="text-xs bg-blue-800 px-2 py-1 rounded hover:bg-blue-700 flex items-center gap-1"
+                      title="Publish this workspace to the server (also: `artipod publish` in the terminal)"
+                    >
+                      <UploadCloud size={12} /> {publishing ? 'Publishing…' : 'Publish'}
+                    </button>
+                  )}
+                </>
               }
               getDehydratedPaths={async () => {
                 const pod = podRef.current;
@@ -1248,9 +1256,15 @@ function Workspace({ route }: { route: Route }) {
         )}
 
         {/* Layers: the pod's stack — basis manifest layers + the local upper on top */}
+        {/* Layers: reached from the File Explorer header — the pod's stack */}
         {activeView === 'layers' && (
           <div className="absolute inset-0 z-10 overflow-auto">
-            <LayersView route={route} ready={fsReady} onPublish={route.mode !== 'ro' ? openPublish : undefined} />
+            <LayersView
+              route={route}
+              ready={fsReady}
+              onPublish={route.mode !== 'ro' ? openPublish : undefined}
+              onBack={() => setActiveView('tree')}
+            />
           </div>
         )}
       </div>
