@@ -576,6 +576,14 @@ function Catalog() {
                       locked
                     </span>
                   )}
+                  {isCowFork && (
+                    <span
+                      className="rounded bg-emerald-900/60 px-1.5 py-0.5"
+                      title="this machine holds a diverged fork of this ref — see it under 'On this machine'"
+                    >
+                      forked
+                    </span>
+                  )}
                   {modeLinks(ref, locked)}
                   {!isCowFork && changedRefs.has(ref) ? (
                     <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
