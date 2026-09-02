@@ -24,6 +24,7 @@ import type { SnapshotManager } from './snapshot.js';
 import type { PodStore } from '../manager/pod-store.js';
 import { syncRef, storeTransport, materializeImage } from '../manager/sync.js';
 import { pushEncryptedRef, pullEncryptedRef, ENCRYPTED_REF_MEDIA_TYPE } from '../manager/encrypted-sync.js';
+import { readPodSettings, writePodSettings } from './settings.js';
 import type { KeyedLoginResult, LoginResult } from '../manager/authority.js';
 import type { PodLocker } from '../manager/locker.js';
 import type { Keyring } from '../manager/keyring.js';
@@ -139,6 +140,27 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
         if (entries.length === 0) return ok('locked — no live leases or capabilities (artipod login to restore)\n');
         const lines = entries.map((e) => `${e.kind.padEnd(10)} ${e.name.padEnd(32)} expires ${new Date(e.expiresAt).toISOString()}`);
         return ok(`${lines.join('\n')}\n`);
+      }
+
+      if (group === 'offline') {
+        // pod-resident setting (/.artipod/settings.json): same file whether
+        // the shell runs in a browser workspace or the node CLI
+        if (sub === 'on' || sub === 'off') {
+          await writePodSettings(zfs, { offline: sub === 'on' });
+          events?.emit('fs:changed', { origin: 'exec' });
+          return ok(
+            sub === 'on'
+              ? 'offline mode ON — push/pull/clone and auto-push are paused; changes stay local\n'
+              : 'offline mode OFF — sync re-enabled (pending changes push on the next attempt)\n',
+          );
+        }
+        if (sub) return fail('usage: artipod offline [on|off]');
+        const current = (await readPodSettings(zfs)).offline === true;
+        return ok(`offline mode is ${current ? 'ON — sync paused (artipod offline off to re-enable)' : 'off'}\n`);
+      }
+
+      if ((group === 'push' || group === 'pull' || group === 'clone') && (await readPodSettings(zfs)).offline) {
+        return fail(`artipod ${group}: offline mode is on — 'artipod offline off' to re-enable sync`);
       }
 
       if (group === 'push') {

@@ -28,6 +28,7 @@ export {
 } from './cipher.js';
 export type { ChunkedCipherHeader, EncryptedBlob } from './cipher.js';
 export { OciStore, OCI_ROOT, SUPERBLOCK_PATH } from './store.js';
+export { readPodSettings, writePodSettings, SETTINGS_PATH, type PodSettings } from './settings.js';
 export type { PodSuperblock, StoredRef } from './store.js';
 export { mergeLayerEntries, mountOciView, OciViewFS } from './view.js';
 export type { MergedView, MountViewOptions } from './view.js';

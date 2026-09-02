@@ -379,6 +379,10 @@ export async function createZenFsPod(
   const pushBasis = async () => {
     const remote = options.sync?.remote;
     if (!basis || !hydrator || !remote) return null;
+    if ((await import('../oci/settings.js').then((m) => m.readPodSettings(zfs))).offline) {
+      events.emit('sync:push', { ref: basis.ref, ok: false, layers: 0, movedBytes: 0, error: "offline mode is on ('artipod offline off' to re-enable)" });
+      return null;
+    }
     const overlay = hydrator.overlays.get(basis.ref);
     if (!overlay) return null;
     if (pushing) {
