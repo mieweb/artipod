@@ -13,6 +13,9 @@
  */
 
 export { bearerAuth, json, type AuthHook, type PathHandler } from './common.js';
+export { createArtipodApp, type ArtipodApp, type ArtipodAppOptions } from './app.js';
+export { serveApp, type RunningServer, type ServeAppOptions } from './node.js';
+export { withCors } from './cors.js';
 export { createPodStoreHandler, type PodStoreHandlerOptions } from './pod-store-handler.js';
 export {
   DEFAULT_ALLOWED_HOSTS,

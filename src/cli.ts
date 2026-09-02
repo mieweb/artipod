@@ -25,6 +25,7 @@ import { storeTransport, materializeImage } from './manager/sync.js';
 import { DirectRegistryTransport, parseImageRef, formatImageRef } from './oci/transport.js';
 import { pullImage } from './oci/pull.js';
 import { publishDirectory } from './server/folder.js';
+import type { ServeCliOptions } from './server/serve.js';
 import { nodePodFs } from './nodePodFs.js';
 
 const HELP = `usage:
@@ -38,6 +39,10 @@ const HELP = `usage:
   artipod prune [-f] [-a] [--pods <path>]  delete untagged kept pods (-a: ALL); asks first
                                         unless -f — a pod is tagged once you \`artipod
                                         commit --tag <name>:<tag>\` inside the shell
+  artipod serve [flags]                 host the store over HTTP: the native sync
+                                        surface (/api/pods), OCI relay, git proxy,
+                                        and exec sessions — one URL, embeddable via
+                                        @artipod/core/server createArtipodApp
   artipod --help | --version
 
 flags for run:
@@ -80,6 +85,17 @@ examples:
   artipod run -it --base ~/proj:/work  # materialize the folder under /work instead of /
   artipod run -it -v ~/data:/mnt/data:ro   # live host mount to copy from (cp into /work)
 
+flags for serve:
+  --port <n>         listen port (default 2784; 0 = OS-assigned)
+  --host <addr>      bind address (default 127.0.0.1)
+  --store <path>     the served OCI-layout store (default ~/.artipod/store,
+                     env ARTIPOD_STORE)
+  --only web|registry   narrow the surfaces (default: both)
+  --cors <origin>    allow a browser origin (repeatable; default deny)
+  --oci-allow <host> allow an upstream registry host for the relay (repeatable;
+                     env ARTIPOD_OCI_ALLOWED_HOSTS; default deny)
+  --no-exec          disable the exec-session surface
+
 inside the shell, run \`artipod\` for the pod verbs (snapshot, commit, push, …).
 `;
 
@@ -109,7 +125,8 @@ function parseArgs(
   | { pods: true; podsRoot: string }
   | { removeIds: string[]; podsRoot: string }
   | { prune: true; force: boolean; all: boolean; podsRoot: string }
-  | { importDir: string; importRef: string; store: string } {
+  | { importDir: string; importRef: string; store: string }
+  | { serve: ServeCliOptions } {
   if (args.includes('--help') || args.includes('-h') || args.length === 0) return { help: true };
   if (args.includes('--version')) return { version: true };
   const [verb, ...rest] = args;
@@ -172,9 +189,45 @@ function parseArgs(
     }
     return { prune: true, force, all, podsRoot };
   }
+  if (verb === 'serve') {
+    const serve: ServeCliOptions = {
+      port: 2784,
+      host: '127.0.0.1',
+      store: env.ARTIPOD_STORE ?? resolve(homedir(), '.artipod/store'),
+      cors: [],
+      ociAllow: [],
+      exec: true,
+    };
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i];
+      if (a === '--port') {
+        serve.port = Number(rest[++i]);
+        if (!Number.isInteger(serve.port) || serve.port < 0 || serve.port > 65535) {
+          stdout.write(`artipod serve: invalid --port '${rest[i]}'\n`);
+          exit(2);
+        }
+      } else if (a === '--host') serve.host = rest[++i];
+      else if (a === '--store') serve.store = rest[++i];
+      else if (a === '--only') {
+        const only = rest[++i];
+        if (only !== 'web' && only !== 'registry') {
+          stdout.write(`artipod serve: --only takes 'web' or 'registry', not '${only}'\n`);
+          exit(2);
+        }
+        serve.only = only;
+      } else if (a === '--cors') serve.cors.push(rest[++i]);
+      else if (a === '--oci-allow') serve.ociAllow.push(rest[++i]);
+      else if (a === '--no-exec') serve.exec = false;
+      else {
+        stdout.write(`artipod serve: unknown argument '${a}'\n\n${HELP}`);
+        exit(2);
+      }
+    }
+    return { serve };
+  }
   if (verb !== 'run') {
     stdout.write(
-      `artipod: unknown command '${verb}' — top-level commands are run, pods, rm, and prune; the pod verbs live INSIDE the shell (try: artipod run -it)\n\n${HELP}`,
+      `artipod: unknown command '${verb}' — top-level commands are run, import, serve, pods, rm, and prune; the pod verbs live INSIDE the shell (try: artipod run -it)\n\n${HELP}`,
     );
     exit(2);
   }
@@ -762,6 +815,12 @@ async function main(): Promise<void> {
   }
   if ('importDir' in parsed) {
     await importDirectory(parsed.importDir, parsed.importRef, parsed.store);
+    return;
+  }
+  if ('serve' in parsed) {
+    // Lazy import (dockerode value-isolation pattern): `artipod run` never pays for server code.
+    const { runServe } = await import('./server/serve.js');
+    await runServe(parsed.serve);
     return;
   }
 
