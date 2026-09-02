@@ -43,10 +43,17 @@ const refFileName = (ref: string) => `${encodeURIComponent(ref)}.json`;
 /** ZenFS/node readFile may hand back Buffers; normalize to plain views. */
 const asBytes = (b: Uint8Array): Uint8Array => new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
 
-function randomPodId(): string {
+export function randomPodId(): string {
   const buf = new Uint8Array(8);
   globalThis.crypto.getRandomValues(buf);
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** A fresh cleartext superblock. Exported so the CLI can pre-seed a pod dir,
+ * keeping the directory name and the pod id identical. */
+export function newSuperblock(podId: string = randomPodId()): PodSuperblock {
+  const now = new Date().toISOString();
+  return { formatVersion: 1, podId, cipher: 'none', createdAt: now, updatedAt: now };
 }
 
 export class OciStore {
@@ -95,13 +102,7 @@ export class OciStore {
     try {
       this.superblock = JSON.parse((await this.p.readFile(SUPERBLOCK_PATH, 'utf8')) as string) as PodSuperblock;
     } catch {
-      this.superblock = {
-        formatVersion: 1,
-        podId: randomPodId(),
-        cipher: 'none',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+      this.superblock = newSuperblock();
       await this.writeSuperblock();
     }
     return this.superblock;

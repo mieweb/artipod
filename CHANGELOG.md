@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`artipod pods`**: list kept pods (pod id, created, last used, size), newest first — the `docker ps -a` of pods. `--pods <path>`/`ARTIPOD_PODS` overrides the root.
+- **`artipod rm <pod>...` and `artipod prune`**: delete kept pods by id (unique prefix ok) or wipe them all; prune asks first unless `-f`, and both only touch dirs carrying a pod superblock.
+
+### Changed
+
+- **CLI pods are kept by default**: `artipod run` now keeps each pod under `~/.artipod/pods/<pod-id>` so past runs survive exit; `artipod run -it <pod-id>` resumes one (unique id prefix ok). `--rm` restores the old throwaway behavior (RAM only); `--rm --disk` backs the ephemeral pod by a deleted-on-exit temp dir for working sets bigger than memory.
+
 ## [0.3.0] - 2026-01-15
 
 ### Added
