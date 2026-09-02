@@ -97,6 +97,14 @@ export class DirectRegistryTransport implements OciTransport {
     return REGISTRY_HOST_ALIASES[ref.host] ?? ref.host;
   }
 
+  /** Loopback registries speak plain HTTP (docker's implicit insecure-registry rule) — `artipod serve` included. */
+  private baseUrl(ref: ImageRef): string {
+    const host = this.registryHost(ref);
+    const name = host.replace(/^\[/, '').split(/[\]:]/)[0];
+    const insecure = name === 'localhost' || name.startsWith('127.') || name === '::1';
+    return `${insecure ? 'http' : 'https'}://${host}`;
+  }
+
   private async request(ref: ImageRef, url: string, accept?: string): Promise<Response> {
     const doFetch = (token?: string) =>
       this.fetchFn(this.rewriteUrl(url), {
@@ -143,7 +151,7 @@ export class DirectRegistryTransport implements OciTransport {
 
   async resolve(ref: ImageRef, opts?: { digest?: Digest }): Promise<ResolvedManifest> {
     const reference = opts?.digest ?? ref.digest ?? ref.tag ?? 'latest';
-    const url = `https://${this.registryHost(ref)}/v2/${ref.repo}/manifests/${reference}`;
+    const url = `${this.baseUrl(ref)}/v2/${ref.repo}/manifests/${reference}`;
     const response = await this.request(ref, url, MANIFEST_ACCEPT);
     const bytes = new Uint8Array(await response.arrayBuffer());
     const manifestDigest = await sha256(bytes);
@@ -158,7 +166,7 @@ export class DirectRegistryTransport implements OciTransport {
   }
 
   async fetchBlob(ref: ImageRef, digest: Digest): Promise<Uint8Array> {
-    const url = `https://${this.registryHost(ref)}/v2/${ref.repo}/blobs/${digest}`;
+    const url = `${this.baseUrl(ref)}/v2/${ref.repo}/blobs/${digest}`;
     const response = await this.request(ref, url);
     return new Uint8Array(await response.arrayBuffer());
   }

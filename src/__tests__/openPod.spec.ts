@@ -168,4 +168,39 @@ describe('open a published folder as a lazy basis (fetch-on-read)', () => {
     expect(cat.exitCode).not.toBe(0);
     expect(layerReads()).toBe(0);
   });
+
+  it('sync.basis.upperConfig makes the overlay upper survive a pod restart (cow fork)', async () => {
+    // The upper defaults to a fresh InMemory per open (auto-push drains it);
+    // a cow fork passes its own backend — writes must outlive the pod.
+    const { resolveMountConfig, InMemory: Mem } = await import('@zenfs/core');
+    const persistentUpper = await resolveMountConfig({ backend: Mem, label: 'cow-upper' });
+
+    const podA = await createZenFsPod(podManifest, {
+      adopt: zfs,
+      sync: { remote, basis: { ref: 'folder/demo:latest', upperConfig: persistentUpper }, autoPush: false },
+      hydration: { policy: { default: 'lazy' }, onDemand: 'fetch' },
+    });
+    const shellA = podA.createSandbox();
+    const write = await shellA.exec('echo "forked" > forked.txt && cat forked.txt');
+    expect(write.stdout).toBe('forked\n');
+    podA.dispose();
+
+    // fresh root, same upper backend — the fork's writes are still there
+    for (const path of [...zenMounts.keys()]) if (path !== '/') umount(path);
+    umount('/');
+    await configure({ mounts: { '/': InMemory } });
+    const podB = await createZenFsPod(podManifest, {
+      adopt: zfs,
+      sync: { remote, basis: { ref: 'folder/demo:latest', upperConfig: persistentUpper }, autoPush: false },
+      hydration: { policy: { default: 'lazy' }, onDemand: 'fetch' },
+    });
+    const shellB = podB.createSandbox();
+    const read = await shellB.exec('cat forked.txt && cat readme.md');
+    expect(read.stdout).toBe('forked\nwelcome to the folder pod\n');
+    // …and the remote never saw the fork (autoPush off: no new head pushed)
+    expect((await remote.getRef('folder/demo:latest'))?.manifestDigest).toBeDefined();
+    const headBefore = (await remote.getRef('folder/demo:latest'))!.manifestDigest;
+    await new Promise((r) => setTimeout(r, 100));
+    expect((await remote.getRef('folder/demo:latest'))!.manifestDigest).toBe(headBefore);
+  });
 });

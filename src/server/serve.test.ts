@@ -187,4 +187,36 @@ describe('artipod serve', () => {
     child.kill('SIGTERM');
     await exited;
   }, 60_000);
+
+  it('one artipod serves, another artipod shells in as the client (registry pull)', async () => {
+    // server: publish a folder and serve it
+    const scratchRoot = await mkdtemp(join(tmpdir(), 'apod-e2e-'));
+    scratch.push(scratchRoot);
+    const served = join(scratchRoot, 'field-notes');
+    await mkdir(served);
+    await writeFile(join(served, 'note.md'), 'served to the shell\n');
+    const { url, child, exited } = await startServe(['--publish', served]);
+    const hostPort = url.replace('http://', '');
+
+    // client: a second artipod process resolves the ref straight off the
+    // serve's /v2 registry surface (loopback = implicit HTTP) into a shell
+    const clientStore = join(scratchRoot, 'client-store');
+    const clientPods = join(scratchRoot, 'client-pods');
+    const result = await new Promise<{ stdout: string; code: number | null }>((res) => {
+      const proc = spawn(
+        'node',
+        [CLI, 'run', '--rm', `${hostPort}/field-notes:latest`, '--store', clientStore, '-c', 'cat note.md'],
+        { env: { ...process.env, ARTIPOD_PODS: clientPods }, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      let out = '';
+      proc.stdout.on('data', (c: Buffer) => (out += c.toString()));
+      proc.stderr.on('data', (c: Buffer) => (out += c.toString()));
+      proc.once('exit', (code) => res({ stdout: out, code }));
+    });
+    expect(result.stdout).toContain('served to the shell');
+    expect(result.code).toBe(0);
+
+    child.kill('SIGTERM');
+    await exited;
+  }, 60_000);
 });
