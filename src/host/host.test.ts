@@ -94,6 +94,67 @@ describe('TerminalSession', () => {
     expect(io.out).toBe(''); // disposed sessions detach their listeners
   });
 
+  it('edits mid-line: Ctrl+A/E, arrows, Delete, backspace, insert', async () => {
+    const io = new FakeIO();
+    const session = new TerminalSession({ sandbox, io });
+
+    // Ctrl+A then insert at start: 'cho hi' → 'echo hi'
+    for (const ch of 'cho hi') await session.handleData(ch);
+    await session.handleData('\x01'); // Ctrl+A
+    await session.handleData('e');
+    await session.handleData('\r');
+    expect(io.out).toContain('hi\r\n');
+
+    // Left arrows + backspace mid-line: 'echoo hi' → 'echo hi'
+    io.out = '';
+    for (const ch of 'echoo hi') await session.handleData(ch);
+    for (let i = 0; i < 3; i++) await session.handleData('\x1b[D');
+    await session.handleData('\x7f'); // backspace deletes the extra 'o'
+    await session.handleData('\x05'); // Ctrl+E back to end
+    await session.handleData('\r');
+    expect(io.out).toContain('hi\r\n');
+
+    // Ctrl+A + Delete (forward): 'eecho hi' → 'echo hi'
+    io.out = '';
+    for (const ch of 'eecho bye') await session.handleData(ch);
+    await session.handleData('\x01');
+    await session.handleData('\x1b[3~');
+    await session.handleData('\r');
+    expect(io.out).toContain('bye\r\n');
+    session.dispose();
+  });
+
+  it('Ctrl+R reverse-searches history', async () => {
+    const io = new FakeIO();
+    const session = new TerminalSession({ sandbox, io });
+    for (const ch of 'echo alpha') await session.handleData(ch);
+    await session.handleData('\r');
+    for (const ch of 'echo beta') await session.handleData(ch);
+    await session.handleData('\r');
+
+    io.out = '';
+    await session.handleData('\x12'); // Ctrl+R
+    expect(io.out).toContain('reverse-i-search');
+    for (const ch of 'alp') await session.handleData(ch);
+    expect(io.out).toContain('echo alpha');
+    await session.handleData('\r'); // adopt + execute
+    expect(io.out).toContain('alpha\r\n');
+
+    // Ctrl+R again steps to the older match; Ctrl+C cancels
+    io.out = '';
+    await session.handleData('\x12');
+    for (const ch of 'echo') await session.handleData(ch);
+    expect(io.out).toContain('echo alpha'); // newest match first (alpha just re-ran)
+    await session.handleData('\x12'); // step older → echo beta
+    expect(io.out).toContain('echo beta');
+    io.out = '';
+    await session.handleData('\x03'); // cancel search
+    expect(io.out).toContain('^C');
+    await session.handleData('\r');
+    expect(io.out).not.toContain('beta\r\n'); // nothing executed
+    session.dispose();
+  });
+
   it('refuses commands in read-only sessions', async () => {
     const io = new FakeIO();
     const session = new TerminalSession({ sandbox, io, readOnly: true });

@@ -43,7 +43,7 @@ const BANNER = [
   `${DIM}@artipod/core ${CORE_VERSION} · bash over ZenFS · just-bash${RESET}`,
   REPO_URL,
   `${DIM}Type 'help' or 'notes' to get started.${RESET}`,
-  `${DIM}Tab completes · Ctrl+C cancels · Ctrl+\` toggles terminal${RESET}`,
+  `${DIM}Tab completes · Ctrl+R searches · Ctrl+C cancels · Ctrl+\` toggles terminal${RESET}`,
 ];
 
 export default function Terminal({ sandbox, events, readOnly }: TerminalProps) {
