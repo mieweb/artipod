@@ -98,6 +98,8 @@ export default function Page() {
 function Catalog() {
   const [serverRefs, setServerRefs] = useState<string[] | null>(null);
   const [local, setLocal] = useState<LocalEntry[]>([]);
+  // refs with actual local changes: a non-empty overlay upper (/.artipod/upper/<ref>)
+  const [changedRefs, setChangedRefs] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     (async () => {
@@ -131,6 +133,14 @@ function Catalog() {
           }
         }
         dropFromRegistry(swept);
+        // "local layer" = the overlay upper holds writes, not merely "was opened"
+        const uppers = (await fs.promises.readdir('/.artipod/upper').catch(() => [])) as string[];
+        const changed = new Set<string>();
+        for (const name of uppers) {
+          const entries = (await fs.promises.readdir(`/.artipod/upper/${name}`).catch(() => [])) as string[];
+          if (entries.length > 0) changed.add(decodeURIComponent(name));
+        }
+        setChangedRefs(changed);
       } catch {
         // no /work yet (or init failed) — registry alone
       }
@@ -188,8 +198,13 @@ function Catalog() {
               return row(
                 ref,
                 <>
-                  {/* opening a pod lays a writable overlay in this browser's FS — say so */}
-                  {opened && <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local layer</span>}
+                  {/* the overlay auto-pushes (~2s debounce): a non-empty upper is
+                      UNPUSHED work; opened + empty upper means fully synced */}
+                  {changedRefs.has(ref) ? (
+                    <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
+                  ) : (
+                    opened && <span className="rounded bg-gray-700 px-1.5 py-0.5">synced</span>
+                  )}
                   <span className="rounded bg-blue-900/60 px-1.5 py-0.5">server</span>
                 </>,
                 opened?.lastOpened ? new Date(opened.lastOpened).toLocaleDateString() : '',
