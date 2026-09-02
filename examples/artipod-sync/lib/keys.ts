@@ -33,6 +33,24 @@ export interface BrokerState {
 }
 
 const LEASE_HEADER = 'x-artipod-lease';
+const OFFLINE_KEY = 'artipod-forced-offline';
+const META_KEY = 'artipod-broker-meta';
+
+const readPersisted = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null; // SSR/prerender or storage blocked
+  }
+};
+const writePersisted = (key: string, value: string | null): void => {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    // best effort
+  }
+};
 
 let state: BrokerState = { status: 'none', meta: null };
 let leaseB64: string | null = null;
@@ -42,8 +60,8 @@ let podKeys: Record<string, CryptoKey> = {};
 let renewTimer: ReturnType<typeof setTimeout> | null = null;
 let probePromise: Promise<KeysMeta | null> | null = null;
 let installed = false;
-/** Demo toggle: reject every same-origin /api request like a dead network. */
-let forcedOffline = false;
+/** Demo toggle: reject every same-origin /api request like a dead network. Survives reloads. */
+let forcedOffline = readPersisted(OFFLINE_KEY) === '1';
 /** Explicit lease release — suppresses the 401 auto-relogin until the user logs in again. */
 let released = false;
 const listeners = new Set<() => void>();
@@ -61,6 +79,7 @@ export function isForcedOffline(): boolean {
 /** Flip the demo's forced-offline mode: /api requests fail like a dead network. */
 export function setForcedOffline(value: boolean): void {
   forcedOffline = value;
+  writePersisted(OFFLINE_KEY, value ? '1' : null);
   notify();
 }
 
@@ -106,20 +125,42 @@ export function onBrokerChange(listener: () => void): () => void {
   };
 }
 
-/** The bare fetch, untouched by the lease patch (avoids recursion). */
-const rawFetch: typeof fetch = (...args) => bareFetch(...args);
+/** The bare fetch, untouched by the lease patch — but the offline toggle
+ * blocks it too, or probe/login would sneak past the "dead network". */
+const rawFetch: typeof fetch = (...args) => {
+  if (forcedOffline && isApiUrl(args[0] as RequestInfo | URL)) {
+    return Promise.reject(new TypeError('Failed to fetch — forced offline (demo toggle)'));
+  }
+  return bareFetch(...args);
+};
 let bareFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 
 async function probe(): Promise<KeysMeta | null> {
   probePromise ??= (async () => {
     try {
       const res = await rawFetch('/api/keys');
-      return res.ok ? ((await res.json()) as KeysMeta) : null;
+      if (!res.ok) return null; // definitive: not a broker serve
+      const meta = (await res.json()) as KeysMeta;
+      writePersisted(META_KEY, JSON.stringify(meta));
+      return meta;
     } catch {
+      // transient (offline): DON'T cache — a later login must re-probe
+      probePromise = null;
       return null;
     }
   })();
   return probePromise;
+}
+
+/** Last-known broker metadata — lets an offline reload show 'locked' instead of nothing. */
+function cachedMeta(): KeysMeta | null {
+  const raw = readPersisted(META_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as KeysMeta;
+  } catch {
+    return null;
+  }
 }
 
 /** This tab's ECDH device keypair (non-extractable, structured-cloned into IndexedDB). */
@@ -241,7 +282,16 @@ export async function installKeyBroker(principal: () => Promise<string>): Promis
     }) as typeof fetch;
   }
   const meta = await probe();
-  if (!meta) return state; // plaintext serve — the patch stays a passthrough
+  if (!meta) {
+    // unreachable serve: a previously-seen broker shows LOCKED (offline
+    // reload), an unknown serve shows nothing
+    const known = cachedMeta();
+    if (known && state.status === 'none') {
+      state = { status: 'locked', meta: known };
+      notify();
+    }
+    return state;
+  }
   if (state.status !== 'leased') await brokerLogin(await principal());
   return state;
 }
