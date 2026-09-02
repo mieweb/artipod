@@ -1141,8 +1141,9 @@ function Workspace({ route }: { route: Route }) {
 
       {/* Inline publish panel (native prompt/alert are suppressed in driven browsers) */}
       {publishOpen && (
-        <div className="flex items-center gap-2 bg-[#252526] border-b border-gray-700 px-4 py-2">
-          <span className="text-xs text-gray-400 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 bg-[#252526] border-b border-gray-700 px-4 py-2">
+          {/* label takes its own line on phones so the input row fits */}
+          <span className="text-xs text-gray-400 basis-full sm:basis-auto sm:shrink-0">
             {route.isRef ? `publish — keep “${route.id}” to push back, or a new name:tag to branch:` : 'publish this workspace as:'}
           </span>
           <input
@@ -1153,7 +1154,7 @@ function Workspace({ route }: { route: Route }) {
               if (e.key === 'Enter') submitPublish();
               if (e.key === 'Escape') setPublishOpen(false);
             }}
-            className="flex-1 px-2 py-1 rounded border border-gray-600 bg-transparent text-sm font-mono text-gray-200"
+            className="flex-1 min-w-0 px-2 py-1 rounded border border-gray-600 bg-transparent text-sm font-mono text-gray-200"
           />
           <button
             onClick={submitPublish}
