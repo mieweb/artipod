@@ -397,7 +397,9 @@ function Catalog() {
     (async () => {
       try {
         const res = await fetch('/api/pods/refs');
-        setServerRefs(res.ok ? ((await res.json()) as { ref: string; manifestDigest?: string; locked?: boolean; pulledAt?: string }[]) : []);
+        const all = res.ok ? ((await res.json()) as { ref: string; manifestDigest?: string; locked?: boolean; pulledAt?: string }[]) : [];
+        // the UI artifact is infrastructure (npm bundles it) — not content to browse
+        setServerRefs(all.filter((r) => !r.ref.startsWith('artipod-ui:')));
       } catch {
         setServerRefs([]);
       }

@@ -70,13 +70,16 @@ network:
 5. Nothing found (a dev checkout without `dist-ui`) → the headless landing.
    Never an error.
 
-Build it locally:
+Build it locally (dev checkout — npm installs already carry it):
 
 ```bash
-cd examples/artipod-sync && npm run export:static   # → out/
-artipod import out artipod-ui:latest                # into ~/.artipod/store
-artipod serve                                       # full UI at /
+npm run build:ui        # exports the demo → dist-ui/, served at /
+artipod serve
 ```
+
+The `artipod-ui:latest` store ref remains a deliberate override (update a
+running server's UI by pushing a new one — no reinstall), but it is
+infrastructure: the demo catalog hides it.
 
 ## Tokens (V7/S5)
 
