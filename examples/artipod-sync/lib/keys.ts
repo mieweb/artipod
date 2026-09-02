@@ -76,11 +76,35 @@ export function isForcedOffline(): boolean {
   return forcedOffline;
 }
 
-/** Flip the demo's forced-offline mode: /api requests fail like a dead network. */
+/** Flip the demo's forced-offline mode: /api requests fail like a dead network.
+ * Source of truth is the POD SETTING (/.artipod/settings.json — same file
+ * `artipod offline on|off` writes in any shell); localStorage is only the
+ * synchronous boot mirror so the very first fetch is already blocked. */
 export function setForcedOffline(value: boolean): void {
   forcedOffline = value;
   writePersisted(OFFLINE_KEY, value ? '1' : null);
   notify();
+  void (async () => {
+    const { fs } = await import('@/lib/filesystem');
+    const { writePodSettings } = await import('@artipod/core/oci');
+    await writePodSettings(fs as unknown as Parameters<typeof writePodSettings>[0], { offline: value });
+  })().catch(() => {});
+}
+
+/** Adopt the pod setting (call after fs init and on fs:changed — shells write it). */
+export async function reconcileOfflineFromFs(): Promise<void> {
+  try {
+    const { fs } = await import('@/lib/filesystem');
+    const { readPodSettings } = await import('@artipod/core/oci');
+    const value = (await readPodSettings(fs as unknown as Parameters<typeof readPodSettings>[0])).offline === true;
+    writePersisted(OFFLINE_KEY, value ? '1' : null);
+    if (value !== forcedOffline) {
+      forcedOffline = value;
+      notify();
+    }
+  } catch {
+    // fs not initialized yet — the boot mirror stands
+  }
 }
 
 /**

@@ -13,7 +13,7 @@ import AgentPanel from '@/components/AgentPanel';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import SyncStatus from '@/components/SyncStatus';
 import OfflineToggle from '@/components/OfflineToggle';
-import { installKeyBroker, getBrokerKey, getBrokerLease, getBrokerState, requireBrokerKey, brokerLogin, onBrokerChange, isForcedOffline } from '@/lib/keys';
+import { installKeyBroker, getBrokerKey, getBrokerLease, getBrokerState, requireBrokerKey, brokerLogin, onBrokerChange, isForcedOffline, reconcileOfflineFromFs } from '@/lib/keys';
 import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon, UploadCloud } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
@@ -320,6 +320,8 @@ function Catalog() {
     try {
       const info = await initFileSystem();
       const { fs } = await import('@/lib/filesystem');
+      // shells write the offline setting into the pod fs — adopt it (chip flips live)
+      void reconcileOfflineFromFs();
       // local heads for the digest-verified synced badge (refs are cleartext
       // pointers — readable without a key even on encrypted stores)
       try {
@@ -1371,6 +1373,7 @@ function Workspace({ route }: { route: Route }) {
       const probe = () => {
         if (probeTimer) clearTimeout(probeTimer);
         probeTimer = setTimeout(() => {
+            void reconcileOfflineFromFs(); // `artipod offline on|off` in this shell
             void (async () => {
               const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
               await patchRegistry(route.id, { hasChanges: entries.length > 0 });
