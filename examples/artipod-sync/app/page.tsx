@@ -819,12 +819,50 @@ interface LayerRow {
   size: number;
   mtime?: string;
   digest: string;
+  overlay?: string;
 }
 
-/** The pod's stack: local upper (top) over the basis manifest's layers. */
+/** Collapsed layer band: a count + size summary, expandable to per-layer rows. */
+function LayerBand({ title, tone, rows, note }: { title: string; tone: 'draft' | 'base'; rows: LayerRow[]; note?: string }) {
+  const [open, setOpen] = useState(false);
+  const fmtSize = (n: number): string => (n > 1024 * 1024 ? `${(n / 1048576).toFixed(1)} MB` : n > 1024 ? `${(n / 1024).toFixed(1)} kB` : `${n} B`);
+  const total = rows.reduce((s, r) => s + r.size, 0);
+  if (rows.length === 0) return null;
+  return (
+    <div className={`rounded border px-3 py-2 mb-2 ${tone === 'draft' ? 'border-blue-900 bg-blue-950/30' : 'border-gray-700 bg-[#252526]'}`}>
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex justify-between items-center gap-3 text-left">
+        <span className="font-mono">
+          {open ? '▾' : '▸'} {title}
+        </span>
+        <span className="text-xs text-gray-400 shrink-0">
+          {rows.length} layer{rows.length === 1 ? '' : 's'} · {fmtSize(total)}
+        </span>
+      </button>
+      {note && <p className="text-xs text-gray-500 mt-0.5">{note}</p>}
+      {open && (
+        <ul className="mt-2 space-y-1">
+          {rows.slice(0, 200).map((l) => (
+            <li key={l.digest + l.path} className="flex justify-between gap-3 text-xs">
+              <span className="font-mono truncate text-gray-300">{l.path}</span>
+              <span className="shrink-0 text-gray-500">
+                {/* org.artipod.mtime is raw epoch millis (ISO tolerated) */}
+                {l.mtime ? `${new Date(Number(l.mtime) || l.mtime).toLocaleString()} · ` : ''}
+                {fmtSize(l.size)} · {l.digest.slice(7, 15)}…
+              </span>
+            </li>
+          ))}
+          {rows.length > 200 && <li className="text-xs text-gray-500">… {rows.length - 200} more</li>}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** The pod's STACK, not a file list: writable upper → replaceable draft layers → permanent base. */
 function LayersView({ route, ready, onPublish, onBack }: { route: Route; ready: boolean; onPublish?: () => void; onBack?: () => void }) {
   const [layers, setLayers] = useState<LayerRow[] | null>(null);
   const [upperFiles, setUpperFiles] = useState<string[]>([]);
+  const [upperOpen, setUpperOpen] = useState(false);
   const [head, setHead] = useState<{ digest: string; actor?: string; parents?: string } | null>(null);
 
   useEffect(() => {
@@ -869,6 +907,7 @@ function LayersView({ route, ready, onPublish, onBack }: { route: Route; ready: 
             size: l.size,
             mtime: l.annotations?.['org.artipod.mtime'],
             digest: l.digest,
+            overlay: l.annotations?.['org.artipod.overlay'],
           })),
         );
       } catch {
@@ -878,6 +917,8 @@ function LayersView({ route, ready, onPublish, onBack }: { route: Route; ready: 
   }, [route.id, route.isRef, ready]);
 
   const fmtSize = (n: number): string => (n > 1024 * 1024 ? `${(n / 1048576).toFixed(1)} MB` : n > 1024 ? `${(n / 1024).toFixed(1)} kB` : `${n} B`);
+  const draftRows = (layers ?? []).filter((l) => l.overlay);
+  const baseRows = (layers ?? []).filter((l) => !l.overlay);
 
   return (
     <div className="mx-auto max-w-2xl p-6 text-sm">
@@ -897,20 +938,22 @@ function LayersView({ route, ready, onPublish, onBack }: { route: Route; ready: 
         </div>
       </div>
       <p className="text-gray-400 mb-4">
-        top wins on conflicts — the writable upper sits over the basis layers{route.mode === 'cow' ? ' (cow: the upper never pushes)' : route.mode === 'ro' ? ' (ro: the upper stays empty)' : ' (rw: the upper auto-pushes into a new head)'}
+        artipod publishes one layer per file, so the interesting part is the stack, not the list: the
+        writable upper wins over draft layers, drafts win over the permanent base.
+        {route.mode === 'cow' ? ' (cow: the upper never pushes)' : route.mode === 'ro' ? ' (ro: the upper stays empty)' : ' (rw: the upper auto-pushes into a new head)'}
       </p>
 
       <div className="rounded border border-emerald-800 bg-emerald-950/40 px-3 py-2 mb-2">
-        <div className="flex justify-between">
-          <span className="font-mono">upper (this machine, writable)</span>
-          <span className="text-gray-400">{upperFiles.length} file{upperFiles.length === 1 ? '' : 's'}</span>
-        </div>
-        {upperFiles.length > 0 && (
+        <button onClick={() => setUpperOpen((o) => !o)} className="w-full flex justify-between items-center gap-3 text-left">
+          <span className="font-mono">{upperOpen ? '▾' : '▸'} upper (this machine, writable)</span>
+          <span className="text-gray-400 text-xs shrink-0">{upperFiles.length} file{upperFiles.length === 1 ? '' : 's'}</span>
+        </button>
+        {upperOpen && upperFiles.length > 0 && (
           <ul className="mt-1 text-gray-400 font-mono text-xs">
-            {upperFiles.slice(0, 20).map((f) => (
+            {upperFiles.slice(0, 50).map((f) => (
               <li key={f}>/{f}</li>
             ))}
-            {upperFiles.length > 20 && <li>… {upperFiles.length - 20} more</li>}
+            {upperFiles.length > 50 && <li>… {upperFiles.length - 50} more</li>}
           </ul>
         )}
       </div>
@@ -920,24 +963,24 @@ function LayersView({ route, ready, onPublish, onBack }: { route: Route; ready: 
           <p className="text-gray-500">loading basis manifest…</p>
         ) : (
           <>
+            <LayerBand
+              title="draft layers (replaceable)"
+              tone="draft"
+              rows={draftRows}
+              note="pushed from an open workstream — the same actor's next push supersedes matching paths"
+            />
+            <LayerBand
+              title="base layers (permanent)"
+              tone="base"
+              rows={baseRows}
+              note="published/sealed content — immutable, shared verbatim by every fork and branch"
+            />
             {head && (
-              <p className="text-xs text-gray-500 mb-2 font-mono">
+              <p className="text-xs text-gray-500 mt-2 font-mono">
                 head {head.digest.slice(7, 19)}…{head.actor ? ` · pushed by ${head.actor}` : ''}
-                {head.parents ? ' · has parents (history reachable)' : ''}
+                {head.parents ? ' · has parents (history reachable)' : ''} · {(layers ?? []).length} layers · {fmtSize((layers ?? []).reduce((s, l) => s + l.size, 0))} total
               </p>
             )}
-            <ul className="space-y-1">
-              {layers.map((l) => (
-                <li key={l.digest + l.path} className="rounded border border-gray-700 bg-[#252526] px-3 py-1.5 flex justify-between gap-3">
-                  <span className="font-mono truncate">{l.path}</span>
-                  <span className="shrink-0 text-xs text-gray-400">
-                    {/* org.artipod.mtime is raw epoch millis (ISO tolerated) */}
-                    {l.mtime ? `${new Date(Number(l.mtime) || l.mtime).toLocaleString()} · ` : ''}
-                    {fmtSize(l.size)} · {l.digest.slice(7, 15)}…
-                  </span>
-                </li>
-              ))}
-            </ul>
           </>
         ))}
     </div>
