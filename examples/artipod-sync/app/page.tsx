@@ -239,6 +239,12 @@ async function dropFromRegistry(ids: string[]): Promise<void> {
 
 const wsLockName = (id: string): string => `artipod-ws-${id}`;
 
+/** Opaque upper-dir name for broker-mode block stores — hides WHICH refs have local forks. */
+async function upperDirName(id: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`artipod-upper:${id}`));
+  return Array.from(new Uint8Array(digest).slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** Ids whose workspace tab is still alive (it holds a Web Lock for its lifetime). */
 async function liveWorkspaceIds(): Promise<Set<string>> {
   try {
@@ -368,20 +374,27 @@ function Catalog() {
       } catch {
         // offline or no server — reconciliation is best-effort
       }
-      // On OPFS the physical cow uppers (.artipod/uppers/<enc>) are REAL dirs
+      // On OPFS the physical cow uppers (.artipod/uppers/<name>) are REAL dirs
       // the catalog can read — the filesystem is the source of truth, and the
-      // registry is just a cache (rm -rf / must empty the screen). On the
-      // IndexedDB fallback the uppers are invisible here, so trust the flags.
+      // registry is just a cache (rm -rf / must empty the screen). Legacy
+      // plaintext uppers are named encodeURIComponent(ref); broker-mode block
+      // stores are named hash(ref) and are OPAQUE — for those the physical dir
+      // only vetoes (gone/empty = no changes) and the workspace-maintained
+      // registry flag is the verdict. On the IndexedDB fallback the uppers are
+      // invisible here, so trust the flags.
       if (info?.backend === 'opfs') {
         changed = new Set<string>();
         const modeById = new Map(registry.map((e) => [e.id, e.mode]));
-        const uppers = (await fs.promises.readdir('/.artipod/uppers').catch(() => [])) as string[];
-        for (const name of uppers) {
+        const upperNames = new Set((await fs.promises.readdir('/.artipod/uppers').catch(() => [])) as string[]);
+        for (const e of registry) {
+          if (modeById.get(e.id) === 'rw') continue; // autoPush keeps rw synced
+          const legacy = encodeURIComponent(e.id);
+          const hashed = await upperDirName(e.id);
+          const name = upperNames.has(legacy) ? legacy : upperNames.has(hashed) ? hashed : null;
+          if (!name) continue;
           const entries = (await fs.promises.readdir(`/.artipod/uppers/${name}`).catch(() => [])) as string[];
-          const id = decodeURIComponent(name);
-          // rw uppers persist too now, but autoPush keeps them synced — only
-          // cow uppers represent unpushed divergence
-          if (entries.length > 0 && modeById.get(id) !== 'rw') changed.add(id);
+          if (entries.length === 0) continue;
+          if (name === legacy || e.hasChanges) changed.add(e.id);
         }
         for (const e of registry) {
           if (e.hasChanges && !changed.has(e.id)) await patchRegistry(e.id, { hasChanges: false });
@@ -1045,21 +1058,33 @@ function Workspace({ route }: { route: Route }) {
       // — one local working state per ref; the mode only chooses whether it
       // auto-pushes. An in-memory rw upper would start every session empty,
       // and its first push would strip the previous session's overlay layers.
-      const { mountConfigForSpec, encryptedMount } = await import('@artipod/core/sandbox');
-      // Broker serve (--encrypt): the working tree encrypts at rest too —
-      // the persistent upper is an EncryptedFS over the same backing store,
-      // keyed off the leased (device-unwrapped, non-extractable) KEK.
+      const { mountConfigForSpec, encryptedStoreMount } = await import('@artipod/core/sandbox');
+      // Broker serve (--encrypt): the working tree encrypts at rest as an
+      // opaque BLOCK STORE — no filenames, no tree shape on the backing
+      // medium; dir name = hash(ref) so even fork existence is hidden.
+      // Keyed off the leased (device-unwrapped, non-extractable) KEK.
       const brokerKey = getBrokerKey();
       const brokerLease = getBrokerLease();
-      const rawUpper =
-        route.isRef && route.mode !== 'ro'
-          ? await mountConfigForSpec(
-              info?.backend === 'opfs'
-                ? { type: 'opfs', dir: `.artipod/uppers/${encodeURIComponent(route.id)}` }
-                : { type: 'indexeddb', store: `artipod-upper::${encodeURIComponent(route.id)}` },
-            )
-          : undefined;
-      const cowUpper = rawUpper && brokerKey ? await encryptedMount({ inner: rawUpper, getKey: requireBrokerKey }) : rawUpper;
+      let cowUpper: unknown;
+      if (route.isRef && route.mode !== 'ro') {
+        if (brokerKey) {
+          const dirName = await upperDirName(route.id);
+          const backing =
+            info?.backend === 'opfs'
+              ? {
+                  kind: 'opfs' as const,
+                  dir: ((await mountConfigForSpec({ type: 'opfs', dir: `.artipod/uppers/${dirName}` })) as { handle: FileSystemDirectoryHandle }).handle,
+                }
+              : { kind: 'config' as const, config: await mountConfigForSpec({ type: info?.backend ?? 'indexeddb', store: `artipod-upper::${dirName}` }) };
+          cowUpper = await encryptedStoreMount({ backing, getKey: requireBrokerKey });
+        } else {
+          cowUpper = await mountConfigForSpec(
+            info?.backend === 'opfs'
+              ? { type: 'opfs', dir: `.artipod/uppers/${encodeURIComponent(route.id)}` }
+              : { type: 'indexeddb', store: `artipod-upper::${encodeURIComponent(route.id)}` },
+          );
+        }
+      }
       // Each blank workspace gets its own fresh root; a basis brings its own.
       const blankRoot = `/work/${route.id}`;
       if (!route.isRef) await fs.promises.mkdir(blankRoot, { recursive: true }).catch(() => {});
