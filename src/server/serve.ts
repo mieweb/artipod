@@ -106,12 +106,25 @@ async function warnOnVersionSkew(uiDir: string): Promise<void> {
   try {
     const { readFile } = await import('node:fs/promises');
     const info = JSON.parse(await readFile(join(uiDir, 'ui-buildinfo.json'), 'utf8')) as { coreVersion?: string };
+    // Compose our own full version the same way export-static does — skew
+    // detection is commit-precise on dev builds.
     const own = JSON.parse(
       await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
     ) as { version?: string };
-    if (info.coreVersion && own.version && info.coreVersion !== own.version) {
+    let ownFull = own.version ?? '';
+    try {
+      const bi = JSON.parse(await readFile(new URL('../buildinfo.json', import.meta.url), 'utf8')) as {
+        version?: string;
+        commit?: string;
+        date?: string;
+      };
+      ownFull = `${bi.version ?? ownFull} (${bi.commit ?? 'no-git'}, ${(bi.date ?? '').slice(0, 10)})`;
+    } catch {
+      // gitless build — compare plain versions
+    }
+    if (info.coreVersion && ownFull && info.coreVersion !== ownFull) {
       stdout.write(
-        `warning: the UI bundles @artipod/core ${info.coreVersion} but this serve is ${own.version} — rebuild it: cd examples/artipod-sync && npm run export:static && artipod import out artipod-ui:latest\n`,
+        `warning: the UI bundles @artipod/core ${info.coreVersion} but this serve is ${ownFull} — rebuild it: cd examples/artipod-sync && npm run export:static && artipod import out artipod-ui:latest\n`,
       );
     }
   } catch {

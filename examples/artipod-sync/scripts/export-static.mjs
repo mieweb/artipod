@@ -27,6 +27,7 @@ if (existsSync(stash)) {
 
 await rename(apiDir, stash);
 let code = 1;
+let fullVersion = '';
 try {
   // The file:../.. dep is COPIED into node_modules at install time and goes
   // stale silently (a 0.5.0 copy once shipped inside a 0.7.1 export) —
@@ -46,12 +47,21 @@ try {
     process.exit(1);
   }
 
+  // Dev builds carry the auto-bumped version + commit + date (dist/buildinfo.json,
+  // baked by the core build) — "0.7.1+10 (ee5c01b-dirty, 2026-09-02)", not "0.7.1".
+  try {
+    const info = JSON.parse(await readFile(join(root, 'node_modules/@artipod/core/dist/buildinfo.json'), 'utf8'));
+    fullVersion = `${info.version ?? copiedVersion} (${info.commit ?? 'no-git'}, ${(info.date ?? '').slice(0, 10)})`;
+  } catch {
+    fullVersion = copiedVersion; // gitless source tarball
+  }
+
   await rm(join(root, '.next'), { recursive: true, force: true });
   await rm(join(root, 'out'), { recursive: true, force: true });
   code = spawnSync('npx', ['next', 'build'], {
     cwd: root,
     stdio: 'inherit',
-    env: { ...process.env, STATIC_EXPORT: '1' },
+    env: { ...process.env, STATIC_EXPORT: '1', NEXT_PUBLIC_ARTIPOD_VERSION: fullVersion },
   }).status ?? 1;
 } finally {
   await restore();
@@ -74,20 +84,18 @@ if (!found) {
   process.exit(1);
 }
 
-// Version assertion: the bundled banner must carry the checkout's core
-// version — a stale bundle can never ship silently again. Minifiers split
-// the template into .concat("0.7.1") pieces, so match both fragments.
-const version = JSON.parse(await readFile(join(root, 'node_modules/@artipod/core/package.json'), 'utf8')).version;
+// Version assertion: NEXT_PUBLIC_ARTIPOD_VERSION is inlined at build time,
+// so the FULL dev version (incl. commit + date) must appear as a literal —
+// a stale bundle can never ship silently again.
 let versionBaked = false;
 for (const chunk of chunks) {
-  const source = await readFile(join(root, 'out/_next/static/chunks', chunk), 'utf8');
-  if (source.includes('@artipod/core ') && source.includes(`"${version}"`)) {
+  if ((await readFile(join(root, 'out/_next/static/chunks', chunk), 'utf8')).includes(fullVersion)) {
     versionBaked = true;
     break;
   }
 }
 if (!versionBaked) {
-  console.error(`export failed the version assertion: no chunk carries "@artipod/core ${version}" — the bundle does not match the checkout`);
+  console.error(`export failed the version assertion: no chunk carries "${fullVersion}" — the bundle does not match the checkout`);
   process.exit(1);
 }
 
@@ -95,6 +103,6 @@ if (!versionBaked) {
 const { writeFile } = await import('node:fs/promises');
 await writeFile(
   join(root, 'out/ui-buildinfo.json'),
-  `${JSON.stringify({ coreVersion: version, builtAt: new Date().toISOString() })}\n`,
+  `${JSON.stringify({ coreVersion: fullVersion, builtAt: new Date().toISOString() })}\n`,
 );
-console.log(`static export ready in out/ (struct-minify + version ${version} assertions passed)`);
+console.log(`static export ready in out/ (struct-minify + version assertions passed — ${fullVersion})`);

@@ -29,6 +29,10 @@ const RESET = '\x1b[0m';
 
 const REPO_URL = 'https://github.com/horner/artipod-sync';
 
+// export-static.mjs injects the full dev version ("0.7.1+10 (ee5c01b, 2026-09-02)");
+// plain `next dev`/`next build` fall back to the package version.
+const CORE_VERSION = process.env.NEXT_PUBLIC_ARTIPOD_VERSION ?? corePkg.version;
+
 // 34 cols × 3 rows so it fits a phone-width terminal
 const BANNER = [
   '',
@@ -36,7 +40,7 @@ const BANNER = [
   `${CYAN}├─┤├┬┘ │ │├─┘│ │ ││───├┴┐├─┤└─┐├─┤${RESET}`,
   `${CYAN}┴ ┴┴└─ ┴ ┴┴  └─┘─┴┘   └─┘┴ ┴└─┘┴ ┴${RESET}`,
   '',
-  `${DIM}@artipod/core ${corePkg.version} · bash over ZenFS · just-bash${RESET}`,
+  `${DIM}@artipod/core ${CORE_VERSION} · bash over ZenFS · just-bash${RESET}`,
   REPO_URL,
   `${DIM}Type 'help' or 'notes' to get started.${RESET}`,
   `${DIM}Tab completes · Ctrl+C cancels · Ctrl+\` toggles terminal${RESET}`,
@@ -86,7 +90,7 @@ export default function Terminal({ sandbox, events, readOnly }: TerminalProps) {
       readOnly,
       io: { write: (text) => term.write(text) },
       banner: BANNER,
-      version: corePkg.version,
+      version: CORE_VERSION,
     });
     const data = term.onData((d) => void session.handleData(d));
 
