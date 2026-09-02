@@ -300,6 +300,9 @@ function Catalog() {
   const [local, setLocal] = useState<LocalEntry[]>([]);
   // ref → manifest digest in THIS machine's store — 'synced' is a verified claim
   const [localHeads, setLocalHeads] = useState<Map<string, string>>(new Map());
+  // ancestry verdict per server ref: synced (heads equal), ahead (unpushed
+  // local changes — e.g. a push aborted by navigation), behind (server moved)
+  const [syncVerdicts, setSyncVerdicts] = useState<Map<string, 'synced' | 'ahead' | 'behind'>>(new Map());
   // refs with actual local changes: a non-empty overlay upper (/.artipod/upper/<ref>)
   const [changedRefs, setChangedRefs] = useState<Set<string>>(new Set());
   // root console: the WHOLE browser fs (all of /work, /proc, pod internals)
@@ -434,6 +437,50 @@ function Catalog() {
     }
     setLocal(Array.from(byId.values()).sort((a, b) => b.lastOpened - a.lastOpened));
   }, []);
+
+  // Ancestry beats recorded flags: a navigation-aborted push leaves a stale
+  // 'failed' flag even though the ref landed (or vice versa) — the parents
+  // DAG in the local store is the truth. Heals the registry as it verifies.
+  useEffect(() => {
+    if (!serverRefs || localHeads.size === 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { fs } = await import('@/lib/filesystem');
+        const { OciStore } = await import('@artipod/core/oci');
+        const { isAncestor } = await import('@artipod/core/manager');
+        const store = new OciStore(fs as unknown as ConstructorParameters<typeof OciStore>[0]);
+        await store.init();
+        const key = getBrokerKey();
+        if (key) await store.enableEncryption(() => key); // manifests decrypt for the DAG walk
+        const verdicts = new Map<string, 'synced' | 'ahead' | 'behind'>();
+        for (const r of serverRefs) {
+          const localHead = localHeads.get(r.ref);
+          if (!localHead || !r.manifestDigest) continue;
+          if (localHead === r.manifestDigest) {
+            verdicts.set(r.ref, 'synced');
+            continue;
+          }
+          try {
+            verdicts.set(r.ref, (await isAncestor(store, r.manifestDigest as never, localHead as never)) ? 'ahead' : 'behind');
+          } catch {
+            // locked store or missing blobs — no verdict, the flag stands
+          }
+        }
+        if (cancelled) return;
+        setSyncVerdicts(verdicts);
+        for (const e of local) {
+          if (e.unsynced && verdicts.get(e.id) === 'synced') await patchRegistry(e.id, { unsynced: false });
+        }
+      } catch {
+        // fs not ready — flags stand
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverRefs, localHeads]);
 
   useEffect(() => {
     (async () => {
@@ -684,30 +731,42 @@ function Catalog() {
                         </span>
                       )}
                       {modeLinks(ref, locked)}
-                      {!isCowFork && opened?.unsynced ? (
-                        <span
-                          className="rounded bg-amber-900/60 px-1.5 py-0.5"
-                          title="the last push failed (offline or locked) — local changes sit in this machine's upper and retry on the next edit"
-                        >
-                          out of sync
-                        </span>
-                      ) : !isCowFork && changedRefs.has(ref) ? (
-                        <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
-                      ) : !isCowFork && opened ? (
-                        localHeads.get(ref) === manifestDigest ? (
-                          // verified: this machine's head IS the server's head
-                          <span className="rounded bg-gray-700 px-1.5 py-0.5" title={`verified: local head matches the server (@${manifestDigest?.replace(/^sha256:/, '').slice(0, 8)})`}>
-                            synced
-                          </span>
-                        ) : localHeads.has(ref) ? (
-                          <span
-                            className="rounded bg-sky-900/60 px-1.5 py-0.5 text-sky-200"
-                            title="the server tag moved since this machine last synced — open the workspace to pull the newer head"
-                          >
-                            update available
-                          </span>
-                        ) : null // opened once, but the local store no longer holds it — claim nothing
-                      ) : null}
+                      {!isCowFork &&
+                        (() => {
+                          const verdict = syncVerdicts.get(ref);
+                          if (verdict === 'ahead' || (verdict === undefined && opened?.unsynced)) {
+                            return (
+                              <span
+                                className="rounded bg-amber-900/60 px-1.5 py-0.5"
+                                title="local changes haven't reached the server (push interrupted or offline) — open the workspace and it pushes automatically"
+                              >
+                                out of sync
+                              </span>
+                            );
+                          }
+                          if (changedRefs.has(ref)) return <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>;
+                          if (verdict === 'behind') {
+                            return (
+                              <span
+                                className="rounded bg-sky-900/60 px-1.5 py-0.5 text-sky-200"
+                                title="the server tag moved since this machine last synced — open the workspace to pull the newer head"
+                              >
+                                update available
+                              </span>
+                            );
+                          }
+                          if (verdict === 'synced') {
+                            return (
+                              <span
+                                className="rounded bg-gray-700 px-1.5 py-0.5"
+                                title={`verified: local head matches the server (@${manifestDigest?.replace(/^sha256:/, '').slice(0, 8)})`}
+                              >
+                                synced
+                              </span>
+                            );
+                          }
+                          return null; // no local head or no verdict — claim nothing
+                        })()}
                       {extra}
                     </>,
                     opened?.lastOpened && !isCowFork ? new Date(opened.lastOpened).toLocaleDateString() : '',
