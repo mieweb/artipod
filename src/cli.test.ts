@@ -8,7 +8,7 @@
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readdir, rm, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rm, access, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -208,6 +208,145 @@ describe('artipod CLI', () => {
       expect(cloned.stdout).toContain('field data');
     } finally {
       await rm(store, { recursive: true, force: true });
+    }
+  });
+
+  it('import snapshots a folder into the store; run REF materializes it at /', async () => {
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    const src = await mkdtemp(join(tmpdir(), 'apod-import-'));
+    try {
+      await mkdir(join(src, 'docs'));
+      await writeFile(join(src, 'hello.txt'), 'hello from the folder\n');
+      await writeFile(join(src, 'docs', 'guide.md'), '# guide\n');
+
+      const first = await run(['import', src, 'team/proj:1', '--store', store]);
+      expect(first.code).toBe(0);
+      expect(first.stdout).toMatch(/imported .* → team\/proj:1: 2 layers/);
+
+      // Content-addressed: an unchanged tree is a no-op re-import.
+      const again = await run(['import', src, 'team/proj:1', '--store', store]);
+      expect(again.code).toBe(0);
+      expect(again.stdout).toContain('already matches');
+
+      const cloned = await run(['run', 'team/proj:1', '--store', store, '-c', 'cat hello.txt && cat docs/guide.md']);
+      expect(cloned.stdout).toContain('materialized team/proj:1 at /');
+      expect(cloned.stdout).toContain('hello from the folder');
+      expect(cloned.stdout).toContain('# guide');
+
+      const misuse = await run(['import', src, '--store', store]);
+      expect(misuse.code).toBe(2);
+      const notDir = await run(['import', join(src, 'hello.txt'), 'x/y:1', '--store', store]);
+      expect(notDir.code).not.toBe(0);
+      expect(`${notDir.stdout}${notDir.stderr}`).toContain('is not a directory');
+    } finally {
+      await rm(store, { recursive: true, force: true });
+      await rm(src, { recursive: true, force: true });
+    }
+  });
+
+  it('--base stacks folders in order (later wins) and the merged result is commit-able', async () => {
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    const skel = await mkdtemp(join(tmpdir(), 'apod-skel-'));
+    const patches = await mkdtemp(join(tmpdir(), 'apod-patches-'));
+    try {
+      await writeFile(join(skel, 'config.txt'), 'from skel\n');
+      await writeFile(join(skel, 'only-skel.txt'), 'skel keeps this\n');
+      await writeFile(join(patches, 'config.txt'), 'from patches\n');
+
+      const stacked = await run([
+        'run', '--rm', '--store', store, '--base', skel, '--base', patches,
+        '-c', 'cat config.txt && cat only-skel.txt',
+      ]);
+      expect(stacked.code).toBe(0);
+      expect(stacked.stdout).toContain('from patches'); // later --base wins
+      expect(stacked.stdout).toContain('skel keeps this'); // non-conflicting files union
+      expect(stacked.stdout).not.toContain('from skel');
+
+      // Reversed order flips the winner.
+      const reversed = await run([
+        'run', '--rm', '--store', store, '--base', patches, '--base', skel, '-c', 'cat config.txt',
+      ]);
+      expect(reversed.stdout).toContain('from skel');
+
+      // The merged view is ordinary writable state — commit + push freezes the stack.
+      const committed = await run([
+        'run', '--rm', '--store', store, '--base', skel, '--base', patches,
+        '-c', 'artipod commit --tag stack/demo:1 && artipod push stack/demo:1',
+      ]);
+      expect(committed.stdout).toContain('pushed stack/demo:1');
+      const replay = await run(['run', 'stack/demo:1', '--store', store, '-c', 'cat config.txt']);
+      expect(replay.stdout).toContain('from patches');
+
+      const notDir = await run(['run', '--rm', '--store', store, '--base', join(skel, 'config.txt'), '-c', 'true']);
+      expect(notDir.code).not.toBe(0);
+      expect(`${notDir.stdout}${notDir.stderr}`).toContain('is not a directory');
+    } finally {
+      await rm(store, { recursive: true, force: true });
+      await rm(skel, { recursive: true, force: true });
+      await rm(patches, { recursive: true, force: true });
+    }
+  });
+
+  it('--base <dir>:<podpath> materializes the folder at a chosen path', async () => {
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    const src = await mkdtemp(join(tmpdir(), 'apod-basesrc-'));
+    try {
+      await writeFile(join(src, 'data.txt'), 'under work\n');
+      const r = await run([
+        'run', '--rm', '--store', store, '--base', `${src}:/work`,
+        '-c', 'cat /work/data.txt && ls /',
+      ]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('files at /work');
+      expect(r.stdout).toContain('under work');
+
+      // Same folder, two targets — targets are independent.
+      const two = await run([
+        'run', '--rm', '--store', store, '--base', `${src}:/a`, '--base', `${src}:/b`,
+        '-c', 'cat /a/data.txt /b/data.txt',
+      ]);
+      expect(two.code).toBe(0);
+      expect(two.stdout.match(/under work/g)).toHaveLength(2);
+    } finally {
+      await rm(store, { recursive: true, force: true });
+      await rm(src, { recursive: true, force: true });
+    }
+  });
+
+  it('-v mounts a host folder live: rw writes back, cow keeps writes in RAM', async () => {
+    const vol = await mkdtemp(join(tmpdir(), 'apod-vol-'));
+    try {
+      await writeFile(join(vol, 'data.txt'), 'from the host\n');
+
+      // Copy from the mount into the pod; rw writes land in the real folder.
+      const rw = await run([
+        'run', '--rm', '-v', `${vol}:/mnt/data`,
+        '-c', 'cat /mnt/data/data.txt && echo "from the pod" > /mnt/data/out.txt',
+      ]);
+      expect(rw.code).toBe(0);
+      expect(rw.stdout).toContain('from the host');
+      expect(await readFile(join(vol, 'out.txt'), 'utf8')).toContain('from the pod');
+      await rm(join(vol, 'out.txt'));
+
+      // cow: reads pass through, writes never reach the host.
+      const cow = await run([
+        'run', '--rm', '-v', `${vol}:/mnt/data:cow`,
+        '-c', 'cat /mnt/data/data.txt && echo scratch > /mnt/data/scratch.txt && cat /mnt/data/scratch.txt',
+      ]);
+      expect(cow.code).toBe(0);
+      expect(cow.stdout).toContain('from the host');
+      expect(cow.stdout).toContain('scratch');
+      expect(await readdir(vol)).toEqual(['data.txt']);
+
+      // The pod path is mandatory and '/' is refused.
+      const noTarget = await run(['run', '--rm', '-v', vol, '-c', 'true']);
+      expect(noTarget.code).not.toBe(0);
+      expect(`${noTarget.stdout}${noTarget.stderr}`).toContain('expected <hostdir>:</pod/path>');
+      const rootTarget = await run(['run', '--rm', '-v', `${vol}:/`, '-c', 'true']);
+      expect(rootTarget.code).not.toBe(0);
+      expect(`${rootTarget.stdout}${rootTarget.stderr}`).toContain("other than '/'");
+    } finally {
+      await rm(vol, { recursive: true, force: true });
     }
   });
 

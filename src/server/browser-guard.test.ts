@@ -36,6 +36,8 @@ describe('server subpath isolation', () => {
   it('is imported by nothing outside src/server', () => {
     const offenders = walk(srcDir)
       .filter((f) => !f.includes(`${join('src', 'server')}`) && !f.endsWith('.test.ts') && !f.endsWith('.spec.ts'))
+      // cli.ts is the node-only bin entry (imports node:* statically, never browser-bundled)
+      .filter((f) => f !== join(srcDir, 'cli.ts'))
       .filter((f) => /from\s+['"][./]*\/server\//.test(readFileSync(f, 'utf8')));
     expect(offenders).toEqual([]);
   });

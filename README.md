@@ -35,6 +35,8 @@ npm install -g artipod           # permanent `artipod` on PATH (alias for @artip
 artipod pods                     # past runs — the `docker ps -a` of pods
 artipod run -it 500edf8b         # resume a kept pod by id prefix
 artipod run -it field/notes:1    # a ref you pushed earlier
+artipod import ~/proj team/proj:1            # folder → image in the store (no pod)
+artipod run -it --base ~/skel --base ./patches   # stack folders as layers (later wins)
 ```
 
 (`npx github:mieweb/artipod` also works — it compiles from source on first run and caches.)
@@ -47,6 +49,21 @@ all; tag inside the shell with `artipod commit --tag <name>:<tag>`), `--dir <pat
 at a path of your choosing, `--store <path>` (default `~/.artipod/store`) backs
 `push`/`pull`/`clone` and REF lookup, `-c '<cmd>'` runs one line and exits. Inside the shell,
 `artipod` lists the pod verbs (snapshot, commit, push, hydrate, …).
+
+Host folders enter the layer model two ways. `artipod import <dir> <name:tag>` snapshots a
+folder into the store as an image ref without booting a pod — content-addressed, so
+re-importing an unchanged tree is a no-op and only changed files cost bytes; `artipod run -it
+<name:tag>` then materializes it like any other ref. `--base <dir>[:<podpath>]` does the
+import at boot and materializes the folder into the pod (default target `/`); repeat it to
+stack folders in order — later `--base` wins on conflicts, and the stack sits on top of REF
+when one is given. Neither ever writes back to the host folder, and committing inside the
+shell freezes the merged result as a layer whose parent chain records the imported bases.
+
+For a *live* window onto the host instead of a snapshot, `-v <dir>:<podpath>[:ro|:cow]`
+mounts a folder docker-style (repeatable): rw by default (writes inside the shell land in the
+real folder), `:cow` keeps writes in RAM so the host is never touched, `:ro` marks it
+read-only for the tool layer and keeps it out of commits. rw/cow mounts are commit roots —
+mount under `/mnt` (commit-excluded) when it's just source material to copy from.
 
 ### Browser pod with a shell (✅ `@artipod/core/sandbox`)
 

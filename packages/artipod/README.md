@@ -7,6 +7,7 @@ package just runs its CLI.
 ```sh
 npx artipod run -it              # fresh pod → artipod-bash, kept under ~/.artipod/pods
 npx artipod run -it alpine:3.22  # a registry image, cloned in writable
+npx artipod import ~/proj team/proj:1   # folder → image in the store; run it by ref
 npm install -g artipod           # permanent `artipod` on PATH
 ```
 

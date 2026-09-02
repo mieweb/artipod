@@ -24,11 +24,15 @@ import { newSuperblock, OCI_ROOT, SUPERBLOCK_PATH, type PodSuperblock } from './
 import { storeTransport, materializeImage } from './manager/sync.js';
 import { DirectRegistryTransport, parseImageRef, formatImageRef } from './oci/transport.js';
 import { pullImage } from './oci/pull.js';
+import { publishDirectory } from './server/folder.js';
 import { nodePodFs } from './nodePodFs.js';
 
 const HELP = `usage:
   artipod run [-it] [REF|POD] [flags]   boot a pod: empty, resumed from a kept POD id,
                                         or materialized from an image/volume REF
+  artipod import <dir> <name:tag>       snapshot a host folder into the store as an
+                                        image ref (no pod) — content-addressed, so
+                                        re-importing an unchanged tree is a no-op
   artipod pods [--pods <path>]          list kept pods, newest first (docker ps -a for pods)
   artipod rm [--pods <path>] POD...     delete kept pods by id (unique prefix ok)
   artipod prune [-f] [-a] [--pods <path>]  delete untagged kept pods (-a: ALL); asks first
@@ -51,6 +55,18 @@ flags for run:
   --at <path>        where REF materializes (default: '/' for artipod volume refs,
                      '/rootfs' for container images — their ELF binaries can't run in
                      artipod-bash, so the shell's builtins stay resolvable)
+  --base <dir>[:<podpath>]   import <dir> into the store and materialize it at
+                     <podpath> (default '/'); repeat to stack folders in order (later
+                     --base wins on conflicts, and both stack on top of REF when one
+                     is given) — commit inside the shell to freeze the merged result
+                     as a layer. NOTE: /mnt, /dev, /proc are excluded from commits;
+                     use e.g. :/work for content you mean to commit
+  -v <dir>:<podpath>[:ro|:cow]   mount a host folder LIVE at <podpath> (docker -v);
+                     repeatable. Default rw — writes inside the shell land in the
+                     real folder. :cow keeps writes in RAM (host never touched);
+                     :ro marks it read-only for tools and keeps it out of commits
+                     (shell-level enforcement arrives with view mounts). rw/cow
+                     mounts are commit roots — mount under /mnt to keep them out
 
 examples:
   artipod run -it                      # fresh pod, kept under ~/.artipod/pods (untouched pods
@@ -59,6 +75,10 @@ examples:
   artipod run -it alpine:3.22          # registry image, cloned into the pod root
   artipod run -it field/notes:1        # a ref you pushed earlier (from --store)
   artipod run --rm -it                 # throwaway: RAM only, gone on exit
+  artipod import ~/proj team/proj:1    # folder → image in the store; run it later by ref
+  artipod run -it --base ~/skel --base ./patches   # stack folders (later wins)
+  artipod run -it --base ~/proj:/work  # materialize the folder under /work instead of /
+  artipod run -it -v ~/data:/mnt/data:ro   # live host mount to copy from (cp into /work)
 
 inside the shell, run \`artipod\` for the pod verbs (snapshot, commit, push, …).
 `;
@@ -74,6 +94,10 @@ interface RunArgs {
   disk: boolean;
   forceRegistry: boolean;
   at?: string;
+  /** Host folders stacked onto '/' in order (later wins) — see --base. */
+  bases: string[];
+  /** Live hostDir mounts, docker-style '<dir>:<podpath>[:ro|:cow]' — see -v. */
+  volumes: string[];
 }
 
 function parseArgs(
@@ -84,7 +108,8 @@ function parseArgs(
   | { version: true }
   | { pods: true; podsRoot: string }
   | { removeIds: string[]; podsRoot: string }
-  | { prune: true; force: boolean; all: boolean; podsRoot: string } {
+  | { prune: true; force: boolean; all: boolean; podsRoot: string }
+  | { importDir: string; importRef: string; store: string } {
   if (args.includes('--help') || args.includes('-h') || args.length === 0) return { help: true };
   if (args.includes('--version')) return { version: true };
   const [verb, ...rest] = args;
@@ -116,6 +141,22 @@ function parseArgs(
     }
     return { removeIds, podsRoot };
   }
+  if (verb === 'import') {
+    let store = env.ARTIPOD_STORE ?? resolve(homedir(), '.artipod/store');
+    const positional: string[] = [];
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '--store') store = rest[++i];
+      else if (rest[i].startsWith('-')) {
+        stdout.write(`artipod import: unknown flag '${rest[i]}'\n\n${HELP}`);
+        exit(2);
+      } else positional.push(rest[i]);
+    }
+    if (positional.length !== 2) {
+      stdout.write('artipod import: expected a folder and a ref — artipod import <dir> <name:tag>\n');
+      exit(2);
+    }
+    return { importDir: positional[0], importRef: positional[1], store };
+  }
   if (verb === 'prune') {
     let podsRoot = defaultPodsRoot;
     let force = false;
@@ -144,6 +185,8 @@ function parseArgs(
     rm: false,
     disk: false,
     forceRegistry: false,
+    bases: [],
+    volumes: [],
   };
   let sawInteractiveFlag = false;
   for (let i = 0; i < rest.length; i++) {
@@ -156,6 +199,8 @@ function parseArgs(
     else if (a === '--pods') out.podsRoot = rest[++i];
     else if (a === '--store') out.store = rest[++i];
     else if (a === '--at') out.at = rest[++i];
+    else if (a === '--base') out.bases.push(rest[++i]);
+    else if (a === '-v' || a === '--volume') out.volumes.push(rest[++i]);
     else if (a === '--registry') out.forceRegistry = true;
     else if (a.startsWith('-')) {
       stdout.write(`artipod run: unknown flag '${a}'\n\n${HELP}`);
@@ -231,6 +276,10 @@ async function bootPod(args: RunArgs, dir?: string): Promise<ZenFsPod> {
       dir
         ? { name: 'work', path: '/', mode: 'rw', source: { kind: 'hostDir', dir } }
         : { name: 'work', path: '/', mode: 'rw', source: { kind: 'backend', backend: 'memory' } },
+      ...args.volumes.map((spec, i) => {
+        const v = parseVolumeSpec(spec);
+        return { name: `vol${i}`, path: v.at, mode: v.mode, source: { kind: 'hostDir' as const, dir: resolve(v.dir) } };
+      }),
     ],
   };
   await mkdir(resolve(args.store), { recursive: true });
@@ -430,8 +479,7 @@ async function prunePods(root: string, force: boolean, all: boolean): Promise<vo
  * shadow artipod-bash's builtins via PATH without ever being runnable). */
 async function materializeRef(pod: ZenFsPod, args: RunArgs): Promise<void> {
   const ref = args.ref!;
-  const store = new OciLayoutPodStore(nodePodFs(), resolve(args.store));
-  await store.init();
+  const store = await openLayoutStore(args.store);
   const canonical = (() => {
     try {
       return formatImageRef(parseImageRef(ref));
@@ -451,12 +499,99 @@ async function materializeRef(pod: ZenFsPod, args: RunArgs): Promise<void> {
   });
   await pod.oci.store.putRef(ref, pulled.manifestDigest, 'application/vnd.oci.image.manifest.v1+json');
   const manifest = JSON.parse(new TextDecoder().decode(await pod.oci.store.getBlob(pulled.manifestDigest))) as {
-    config?: { mediaType?: string };
+    config?: { mediaType?: string; digest?: string };
   };
-  const isVolume = manifest.config?.mediaType === 'application/vnd.artipod.volume.v1+json';
+  // Volume-flavored commits and `artipod import`ed folders belong at '/';
+  // only container-image rootfs trees get shunted to /rootfs.
+  let isVolume = manifest.config?.mediaType === 'application/vnd.artipod.volume.v1+json';
+  if (!isVolume && manifest.config?.digest) {
+    try {
+      const config = JSON.parse(new TextDecoder().decode(await pod.oci.store.getBlob(manifest.config.digest as never))) as {
+        artipod?: unknown;
+      };
+      isVolume = config.artipod !== undefined;
+    } catch {
+      // unreadable config — keep the container-image default
+    }
+  }
   const at = args.at ?? (isVolume ? '/' : '/rootfs');
   const result = await materializeImage({ store: pod.oci.store, zfs: pod.zfs, refOrDigest: pulled.manifestDigest, at });
   stdout.write(`materialized ${ref} at ${at}: ${result.files} files (writable)${at !== '/' ? ` — cd ${at}` : ''}\n`);
+}
+
+async function openLayoutStore(path: string): Promise<OciLayoutPodStore> {
+  await mkdir(resolve(path), { recursive: true });
+  const store = new OciLayoutPodStore(nodePodFs(), resolve(path));
+  await store.init();
+  return store;
+}
+
+async function assertDirectory(verb: string, dir: string): Promise<string> {
+  const abs = resolve(dir);
+  const st = await lstat(abs).catch(() => null);
+  if (!st?.isDirectory()) throw new Error(`artipod ${verb}: '${dir}' is not a directory`);
+  return abs;
+}
+
+/** `--base <dir>[:<podpath>]` — the target is the suffix after the last ':'
+ * that starts a '/', so host paths containing ':' stay parseable. */
+function parseBaseSpec(spec: string): { dir: string; at: string } {
+  const i = spec.lastIndexOf(':/');
+  if (i > 0) return { dir: spec.slice(0, i), at: spec.slice(i + 1).replace(/\/+$/, '') || '/' };
+  return { dir: spec, at: '/' };
+}
+
+/** `-v <dir>:<podpath>[:ro|:cow|:rw]` — docker volume syntax; the pod path is
+ * required and must not shadow the root mount. */
+function parseVolumeSpec(spec: string): { dir: string; at: string; mode: 'rw' | 'ro' | 'cow' } {
+  let rest = spec;
+  let mode: 'rw' | 'ro' | 'cow' = 'rw';
+  const m = /:(ro|rw|cow)$/.exec(rest);
+  if (m) {
+    mode = m[1] as typeof mode;
+    rest = rest.slice(0, -m[0].length);
+  }
+  const i = rest.lastIndexOf(':/');
+  if (i <= 0) throw new Error(`artipod run -v: expected <hostdir>:</pod/path>[:ro|:cow] (got '${spec}')`);
+  const at = rest.slice(i + 1).replace(/\/+$/, '');
+  if (!at || at === '/') throw new Error(`artipod run -v: mount target must be a pod path other than '/' (got '${spec}')`);
+  return { dir: rest.slice(0, i), at, mode };
+}
+
+/** `artipod import <dir> <name:tag>` — folder → image ref in the store. */
+async function importDirectory(dir: string, ref: string, storePath: string): Promise<void> {
+  const abs = await assertDirectory('import', dir);
+  const store = await openLayoutStore(storePath);
+  const result = await publishDirectory(store, abs, ref);
+  for (const w of result.warnings.slice(0, 10)) stdout.write(`warning: ${w}\n`);
+  if (result.warnings.length > 10) stdout.write(`… and ${result.warnings.length - 10} more warnings\n`);
+  if (result.unchanged) {
+    stdout.write(`${ref} already matches ${tildify(abs)} — store untouched\n`);
+    return;
+  }
+  stdout.write(
+    `imported ${tildify(abs)} → ${ref}: ${result.layers} layer${result.layers === 1 ? '' : 's'} ` +
+      `(${result.reusedLayers} reused), ${fmtSize(result.bytes)} new — run it: artipod run -it ${ref}\n`,
+  );
+}
+
+/** Stack the --base folders in order: each is imported into the store
+ * (content-addressed — unchanged trees dedup to a no-op) and then
+ * materialized at its target path (default '/'), so later bases win and the
+ * merged result is commit-able. */
+async function materializeBases(pod: ZenFsPod, args: RunArgs): Promise<void> {
+  const store = await openLayoutStore(args.store);
+  for (const base of args.bases) {
+    const { dir, at } = parseBaseSpec(base);
+    const abs = await assertDirectory('run --base', dir);
+    const name = basename(abs).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[._-]+/, '') || 'dir';
+    const ref = `base/${name}:latest`;
+    const pub = await publishDirectory(store, abs, ref);
+    const pulled = await pullImage({ store: pod.oci.store, transport: storeTransport(store), ref });
+    await pod.oci.store.putRef(ref, pulled.manifestDigest, 'application/vnd.oci.image.manifest.v1+json');
+    const result = await materializeImage({ store: pod.oci.store, zfs: pod.zfs, refOrDigest: pulled.manifestDigest, at });
+    stdout.write(`base ${tildify(abs)} → ${ref} (${pub.manifestDigest.slice(7, 19)}): ${result.files} files at ${at}\n`);
+  }
 }
 
 async function repl(pod: ZenFsPod, note?: string): Promise<number> {
@@ -625,11 +760,18 @@ async function main(): Promise<void> {
     await prunePods(resolve(parsed.podsRoot), parsed.force, parsed.all);
     return;
   }
+  if ('importDir' in parsed) {
+    await importDirectory(parsed.importDir, parsed.importRef, parsed.store);
+    return;
+  }
 
   if (!parsed.command && !parsed.interactive) {
     stdout.write('artipod run: nothing to do (no -c command and stdin is not a TTY) — did you mean -it?\n');
     exit(2);
   }
+  // Bad --base/-v paths fail here, before a kept pod dir is minted.
+  for (const base of parsed.bases) await assertDirectory('run --base', parseBaseSpec(base).dir);
+  for (const vol of parsed.volumes) await assertDirectory('run -v', parseVolumeSpec(vol).dir);
 
   const loc = await resolvePodLocation(parsed);
   if (loc.resumed) parsed.ref = undefined;
@@ -639,6 +781,7 @@ async function main(): Promise<void> {
   // mutates nothing (REF materialization counts), the dir is removed at exit.
   const baseline = loc.kept && !loc.resumed && !parsed.dir && loc.dir ? await dirState(loc.dir) : null;
   if (parsed.ref) await materializeRef(pod, parsed);
+  if (parsed.bases.length > 0) await materializeBases(pod, parsed);
 
   const done = async (code: number): Promise<never> => {
     if (loc.cleanup && loc.dir) await rm(loc.dir, { recursive: true, force: true });
