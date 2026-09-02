@@ -46,6 +46,8 @@ export interface DistributionHandlerOptions {
   auth?: AuthHook;
   /** Reject pushes (S5 wires ro tokens here); reads stay open to `auth`. */
   readonly?: boolean;
+  /** Tag immutability: a locked ref rejects tag-moving manifest PUTs with 403 DENIED. */
+  isLocked?: (ref: string) => boolean | Promise<boolean>;
   /** Upload-session TTL; default 1h. Restart-lossy by design (spec-permitted). */
   uploadTtlMs?: number;
 }
@@ -370,6 +372,9 @@ export function createDistributionHandler(options: DistributionHandlerOptions): 
           if (repo.arg !== digest) return ociError(400, 'DIGEST_INVALID', 'manifest digest mismatch');
         } else {
           if (!TAG_RE.test(repo.arg)) return ociError(400, 'TAG_INVALID', `invalid tag ${repo.arg}`);
+          if (await options.isLocked?.(distRef(repo.name, repo.arg))) {
+            return ociError(403, 'DENIED', `tag ${repo.name}:${repo.arg} is locked — push under a new tag instead`);
+          }
           const mediaType = req.headers.get('content-type') || DEFAULT_MANIFEST_TYPE;
           // V8: /v2 tag writes are last-write-wins OVERWRITE — registries don't merge.
           await store.putRef(distRef(repo.name, repo.arg), digest, mediaType);

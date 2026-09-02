@@ -46,6 +46,7 @@ artipod serve --only registry          # registry surface only
 | `--store <path>` | `~/.artipod/store` (env `ARTIPOD_STORE`) | The served OCI-layout store — a plain directory, skopeo-inspectable. Not the pods dir (`~/.artipod/pods`). |
 | `--publish <dir>` | — | Repeatable. Snapshot the folder at boot as `<basename>:latest` (one layer per file) and materialize pushed heads back into it. Published dirs form the write-back roots allowlist (plus env `ARTIPOD_PUBLISH_ROOTS`), re-checked on every materialize. |
 | `--token <t>` | open on localhost (env `ARTIPOD_SERVE_TOKEN`) | Require `Authorization: Bearer <t>` on every surface |
+| `--lock <ref>` / `--unlock <ref>` | — | Repeatable. Tag immutability — see [Locked tags](#locked-tags). Persisted in `<store>/locks.json`. |
 | `--only web\|registry` | both | Narrow the surfaces |
 | `--cors <origin>` | deny | Repeatable exact-match origin allowlist for `/api/pods`, `/api/oci` (and later `/v2`). The shipped UI is same-origin and needs none of this. |
 | `--oci-allow <host>` | deny | Repeatable upstream allowlist for the registry relay (env `ARTIPOD_OCI_ALLOWED_HOSTS`) |
@@ -103,6 +104,34 @@ Two write paths, two semantics — documented loudly on purpose:
   **last-write-wins overwrite** — registries don't merge. The tag is still a
   plain ref, so prior heads stay reachable where the pusher recorded
   parents.
+
+## Locked tags
+
+A tag is a mutable pointer; sometimes you want it to stop being one — the
+registry-world precedent is Harbor/ECR *tag immutability*. Locking a ref
+freezes its head:
+
+```bash
+artipod serve --lock me/play:1          # persisted in <store>/locks.json
+artipod serve --unlock me/play:1        # release
+```
+
+Semantics (enforced server-side, regardless of token):
+
+| operation on a locked ref | result |
+|---|---|
+| read / pull (either surface) | unchanged |
+| `PUT /api/pods/refs` head move | `403` |
+| `PUT /v2/…/manifests/<tag>` | `403 DENIED` |
+| `PUT /v2/…/manifests/<digest>` | allowed — storing bytes moves no tag |
+| open in **ro** or **cow** mode | unchanged — cow forks are local |
+| **rw** / push-back | refused; fork with cow and `publish` under a new ref |
+
+The refs API marks locked entries (`"locked": true`), so UIs can drop the
+rw affordance up front — the shipped demo shows a `locked` badge and offers
+only cow/ro. Locking composes with the digest display: a locked
+`me/play:1 @a460ab57` is a name that provably cannot change out from under
+you. Embedders pass their own policy: `createArtipodApp({ isLocked })`.
 
 ## Embedding
 

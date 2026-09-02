@@ -97,6 +97,9 @@ flags for serve:
                      on every surface, read-write (env ARTIPOD_SERVE_TOKEN)
   --read-token <t>   read-only token: pulls yes, pushes/exec no
                      (env ARTIPOD_SERVE_READ_TOKEN)
+  --lock <ref>       lock a tag (immutable: every head move is refused with 403;
+                     repeatable, persisted in <store>/locks.json)
+  --unlock <ref>     release a locked tag (repeatable)
   --only web|registry   narrow the surfaces (default: both)
   --cors <origin>    allow a browser origin (repeatable; default deny)
   --oci-allow <host> allow an upstream registry host for the relay (repeatable;
@@ -209,6 +212,8 @@ function parseArgs(
       ociAllow: [],
       exec: true,
       publish: [],
+      lock: [],
+      unlock: [],
       open: false,
       ui: true,
     };
@@ -234,6 +239,8 @@ function parseArgs(
       else if (a === '--publish') serve.publish.push(rest[++i]);
       else if (a === '--token') serve.token = rest[++i];
       else if (a === '--read-token') serve.readToken = rest[++i];
+      else if (a === '--lock') serve.lock.push(rest[++i]);
+      else if (a === '--unlock') serve.unlock.push(rest[++i]);
       else if (a === '--no-exec') serve.exec = false;
       else if (a === '--no-ui') serve.ui = false;
       else if (a === '--open') serve.open = true;

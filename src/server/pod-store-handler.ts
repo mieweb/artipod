@@ -25,6 +25,8 @@ export interface PodStoreHandlerOptions {
   auth?: AuthHook;
   /** Fires after a successful ref update — the folder-materialize hook (sync plan Phase E). */
   onRefPut?: (ref: string, manifestDigest: Digest) => void | Promise<void>;
+  /** Tag immutability: a locked ref rejects every head move with 403 (reads unaffected). */
+  isLocked?: (ref: string) => boolean | Promise<boolean>;
   /**
    * Merge-on-push (sync plan Phase F): a pushed head that has diverged from
    * the current one joins via mergeHeads instead of overwriting; a stale
@@ -36,7 +38,7 @@ export interface PodStoreHandlerOptions {
 }
 
 export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHandler {
-  const { store, auth, onRefPut } = options;
+  const { store, auth, onRefPut, isLocked } = options;
   const mergeOptions: MergeOptions | null = options.merge === false ? null : typeof options.merge === 'object' ? options.merge : {};
   return async (req, path) => {
     const method = req.method.toUpperCase();
@@ -87,11 +89,13 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
     if (kind === 'refs') {
       if (method === 'GET') {
         const name = new URL(req.url).searchParams.get('name');
+        const decorate = async (r: { ref: string }) =>
+          (await isLocked?.(r.ref)) ? { ...r, locked: true } : r;
         if (name) {
           const ref = await store.getRef(name);
-          return ref ? json(ref) : json({ error: 'not found' }, 404);
+          return ref ? json(await decorate(ref)) : json({ error: 'not found' }, 404);
         }
-        return json(await store.listRefs());
+        return json(await Promise.all((await store.listRefs()).map(decorate)));
       }
       if (method === 'PUT') {
         let body: { ref?: string; manifestDigest?: string; mediaType?: string };
@@ -105,6 +109,9 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
         }
         if (!(await store.hasBlob(body.manifestDigest as Digest))) {
           return json({ error: 'push the manifest blob before the ref' }, 409);
+        }
+        if (await isLocked?.(body.ref)) {
+          return json({ error: `ref '${body.ref}' is locked — publish under a new ref instead` }, 403);
         }
         let finalDigest = body.manifestDigest as Digest;
         let merged = false;

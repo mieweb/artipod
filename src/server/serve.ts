@@ -33,6 +33,9 @@ export interface ServeCliOptions {
   publish: string[];
   token?: string;
   readToken?: string;
+  /** Refs to lock/unlock at boot (persisted in <store>/locks.json). */
+  lock: string[];
+  unlock: string[];
   open: boolean;
   /** false = --no-ui (headless landing). */
   ui: boolean;
@@ -52,6 +55,24 @@ function envList(name: string): string[] {
 }
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
+/** Locked tags (tag immutability): <store>/locks.json, applied via --lock/--unlock. */
+async function loadLocks(storeDir: string, lock: string[], unlock: string[]): Promise<Set<string>> {
+  const { readFile, writeFile } = await import('node:fs/promises');
+  const file = join(storeDir, 'locks.json');
+  let locks = new Set<string>();
+  try {
+    locks = new Set(JSON.parse(await readFile(file, 'utf8')) as string[]);
+  } catch {
+    // no locks yet
+  }
+  if (lock.length > 0 || unlock.length > 0) {
+    for (const ref of lock) locks.add(ref);
+    for (const ref of unlock) locks.delete(ref);
+    await writeFile(file, `${JSON.stringify([...locks].sort(), null, 2)}\n`);
+  }
+  return locks;
+}
 
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -210,6 +231,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
       : undefined;
 
   const uiInfo = opts.ui && surfaces.web ? await resolveUiDir(store) : null;
+  const locks = await loadLocks(storeDir, opts.lock, opts.unlock);
 
   const app = createArtipodApp({
     store,
@@ -218,6 +240,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     cors: opts.cors,
     relay: { allowedHosts: relayHosts },
     onRefPut,
+    isLocked: locks.size > 0 ? (ref) => locks.has(ref) : undefined,
     exec:
       opts.exec && surfaces.web
         ? {
@@ -249,6 +272,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
       .join(', ')}\n`,
   );
   for (const line of published) stdout.write(`  publish:  ${line}\n`);
+  if (locks.size > 0) stdout.write(`  locked:   ${[...locks].sort().join(', ')} (tags cannot move — --unlock <ref> to release)\n`);
   if (uiInfo) stdout.write(`  ui:       ${uiInfo.source} — ${tildify(uiInfo.dir)}\n`);
   if (relayHosts.length > 0) stdout.write(`  relay:    ${relayHosts.join(', ')}\n`);
   if (token || readToken) {

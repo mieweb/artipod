@@ -99,6 +99,40 @@ describe('createArtipodApp', () => {
     const res = await app(new Request(`${base}/api/pods/refs`));
     expect(res.status).toBe(404);
   });
+
+  it('locked refs refuse head moves on both surfaces and surface `locked` in the refs list', async () => {
+    const store = new MemoryPodStore();
+    const app = createArtipodApp({ store, isLocked: (ref) => ref === 'pins/app:1' });
+    // seed a manifest the ref PUTs can point at
+    const manifest = new TextEncoder().encode(JSON.stringify({ schemaVersion: 2, config: undefined, layers: [] }));
+    const manifestDigest = await store.putBlob(manifest);
+    await store.putRef('pins/app:1', manifestDigest, 'application/vnd.oci.image.manifest.v1+json');
+
+    // native surface: PUT refs on the locked name → 403; an unlocked name lands
+    const putRef = (ref: string) =>
+      app(new Request(`${base}/api/pods/refs`, { method: 'PUT', body: JSON.stringify({ ref, manifestDigest }) }));
+    expect((await putRef('pins/app:1')).status).toBe(403);
+    expect((await putRef('free/app:1')).status).toBe(201);
+
+    // /v2 surface: tag-moving manifest PUT → 403 DENIED; digest PUT (no tag move) is fine
+    const v2Put = (arg: string) =>
+      app(
+        new Request(`${base}/v2/pins/app/manifests/${arg}`, {
+          method: 'PUT',
+          body: manifest,
+          headers: { 'content-type': 'application/vnd.oci.image.manifest.v1+json' },
+        }),
+      );
+    const deniedV2 = await v2Put('1');
+    expect(deniedV2.status).toBe(403);
+    expect(((await deniedV2.json()) as { errors: { code: string }[] }).errors[0].code).toBe('DENIED');
+    expect((await v2Put(manifestDigest)).status).toBe(201);
+
+    // reads are untouched, and the list carries the lock
+    const refs = (await (await app(new Request(`${base}/api/pods/refs`))).json()) as { ref: string; locked?: boolean }[];
+    expect(refs.find((r) => r.ref === 'pins/app:1')?.locked).toBe(true);
+    expect(refs.find((r) => r.ref === 'free/app:1')?.locked).toBeUndefined();
+  });
 });
 
 describe('withCors', () => {

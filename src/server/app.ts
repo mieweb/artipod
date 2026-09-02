@@ -41,6 +41,8 @@ export interface ArtipodAppOptions {
   exec?: ExecSessionHandlerOptions | false;
   onRefPut?: PodStoreHandlerOptions['onRefPut'];
   merge?: PodStoreHandlerOptions['merge'];
+  /** Tag immutability (both surfaces): a locked ref rejects head moves with 403. */
+  isLocked?: PodStoreHandlerOptions['isLocked'];
   /** Static UI dir (node-only) served for anything outside /api and /v2. */
   ui?: { dir: string } | false;
   /**
@@ -63,6 +65,7 @@ export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
           auth: options.auth,
           onRefPut: options.onRefPut,
           merge: options.merge,
+          isLocked: options.isLocked,
         }),
         cors,
       )
@@ -75,7 +78,7 @@ export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
     : null;
   const exec = web && options.exec ? createExecSessionHandler(options.exec) : null;
   const dist: PathHandler | null = registry
-    ? withCors(createDistributionHandler({ store: options.store, auth: options.auth }), cors)
+    ? withCors(createDistributionHandler({ store: options.store, auth: options.auth, isLocked: options.isLocked }), cors)
     : null;
   const ui = options.ui ? createStaticHandler(options.ui.dir) : null;
 
