@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Sandbox `git clone` now behaves like real git**: it clones into a subdirectory derived from the URL (last path segment, minus `.git`) instead of the shell's cwd, honors an explicit target-directory argument (relative or absolute), and refuses a non-empty destination with git's wording.
+
 ## [0.7.0] - 2026-09-02
 
 ### Added
