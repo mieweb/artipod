@@ -28,7 +28,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): serve pha
 | Phase | Branch | Status | PR |
 |---|---|---|---|
 | S0 — node adapter + `createArtipodApp` + `serve` verb | main | **done** (2026-09-02) | |
-| S1 — `--publish` folder delight + auto-token + landing | `serve-s1-publish` | todo | |
+| S1 — `--publish` folder delight + auto-token + landing | main | **done** (2026-09-02) | |
 | S2 — ship the sync demo UI (static export → OCI artifact, pulled on first serve) | `serve-s2-ui` | todo | |
 | S3 — OCI distribution read (`/v2/` pull) | `serve-s3-dist-read` | todo | |
 | S4 — OCI distribution write (push + conformance) | `serve-s4-dist-write` | todo | |
@@ -211,14 +211,17 @@ Worklog:
 
 ### S1 — folder delight + auto-token + landing
 
-- [ ] Port publish-map into `src/server/publish-map.ts` (JSON file in the store dir); demo's `lib/publish-map.ts` becomes a re-export shim (deleted one release later, same ritual as Phase 2)
-- [ ] `--publish <dir>` repeatable: boot-time `publishDirectory`, `onRefPut` → authority-checked `materializeRef` write-back
-- [ ] V7 token behavior: non-localhost bind + no token → generate, print, require (all surfaces); localhost stays open
-- [ ] Headless landing at `/` (no UI dir): single inline-HTML page — served refs, store path, copy-paste `curl`/`docker pull` lines
-- [ ] `--open`; `docs/serve.md` first draft (quickstart + flag table + V8 semantics)
-- [ ] **Done when**: `artipod serve --publish <tmpdir>` round-trips the sync-demo write-back e2e (browser-side simulated via `HttpPodStore`): edit → push → file materializes; and a `0.0.0.0` bind prints a token that `curl` must present
+- [x] Port publish-map into `src/server/publish-map.ts` (JSON file in the store dir); demo's `lib/publish-map.ts` becomes a re-export shim (deleted one release later, same ritual as Phase 2)
+- [x] `--publish <dir>` repeatable: boot-time `publishDirectory`, `onRefPut` → authority-checked `materializeRef` write-back
+- [x] V7 token behavior: non-localhost bind + no token → generate, print, require (all surfaces); localhost stays open
+- [x] Headless landing at `/` (no UI dir): single inline-HTML page — served refs, store path, copy-paste `curl`/`docker pull` lines
+- [x] `--open`; `docs/serve.md` first draft (quickstart + flag table + V8 semantics)
+- [x] **Done when**: `artipod serve --publish <tmpdir>` round-trips the sync-demo write-back e2e (browser-side simulated via `HttpPodStore`): edit → push → file materializes; and a `0.0.0.0` bind prints a token that `curl` must present
 
 Worklog:
+
+- 2026-09-02: S1 complete. `src/server/publish-map.ts` (`PublishMap` class + `withinRoots` — parameterized, no env singletons). `createArtipodApp` grew a `fallback` option (anything outside /api and /v2); serve.ts supplies the headless landing there. `--publish` boot-publishes `<basename>:latest` with actor `serve:<hostname>`, records the map beside the store, and `onRefPut` re-checks `withinRoots` before every `materializeRef`. V7 token: `--token`/`ARTIPOD_SERVE_TOKEN`, else non-localhost bind generates 32 hex chars and `requireToken` wraps the whole app (OPTIONS preflights pass — they carry no credentials); exec auth falls back `EXEC_API_TOKEN` → serve token. `--open` via platform opener. `docs/serve.md` first draft. Tests (serve.test.ts): landing page, write-back e2e (client `publishDirectory` over `HttpPodStore` against the live serve → served file updated), 0.0.0.0 auto-token 401/200 matrix. Gate: lint/build/tsc/test → 43 files / 459 tests green.
+- Deviation: the demo's `lib/publish-map.ts` re-export shim is DEFERRED until a core release ships `@artipod/core/server` publish-map — the demo installs the published package (0.7.x) and cannot compile against unpublished exports. Ties into the S2 demo refactor (ask-first anyway).
 
 ### S2 — ship the sync demo UI *(parallel-ok with S3)*
 

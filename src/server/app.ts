@@ -39,6 +39,11 @@ export interface ArtipodAppOptions {
   exec?: ExecSessionHandlerOptions | false;
   onRefPut?: PodStoreHandlerOptions['onRefPut'];
   merge?: PodStoreHandlerOptions['merge'];
+  /**
+   * Handles anything outside /api and /v2 — the static UI (S2) or the
+   * headless landing page (S1). Absent = 404 JSON.
+   */
+  fallback?: (req: Request) => Response | Promise<Response>;
 }
 
 export type ArtipodApp = (req: Request) => Promise<Response>;
@@ -75,7 +80,9 @@ export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
       if (second === 'oci' && relay) return relay(req, rest);
       if (second === 'git' && git) return git(req, rest);
       if (second === 'exec' && exec && rest.length === 0) return exec(req);
+      return json({ error: 'not found' }, 404);
     }
+    if (first !== 'v2' && options.fallback) return options.fallback(req);
     return json({ error: 'not found' }, 404);
   };
 }

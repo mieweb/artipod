@@ -87,14 +87,20 @@ examples:
 
 flags for serve:
   --port <n>         listen port (default 2784; 0 = OS-assigned)
-  --host <addr>      bind address (default 127.0.0.1)
+  --host <addr>      bind address (default 127.0.0.1); a non-localhost bind with
+                     no token generates one and requires it on every surface
   --store <path>     the served OCI-layout store (default ~/.artipod/store,
                      env ARTIPOD_STORE)
+  --publish <dir>    snapshot a folder into the store at boot (<basename>:latest)
+                     and write pushed heads back into it (repeatable)
+  --token <t>        require 'Authorization: Bearer <t>' on every surface
+                     (env ARTIPOD_SERVE_TOKEN)
   --only web|registry   narrow the surfaces (default: both)
   --cors <origin>    allow a browser origin (repeatable; default deny)
   --oci-allow <host> allow an upstream registry host for the relay (repeatable;
                      env ARTIPOD_OCI_ALLOWED_HOSTS; default deny)
   --no-exec          disable the exec-session surface
+  --open             open the printed URL in a browser
 
 inside the shell, run \`artipod\` for the pod verbs (snapshot, commit, push, …).
 `;
@@ -197,6 +203,8 @@ function parseArgs(
       cors: [],
       ociAllow: [],
       exec: true,
+      publish: [],
+      open: false,
     };
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
@@ -217,7 +225,10 @@ function parseArgs(
         serve.only = only;
       } else if (a === '--cors') serve.cors.push(rest[++i]);
       else if (a === '--oci-allow') serve.ociAllow.push(rest[++i]);
+      else if (a === '--publish') serve.publish.push(rest[++i]);
+      else if (a === '--token') serve.token = rest[++i];
       else if (a === '--no-exec') serve.exec = false;
+      else if (a === '--open') serve.open = true;
       else {
         stdout.write(`artipod serve: unknown argument '${a}'\n\n${HELP}`);
         exit(2);
