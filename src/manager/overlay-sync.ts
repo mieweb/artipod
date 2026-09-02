@@ -38,6 +38,13 @@ export interface OverlayHeadOptions {
   /** Deleted pod paths → deletion timestamp (the whiteout LWW clock). */
   deletions: Map<string, number>;
   actor: string;
+  /**
+   * Publish semantics: mint layers WITHOUT the overlay annotation, so they
+   * become part of the permanent base — a later (even empty) overlay push by
+   * the same actor cannot strip them. Use when the upper is retired after
+   * the push (blank publish, publish-as).
+   */
+  permanent?: boolean;
 }
 
 export interface OverlayHeadResult {
@@ -91,7 +98,7 @@ async function walkUpper(zfs: ZenFsLike, upperAt: string): Promise<UpperFile[]> 
  * Deterministic for a given upper state, so a re-push is a no-op.
  */
 export async function buildOverlayHead(options: OverlayHeadOptions): Promise<OverlayHeadResult> {
-  const { store, zfs, ref, upperAt, deletions, actor } = options;
+  const { store, zfs, ref, upperAt, deletions, actor, permanent } = options;
   const head = await store.getRef(ref);
   if (!head) throw new Error(`overlay push: no local head for '${ref}' — open it first`);
   const headManifest = JSON.parse(decoder.decode(await store.getBlob(head.manifestDigest))) as ImageManifest;
@@ -127,7 +134,7 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
     await putLayer(
       await buildFileLayer(
         [{ path: file.podPath, type: 'file', content: file.content, mode: file.mode, mtimeMs: file.mtimeMs }],
-        { path: file.podPath, mtimeMs: file.mtimeMs, actor, overlay: actor },
+        { path: file.podPath, mtimeMs: file.mtimeMs, actor, ...(permanent ? {} : { overlay: actor }) },
       ),
     );
   }
@@ -141,7 +148,7 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
       mtimeMs: stamp,
     }));
     const stamp = Math.max(...deleted.map(([, s]) => s));
-    await putLayer(await buildFileLayer(entries, { path: '.wh', mtimeMs: stamp, actor, overlay: actor }));
+    await putLayer(await buildFileLayer(entries, { path: '.wh', mtimeMs: stamp, actor, ...(permanent ? {} : { overlay: actor }) }));
   }
 
   const config = encoder.encode(
