@@ -52,6 +52,23 @@ const setOpenTag = (ref: string, open: boolean): string => {
 const OPEN_DRAFT_TIP =
   'Checked: the tag starts with _ — an open draft anyone can keep editing (collaborative; can be renamed away later). Unchecked: the tag SEALS on publish — an immutable milestone that can never move or be deleted.';
 
+/** Next free open tag for a fork of `ref`: me/play:1 → me/play:_2 (_3…), v2026-09-02 → _2026-09-02.2. */
+const nextDraftRef = (ref: string, existing: Set<string>): string => {
+  const i = ref.lastIndexOf(':');
+  if (i === -1) return ref;
+  const name = ref.slice(0, i);
+  const tag = ref.slice(i + 1).replace(/^_+/, '');
+  const numeric = /^\d+$/.test(tag);
+  let n = numeric ? Number(tag) + 1 : 2;
+  const make = () => (numeric ? `${name}:_${n}` : `${name}:_${tag}.${n}`);
+  let candidate = make();
+  while (existing.has(candidate)) {
+    n += 1;
+    candidate = make();
+  }
+  return candidate;
+};
+
 /** Workspaces this browser has opened before (the "on this machine" list). */
 interface LocalEntry {
   id: string;
@@ -468,7 +485,7 @@ function Catalog() {
     ...local.filter((e) => !serverRefs?.some((r) => r.ref === e.id) && !cowForks.includes(e)),
   ];
 
-  const row = (id: string, badge: React.ReactNode, note: string, mode: OpenMode = 'rw') => (
+  const row = (id: string, badge: React.ReactNode, note: string, mode: OpenMode = 'rw', label?: string) => (
     <li key={`${id}:${mode}`}>
       {/* full reload on purpose: a workspace boots its FS once per page */}
       {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
@@ -477,7 +494,7 @@ function Catalog() {
         className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2 rounded bg-[#333] hover:bg-[#3d3d3d] text-sm"
       >
         {/* the name always wins the width fight — badges wrap to a second line on phones */}
-        <span className="font-mono truncate min-w-0 flex-1 basis-40">{id}</span>
+        <span className="font-mono truncate min-w-0 flex-1 basis-40">{label ?? id}</span>
         <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-gray-400">
           {note && <span className="hidden sm:inline">{note}</span>}
           {badge}
@@ -589,7 +606,18 @@ function Catalog() {
                     onClick={(ev) => {
                       ev.preventDefault();
                       ev.stopPropagation();
-                      setPub({ id: e.id, mode: e.mode ?? 'rw', value: e.kind === 'blank' ? `me/${e.id}:_1` : e.id });
+                      // a fork of a locked ref can't push back — suggest the next free draft tag
+                      const lockedOrigin = e.kind === 'pod' && serverRefs?.find((r) => r.ref === e.id)?.locked;
+                      setPub({
+                        id: e.id,
+                        mode: e.mode ?? 'rw',
+                        value:
+                          e.kind === 'blank'
+                            ? `me/${e.id}:_1`
+                            : lockedOrigin
+                              ? nextDraftRef(e.id, new Set((serverRefs ?? []).map((r) => r.ref)))
+                              : e.id,
+                      });
                     }}
                     className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] uppercase text-gray-400 hover:text-white hover:border-gray-400"
                     title="Publish to the server"
@@ -602,6 +630,8 @@ function Catalog() {
                 </>,
                 e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
                 e.mode ?? 'rw',
+                // a diverged fork must not wear the pristine tag's name
+                e.kind === 'pod' && e.mode === 'cow' ? `fork of ${e.id}` : e.id,
               ),
             )}
           </ul>
@@ -1145,6 +1175,19 @@ function Workspace({ route }: { route: Route }) {
     setPublishValue(route.isRef ? route.id : `me/${route.id}:_1`);
     setPublishNotice(null);
     setPublishOpen(true);
+    // a fork of a LOCKED ref can never push back — suggest the next free draft tag instead
+    if (route.isRef) {
+      void (async () => {
+        try {
+          const refs = (await (await fetch('/api/pods/refs')).json()) as { ref: string; locked?: boolean }[];
+          if (refs.find((r) => r.ref === route.id)?.locked) {
+            setPublishValue(nextDraftRef(route.id, new Set(refs.map((r) => r.ref))));
+          }
+        } catch {
+          // offline — keep the plain suggestion
+        }
+      })();
+    }
   };
 
   const submitPublish = () => {
@@ -1197,7 +1240,7 @@ function Workspace({ route }: { route: Route }) {
           <HomeIcon size={16} />
         </a>
         <span className="px-2 font-mono text-sm text-gray-300 truncate min-w-0 max-w-[7rem] sm:max-w-[14rem]" title={route.id}>
-          {route.isRef ? route.id : `blank ${route.id}`}
+          {route.isRef ? (route.mode === 'cow' ? `fork of ${route.id}` : route.id) : `blank ${route.id}`}
           {route.mode !== 'rw' && (
             <span className="ml-1.5 rounded border border-gray-600 px-1 text-[10px] uppercase text-gray-400">{route.mode}</span>
           )}
