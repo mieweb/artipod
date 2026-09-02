@@ -255,6 +255,8 @@ function Catalog() {
   const [rootSandbox, setRootSandbox] = useState<Sandbox | null>(null);
   const [termOpen, setTermOpen] = useState(false);
   const [termHeight, setTermHeight] = useState(300);
+  // inline publish editor for a local row (native prompt is suppressed in driven browsers)
+  const [pub, setPub] = useState<{ id: string; mode: OpenMode; value: string } | null>(null);
 
   // Rescan "on this machine" — runs at load and after every console command.
   const refreshLocal = useCallback(async () => {
@@ -519,14 +521,7 @@ function Catalog() {
                     onClick={(ev) => {
                       ev.preventDefault();
                       ev.stopPropagation();
-                      const target = window.prompt(
-                        e.kind === 'blank'
-                          ? 'Publish this workspace to the server as (name:tag):'
-                          : `Publish: keep "${e.id}" to push back, or enter a new name:tag to branch`,
-                        e.kind === 'blank' ? `me/${e.id}:1` : e.id,
-                      );
-                      // the workspace boots its own pod — publish runs there via ?publish=
-                      if (target) window.location.href = `${workspaceUrl(e.id, e.mode ?? 'rw')}&publish=${encodeURIComponent(target)}`;
+                      setPub({ id: e.id, mode: e.mode ?? 'rw', value: e.kind === 'blank' ? `me/${e.id}:1` : e.id });
                     }}
                     className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] uppercase text-gray-400 hover:text-white hover:border-gray-400"
                     title="Publish to the server"
@@ -542,6 +537,37 @@ function Catalog() {
               ),
             )}
           </ul>
+        )}
+
+        {/* inline publish editor — the workspace boots its own pod, publish runs there via ?publish= */}
+        {pub && (
+          <div className="flex items-center gap-2 mb-6">
+            <span className="text-xs text-gray-400 font-mono shrink-0">publish {pub.id} as</span>
+            <input
+              autoFocus
+              value={pub.value}
+              onChange={(e) => setPub({ ...pub, value: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setPub(null);
+                if (e.key === 'Enter' && pub.value.trim()) {
+                  window.location.href = `${workspaceUrl(pub.id, pub.mode)}&publish=${encodeURIComponent(pub.value.trim())}`;
+                }
+              }}
+              className="flex-1 px-2 py-1 rounded border border-gray-600 bg-transparent text-sm font-mono text-gray-200"
+            />
+            <button
+              onClick={() => {
+                if (pub.value.trim())
+                  window.location.href = `${workspaceUrl(pub.id, pub.mode)}&publish=${encodeURIComponent(pub.value.trim())}`;
+              }}
+              className="px-3 py-1 rounded bg-blue-700 hover:bg-blue-600 text-sm"
+            >
+              Publish
+            </button>
+            <button onClick={() => setPub(null)} className="px-2 py-1 text-gray-400 hover:text-white text-sm">
+              ✕
+            </button>
+          </div>
         )}
 
         <NewWorkspace />
@@ -582,8 +608,9 @@ function NewWorkspace() {
     const id = crypto.randomUUID().slice(0, 8);
     const target = name.trim();
     if (!target) return void (window.location.href = workspaceUrl(id));
-    if (!target.includes(':')) return alert(`include a tag — e.g. ${target}:1`);
-    window.location.href = `${workspaceUrl(id)}&publish=${encodeURIComponent(target)}`;
+    // no tag = tag 1 (native dialogs are suppressed in driven browsers — don't alert)
+    const ref = target.includes(':') ? target : `${target}:1`;
+    window.location.href = `${workspaceUrl(id)}&publish=${encodeURIComponent(ref)}`;
   };
   return (
     <div className="flex gap-2">
@@ -612,7 +639,7 @@ interface LayerRow {
 }
 
 /** The pod's stack: local upper (top) over the basis manifest's layers. */
-function LayersView({ route, ready }: { route: Route; ready: boolean }) {
+function LayersView({ route, ready, onPublish }: { route: Route; ready: boolean; onPublish?: () => void }) {
   const [layers, setLayers] = useState<LayerRow[] | null>(null);
   const [upperFiles, setUpperFiles] = useState<string[]>([]);
   const [head, setHead] = useState<{ digest: string; actor?: string; parents?: string } | null>(null);
@@ -671,7 +698,14 @@ function LayersView({ route, ready }: { route: Route; ready: boolean }) {
 
   return (
     <div className="mx-auto max-w-2xl p-6 text-sm">
-      <h2 className="font-semibold mb-1">Layers</h2>
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="font-semibold">Layers</h2>
+        {onPublish && (
+          <button onClick={onPublish} className="text-xs bg-blue-800 px-2 py-1 rounded hover:bg-blue-700">
+            Publish
+          </button>
+        )}
+      </div>
       <p className="text-gray-400 mb-4">
         top wins on conflicts — the writable upper sits over the basis layers{route.mode === 'cow' ? ' (cow: the upper never pushes)' : route.mode === 'ro' ? ' (ro: the upper stays empty)' : ' (rw: the upper auto-pushes into a new head)'}
       </p>
@@ -733,6 +767,10 @@ function Workspace({ route }: { route: Route }) {
   // publish action shared by the shell verb, the nav button, and ?publish= intents
   const doPublishRef = useRef<((target?: string) => Promise<string>) | null>(null);
   const [publishing, setPublishing] = useState(false);
+  // inline publish panel (window.prompt/alert are suppressed in driven browsers)
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishValue, setPublishValue] = useState('');
+  const [publishNotice, setPublishNotice] = useState<string | null>(null);
   // One event bus per pod: terminal, tree, editor and agent stay coherent.
   const eventsRef = useRef<PodEvents | null>(null);
   if (!eventsRef.current) eventsRef.current = new PodEvents();
@@ -918,9 +956,9 @@ function Workspace({ route }: { route: Route }) {
       if (route.publishIntent) {
         window.history.replaceState(null, '', workspaceUrl(route.id, route.mode));
         try {
-          await doPublish(route.publishIntent);
+          setPublishNotice(await doPublish(route.publishIntent));
         } catch (e) {
-          alert(`publish ${route.publishIntent}: ${(e as Error).message}`);
+          setPublishNotice(`publish ${route.publishIntent}: ${(e as Error).message}`);
         }
       }
 
@@ -1007,6 +1045,29 @@ function Workspace({ route }: { route: Route }) {
     setActiveView('tree');
   };
 
+  const openPublish = () => {
+    setPublishValue(route.isRef ? route.id : `me/${route.id}:1`);
+    setPublishNotice(null);
+    setPublishOpen(true);
+  };
+
+  const submitPublish = () => {
+    void (async () => {
+      const doPublish = doPublishRef.current;
+      const target = publishValue.trim();
+      if (!doPublish || publishing || !target) return;
+      setPublishing(true);
+      setPublishNotice(null);
+      try {
+        setPublishNotice(await doPublish(target));
+      } catch (e) {
+        setPublishNotice(`publish: ${(e as Error).message}`);
+      } finally {
+        setPublishing(false);
+      }
+    })();
+  };
+
   const tab = (view: ViewMode, icon: React.ReactNode, label: string, disabled = false) => (
     <button
       onClick={() => setActiveView(view)}
@@ -1049,30 +1110,11 @@ function Workspace({ route }: { route: Route }) {
         {tab('agent', <Bot size={16} />, 'Agent')}
         {route.mode !== 'ro' && (
           <button
-            onClick={() => {
-              void (async () => {
-                const doPublish = doPublishRef.current;
-                if (!doPublish || publishing) return;
-                const suggestion = route.isRef ? route.id : `me/${route.id}:1`;
-                const target = window.prompt(
-                  route.isRef
-                    ? `Publish: keep "${route.id}" to push back, or enter a new name:tag to branch`
-                    : 'Publish this workspace to the server as (name:tag):',
-                  suggestion,
-                );
-                if (!target) return;
-                setPublishing(true);
-                try {
-                  alert(await doPublish(target));
-                } catch (e) {
-                  alert(`publish: ${(e as Error).message}`);
-                } finally {
-                  setPublishing(false);
-                }
-              })();
-            }}
+            onClick={() => (publishOpen ? setPublishOpen(false) : openPublish())}
             disabled={!fsReady || publishing}
-            className="flex items-center gap-2 px-4 py-3 text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d] disabled:opacity-40"
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+              publishOpen ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500' : 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
+            } disabled:opacity-40`}
             title="Publish this workspace to the server (also: `artipod publish` in the terminal)"
           >
             <UploadCloud size={16} />
@@ -1098,6 +1140,41 @@ function Workspace({ route }: { route: Route }) {
       {fsInfo && !fsInfo.isPrimaryTab && (
         <div role="alert" className="bg-yellow-900 text-yellow-100 text-sm px-4 py-2">
           Filesystem already open in another tab — tabs don&apos;t share changes and the last write wins. Use one tab at a time.
+        </div>
+      )}
+
+      {/* Inline publish panel (native prompt/alert are suppressed in driven browsers) */}
+      {publishOpen && (
+        <div className="flex items-center gap-2 bg-[#252526] border-b border-gray-700 px-4 py-2">
+          <span className="text-xs text-gray-400 shrink-0">
+            {route.isRef ? `publish — keep “${route.id}” to push back, or a new name:tag to branch:` : 'publish this workspace as:'}
+          </span>
+          <input
+            autoFocus
+            value={publishValue}
+            onChange={(e) => setPublishValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submitPublish();
+              if (e.key === 'Escape') setPublishOpen(false);
+            }}
+            className="flex-1 px-2 py-1 rounded border border-gray-600 bg-transparent text-sm font-mono text-gray-200"
+          />
+          <button
+            onClick={submitPublish}
+            disabled={publishing || !publishValue.trim()}
+            className="px-3 py-1 rounded bg-blue-700 hover:bg-blue-600 text-sm disabled:opacity-40"
+          >
+            {publishing ? 'Publishing…' : 'Publish'}
+          </button>
+          <button onClick={() => setPublishOpen(false)} className="px-2 py-1 text-gray-400 hover:text-white text-sm">
+            ✕
+          </button>
+        </div>
+      )}
+      {publishNotice && (
+        <div role="status" className="bg-[#1b2a1b] border-b border-emerald-900 text-emerald-200 text-sm px-4 py-2 flex justify-between">
+          <span className="font-mono">{publishNotice}</span>
+          <button onClick={() => setPublishNotice(null)} className="text-emerald-400 hover:text-white">✕</button>
         </div>
       )}
 
@@ -1127,6 +1204,13 @@ function Workspace({ route }: { route: Route }) {
               onSelectFile={handleFileSelect}
               events={events}
               roots={[workspaceRoot]}
+              headerExtra={
+                route.mode !== 'ro' ? (
+                  <button onClick={openPublish} className="text-xs bg-blue-800 px-2 py-1 rounded hover:bg-blue-700">
+                    Publish
+                  </button>
+                ) : undefined
+              }
               getDehydratedPaths={async () => {
                 const pod = podRef.current;
                 if (!pod?.hydrator || !pod.basis) return [];
@@ -1166,7 +1250,7 @@ function Workspace({ route }: { route: Route }) {
         {/* Layers: the pod's stack — basis manifest layers + the local upper on top */}
         {activeView === 'layers' && (
           <div className="absolute inset-0 z-10 overflow-auto">
-            <LayersView route={route} ready={fsReady} />
+            <LayersView route={route} ready={fsReady} onPublish={route.mode !== 'ro' ? openPublish : undefined} />
           </div>
         )}
       </div>

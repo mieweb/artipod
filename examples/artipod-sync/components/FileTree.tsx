@@ -6,7 +6,7 @@
  * fs:changed-driven invalidation; the Refresh button remains as a manual
  * escape hatch.
  */
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   UncontrolledTreeEnvironment,
   Tree,
@@ -26,9 +26,11 @@ interface FileTreeProps {
   roots?: string[];
   /** Absolute paths still remote (sync plan D) — rendered with a cloud badge. */
   getDehydratedPaths?: () => Promise<string[]>;
+  /** Extra header actions (e.g. the workspace's Publish button). */
+  headerExtra?: ReactNode;
 }
 
-export default function FileTree({ onSelectFile, events, roots, getDehydratedPaths }: FileTreeProps) {
+export default function FileTree({ onSelectFile, events, roots, getDehydratedPaths, headerExtra }: FileTreeProps) {
   const sourceRef = useRef<TreeSource | null>(null);
   const dehydratedRef = useRef<Set<string>>(new Set());
   const rootsKey = (roots ?? ['/repo']).join(',');
@@ -83,12 +85,15 @@ export default function FileTree({ onSelectFile, events, roots, getDehydratedPat
     <div className="rct-dark h-full w-full bg-[#1e1e1e] text-white p-2 overflow-auto">
       <div className="flex justify-between items-center mb-2">
         <h3 className="font-bold">File Explorer</h3>
-        <button
-          onClick={() => sourceRef.current?.invalidate()}
-          className="text-xs bg-gray-700 px-2 py-1 rounded hover:bg-gray-600"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {headerExtra}
+          <button
+            onClick={() => sourceRef.current?.invalidate()}
+            className="text-xs bg-gray-700 px-2 py-1 rounded hover:bg-gray-600"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
       <UncontrolledTreeEnvironment
         dataProvider={dataProvider}
