@@ -1,6 +1,6 @@
 {
   "name": "@artipod/core",
-  "version": "0.1.0",
+  "version": "0.3.1",
   "bin": {
     "artipod": "dist/cli.js"
   },
@@ -86,6 +86,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "postbuild": "node scripts/buildinfo.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

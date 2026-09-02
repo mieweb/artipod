@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`artipod pods`**: list kept pods (pod id, created, last used, size), newest first — the `docker ps -a` of pods. `--pods <path>`/`ARTIPOD_PODS` overrides the root.
 - **`artipod rm <pod>...` and `artipod prune`**: delete kept pods by id (unique prefix ok) or wipe them all; prune asks first unless `-f`, and both only touch dirs carrying a pod superblock.
+- **Build provenance in `--version`/`--help`**: the build bakes `dist/buildinfo.json` (commit hash, `-dirty` when the tree had changes, commit date) and the CLI reports `artipod <version> (<commit>, <date>)`. The version auto-bumps from git tags — `0.3.1+5` means 5 commits past tag 0.3.1 — so every push moves it without touching package.json.
 
 ### Changed
 

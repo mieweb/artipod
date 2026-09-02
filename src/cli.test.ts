@@ -45,10 +45,11 @@ describe('artipod CLI', () => {
   it('--help and --version', async () => {
     const help = await run(['--help']);
     expect(help.code).toBe(0);
+    expect(help.stdout).toMatch(/^artipod \d[^ ]* \([0-9a-f]{7,}(-dirty)?, \d{4}-\d{2}-\d{2}\) — a pod for artifacts/);
     expect(help.stdout).toContain('artipod run [-it] [REF|POD]');
     expect(help.stdout).toContain('artipod pods');
     const version = await run(['--version']);
-    expect(version.stdout).toMatch(/^artipod \d+\.\d+\.\d+/);
+    expect(version.stdout).toMatch(/^artipod \d[^ ]* \([0-9a-f]{7,}(-dirty)?, \d{4}-\d{2}-\d{2}\)\n$/);
   });
 
   it('one-shot -c with --rm runs in an ephemeral pod and mirrors the exit code', async () => {

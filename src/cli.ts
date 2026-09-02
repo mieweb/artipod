@@ -26,9 +26,7 @@ import { DirectRegistryTransport, parseImageRef, formatImageRef } from './oci/tr
 import { pullImage } from './oci/pull.js';
 import { nodePodFs } from './nodePodFs.js';
 
-const HELP = `artipod — a pod for artifacts
-
-usage:
+const HELP = `usage:
   artipod run [-it] [REF|POD] [flags]   boot a pod: empty, resumed from a kept POD id,
                                         or materialized from an image/volume REF
   artipod pods [--pods <path>]          list kept pods, newest first (docker ps -a for pods)
@@ -553,15 +551,36 @@ function bannerNote(args: RunArgs, loc: PodLocation): string {
   return `kept at ${tildify(loc.dir!)} once you write (untouched pods are removed) — resume: artipod run -it ${basename(loc.dir!).slice(0, 8)}`;
 }
 
+/** "artipod <version> (<commit>, <commit date>)" — buildinfo.json is baked by
+ * postbuild; the version auto-bumps from git tags (`0.3.1+5` = 5 commits past
+ * tag 0.3.1). Git-less or plain-tsc builds fall back to the npm version. */
+async function versionLine(): Promise<string> {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+  let version = pkg.version;
+  let build = '';
+  try {
+    const bi = JSON.parse(await readFile(new URL('./buildinfo.json', import.meta.url), 'utf8')) as {
+      version?: string | null;
+      commit?: string | null;
+      date?: string | null;
+    };
+    if (bi.version) version = bi.version;
+    const parts = [bi.commit, bi.date?.slice(0, 10)].filter(Boolean);
+    if (parts.length > 0) build = ` (${parts.join(', ')})`;
+  } catch {
+    // no buildinfo baked — version only
+  }
+  return `artipod ${version}${build}`;
+}
+
 async function main(): Promise<void> {
   const parsed = parseArgs(argv.slice(2));
   if ('help' in parsed) {
-    stdout.write(HELP);
+    stdout.write(`${await versionLine()} — a pod for artifacts\n\n${HELP}`);
     return;
   }
   if ('version' in parsed) {
-    const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
-    stdout.write(`artipod ${pkg.version}\n`);
+    stdout.write(`${await versionLine()}\n`);
     return;
   }
   if ('pods' in parsed) {
