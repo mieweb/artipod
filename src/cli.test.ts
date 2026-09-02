@@ -105,6 +105,20 @@ describe('artipod CLI', () => {
     expect(r.stdout).toContain('no pods yet');
   });
 
+  it('create-on-write: an untouched fresh pod is not kept, a written one is', async () => {
+    const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
+    try {
+      const readOnly = await run(['run', '-c', 'pwd'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(readOnly.code).toBe(0);
+      expect(await readdir(podsRoot)).toHaveLength(0);
+      const written = await run(['run', '-c', 'echo data > f.txt'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(written.code).toBe(0);
+      expect(await readdir(podsRoot)).toHaveLength(1);
+    } finally {
+      await rm(podsRoot, { recursive: true, force: true });
+    }
+  });
+
   it('rm deletes a kept pod by prefix; prune -f wipes the root (but never without -f when piped)', async () => {
     const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
     try {

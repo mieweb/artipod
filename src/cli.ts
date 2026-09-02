@@ -53,7 +53,8 @@ flags for run:
                      artipod-bash, so the shell's builtins stay resolvable)
 
 examples:
-  artipod run -it                      # fresh pod, kept under ~/.artipod/pods
+  artipod run -it                      # fresh pod, kept under ~/.artipod/pods (untouched pods
+                                       # are removed again — create-on-write)
   artipod run -it 500edf8b             # resume a kept pod by id prefix (see: artipod pods)
   artipod run -it alpine:3.22          # registry image, cloned into the pod root
   artipod run -it field/notes:1        # a ref you pushed earlier (from --store)
@@ -254,6 +255,31 @@ async function duBytes(path: string): Promise<number> {
   let total = 0;
   for (const name of await readdir(path)) total += await duBytes(join(path, name));
   return total;
+}
+
+/** Fingerprint a tree: dirs contribute existence, files size+mtime. The
+ * top-level 'proc' dir is runtime scaffolding (virtual /proc materializes an
+ * empty real dir on Passthrough) — never user data, so it is ignored. */
+async function dirState(dir: string, rel = '', out = new Map<string, string>()): Promise<Map<string, string>> {
+  for (const e of await readdir(dir, { withFileTypes: true })) {
+    if (rel === '' && e.name === 'proc') continue;
+    const path = join(dir, e.name);
+    const key = `${rel}/${e.name}`;
+    if (e.isDirectory()) {
+      out.set(key, 'dir');
+      await dirState(path, key, out);
+    } else {
+      const st = await lstat(path);
+      out.set(key, `${st.size}:${st.mtimeMs}`);
+    }
+  }
+  return out;
+}
+
+function sameState(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) if (b.get(k) !== v) return false;
+  return true;
 }
 
 function fmtSize(n: number): string {
@@ -523,7 +549,8 @@ async function repl(pod: ZenFsPod, note?: string): Promise<number> {
 function bannerNote(args: RunArgs, loc: PodLocation): string {
   if (!loc.kept) return `ephemeral (--rm): nothing survives exit${loc.dir ? ' (temp-dir backed)' : ''}`;
   if (args.dir) return `kept at ${tildify(loc.dir!)}`;
-  return `kept at ${tildify(loc.dir!)} — resume: artipod run -it ${basename(loc.dir!).slice(0, 8)} · list: artipod pods`;
+  if (loc.resumed) return `kept at ${tildify(loc.dir!)} — resume: artipod run -it ${basename(loc.dir!).slice(0, 8)} · list: artipod pods`;
+  return `kept at ${tildify(loc.dir!)} once you write (untouched pods are removed) — resume: artipod run -it ${basename(loc.dir!).slice(0, 8)}`;
 }
 
 async function main(): Promise<void> {
@@ -559,10 +586,17 @@ async function main(): Promise<void> {
   if (loc.resumed) parsed.ref = undefined;
   const pod = await bootPod(parsed, loc.dir);
   if (loc.kept) await touchSuperblock(pod);
+  // Create-on-write: fingerprint a fresh kept pod after boot; if the run
+  // mutates nothing (REF materialization counts), the dir is removed at exit.
+  const baseline = loc.kept && !loc.resumed && !parsed.dir && loc.dir ? await dirState(loc.dir) : null;
   if (parsed.ref) await materializeRef(pod, parsed);
 
   const done = async (code: number): Promise<never> => {
     if (loc.cleanup && loc.dir) await rm(loc.dir, { recursive: true, force: true });
+    if (baseline && loc.dir && sameState(baseline, await dirState(loc.dir))) {
+      await rm(loc.dir, { recursive: true, force: true });
+      if (parsed.interactive) stdout.write(`pod ${basename(loc.dir)} untouched — not kept\n`);
+    }
     exit(code);
   };
 
