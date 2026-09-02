@@ -48,4 +48,4 @@ Source-verified: browser custom commands receive `ctx.stdin` as a fully-material
 
 ## Human shell niceties ✅
 
-Tab completion (`sandbox.complete()` → common-prefix + candidate list), history, Ctrl+C, `notes` (semantics & limitations help), table-rendered command output. Known gaps, by upstream scope: no TTY (`read -p`, `less`, `vim`), `&` parses but there is no job control, no `ls --color`.
+Tab completion (`sandbox.complete()` → common-prefix + candidate list), history, Ctrl+C, `notes` (semantics & limitations help), table-rendered command output. `less`/`more` are seeded as aliases for `cat` (no TTY, so they print rather than page). Known gaps, by upstream scope: no TTY (`read -p`, `vim`), `&` parses but there is no job control, no `ls --color`.

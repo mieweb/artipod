@@ -89,7 +89,14 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
   const bash = new Bash({
     fs: adapter,
     cwd: initialCwd,
-    env: { HOME: initialCwd, USER: 'user', TERM: 'xterm-256color' },
+    env: {
+      HOME: initialCwd,
+      USER: 'user',
+      TERM: 'xterm-256color',
+      // no TTY — pagers degrade to cat; ordinary aliases, so unalias/redefine work
+      BASH_ALIAS_less: 'cat',
+      BASH_ALIAS_more: 'cat',
+    },
     executionLimits: opts.executionLimits,
     executionLimitProfile: opts.executionLimitProfile,
     customCommands: [

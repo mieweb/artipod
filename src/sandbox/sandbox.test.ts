@@ -74,6 +74,25 @@ describe('session state reconstruction across exec calls', () => {
     expect((await sandbox.exec('ll')).stdout.trim()).toBe('aliased');
   });
 
+  it('seeds less and more as cat aliases (no TTY: print, not page)', async () => {
+    await zfs.promises.writeFile('/repo/f.txt', 'one\ntwo\n');
+    expect((await sandbox.exec('less f.txt')).stdout).toBe('one\ntwo\n');
+    expect((await sandbox.exec('more f.txt')).stdout).toBe('one\ntwo\n');
+    expect((await sandbox.exec("printf 'piped\\n' | less")).stdout).toBe('piped\n');
+    expect(sandbox.getEnv()).toHaveProperty('BASH_ALIAS_less');
+    expect(sandbox.getEnv()).toHaveProperty('BASH_ALIAS_more');
+  });
+
+  it('lets the user unalias or redefine the seeded pagers', async () => {
+    await sandbox.exec('unalias less');
+    expect(sandbox.getEnv()).not.toHaveProperty('BASH_ALIAS_less');
+    expect((await sandbox.exec('less nope.txt')).exitCode).not.toBe(0);
+
+    await sandbox.exec("alias more='head -n 1'");
+    await zfs.promises.writeFile('/repo/g.txt', 'first\nsecond\n');
+    expect((await sandbox.exec('more g.txt')).stdout).toBe('first\n');
+  });
+
   it('does not absorb state from transient execs (completion helpers)', async () => {
     await zfs.promises.mkdir('/repo/tmp2');
     await sandbox.exec('cd tmp2', { transient: true });

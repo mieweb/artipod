@@ -16,9 +16,10 @@ Session semantics — each line runs in a fresh shell; the host carries state:
     one line, or in a script file you run with 'bash file.sh')
   * shopt/set -o changes do not persist across lines
 
-Interactive limits (no TTY): read -p/-s prompts, pagers (less) and editors
-(vim) do not work — use 'edit <file>' to open Monaco. gzip/zcat need
-node:zlib and are unavailable in the browser; plain 'tar' works.
+Interactive limits (no TTY): read -p/-s prompts and editors (vim) do not
+work — use 'edit <file>' to open Monaco. less and more are aliases for cat
+(they print the whole file, no paging). gzip/zcat need node:zlib and are
+unavailable in the browser; plain 'tar' works.
 
 Extras:
   edit <file>      open the Monaco editor
