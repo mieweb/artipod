@@ -54,6 +54,28 @@ function recordWorkspace(id: string, kind: 'pod' | 'blank'): void {
   localStorage.setItem(REGISTRY_KEY, JSON.stringify([{ id, kind, lastOpened: Date.now() }, ...rest].slice(0, 50)));
 }
 
+function dropFromRegistry(ids: string[]): void {
+  if (ids.length === 0) return;
+  localStorage.setItem(REGISTRY_KEY, JSON.stringify(readRegistry().filter((e) => !ids.includes(e.id))));
+}
+
+const wsLockName = (id: string): string => `artipod-ws-${id}`;
+
+/** Ids whose workspace tab is still alive (it holds a Web Lock for its lifetime). */
+async function liveWorkspaceIds(): Promise<Set<string>> {
+  try {
+    const { held } = await navigator.locks.query();
+    return new Set(
+      (held ?? [])
+        .map((l) => l.name ?? '')
+        .filter((n) => n.startsWith('artipod-ws-'))
+        .map((n) => n.slice('artipod-ws-'.length)),
+    );
+  } catch {
+    return new Set(); // no Web Locks — skip sweeping rather than risk a live tab
+  }
+}
+
 export default function Page() {
   // undefined = parsing; null = catalog; Route = workspace
   const [route, setRoute] = useState<Route | null | undefined>(undefined);
@@ -88,17 +110,33 @@ function Catalog() {
     })();
     // "On this machine" = the filesystem's /work dirs (source of truth),
     // enriched with the localStorage registry (lastOpened, opened pod refs).
+    // Create-on-write (same rule as the CLI's kept pods): an EMPTY blank
+    // whose tab is gone was never used — sweep it instead of listing it.
     (async () => {
       const registry = readRegistry();
-      let onDisk: string[] = [];
+      const onDisk: string[] = [];
+      const swept: string[] = [];
       try {
         await initFileSystem();
         const { fs } = await import('@/lib/filesystem');
-        onDisk = (await fs.promises.readdir('/work')) as string[];
+        const dirs = (await fs.promises.readdir('/work').catch(() => [])) as string[];
+        const live = await liveWorkspaceIds();
+        for (const id of dirs) {
+          const entries = (await fs.promises.readdir(`/work/${id}`).catch(() => null)) as string[] | null;
+          if (entries && entries.length === 0 && !live.has(id)) {
+            await fs.promises.rm(`/work/${id}`, { recursive: true }).catch(() => {});
+            swept.push(id);
+          } else {
+            onDisk.push(id);
+          }
+        }
+        dropFromRegistry(swept);
       } catch {
         // no /work yet (or init failed) — registry alone
       }
-      const byId = new Map<string, LocalEntry>(registry.map((e) => [e.id, e]));
+      const byId = new Map<string, LocalEntry>(
+        registry.filter((e) => !swept.includes(e.id) && (e.kind === 'pod' || onDisk.includes(e.id))).map((e) => [e.id, e]),
+      );
       for (const id of onDisk) {
         if (!byId.has(id)) byId.set(id, { id, kind: 'blank', lastOpened: 0 });
       }
@@ -204,6 +242,12 @@ function Workspace({ route }: { route: Route }) {
 
   useEffect(() => {
     recordWorkspace(route.id, route.isRef ? 'pod' : 'blank');
+    // Hold a lifetime lock so the catalog's sweeper knows this tab is alive.
+    try {
+      void navigator.locks.request(wsLockName(route.id), { mode: 'shared' }, () => new Promise(() => {}));
+    } catch {
+      // no Web Locks — the sweeper is conservative without it
+    }
     let cancelled = false;
     (async () => {
       const info = await initFileSystem();
