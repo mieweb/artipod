@@ -11,6 +11,7 @@ import FileTree from '@/components/FileTree';
 import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
 import EncryptionBadge from '@/components/EncryptionBadge';
+import SyncStatus from '@/components/SyncStatus';
 import { installKeyBroker, getBrokerKey, getBrokerLease, getBrokerState, requireBrokerKey, brokerLogin, onBrokerChange } from '@/lib/keys';
 import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon, UploadCloud } from 'lucide-react';
 
@@ -1459,8 +1460,9 @@ function Workspace({ route }: { route: Route }) {
             <span className="ml-1.5 rounded border border-gray-600 px-1 text-[10px] uppercase text-gray-400">{route.mode}</span>
           )}
         </span>
-        <span className="hidden sm:inline-flex shrink-0 px-1">
+        <span className="hidden sm:inline-flex shrink-0 items-center gap-1.5 px-1">
           <EncryptionBadge principal={actorId} />
+          <SyncStatus events={events} active={route.isRef && route.mode === 'rw'} />
         </span>
         {tab('tree', <FolderTree size={16} />, 'Files')}
         {tab('editor', <FileCode size={16} />, `Editor${editingFile ? ` (${editingFile.split('/').pop()})` : ''}`, !editingFile)}

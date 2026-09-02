@@ -26,6 +26,10 @@ export interface BrokerState {
   principal?: string;
   /** epoch ms */
   expiresAt?: number;
+  /** A re-key (lease renewal) is in flight right now. */
+  renewing?: boolean;
+  /** epoch ms of the last successful key issue/renewal. */
+  lastRenewedAt?: number;
 }
 
 const LEASE_HEADER = 'x-artipod-lease';
@@ -124,6 +128,8 @@ async function deviceKeyPair(): Promise<{ privateKey: CryptoKey; publicKeyB64: s
 export async function brokerLogin(principal: string): Promise<boolean> {
   const meta = await probe();
   if (!meta) return false;
+  state = { ...state, meta, renewing: true };
+  notify();
   try {
     const device = await deviceKeyPair();
     const res = await rawFetch('/api/keys/login', {
@@ -138,16 +144,22 @@ export async function brokerLogin(principal: string): Promise<boolean> {
     currentLease = lease;
     podKeys = cryptoKeys;
     leaseB64 = btoa(JSON.stringify(lease));
-    state = { status: 'leased', meta, principal: lease.principal, expiresAt: Date.parse(lease.expiresAt) };
+    state = {
+      status: 'leased',
+      meta,
+      principal: lease.principal,
+      expiresAt: Date.parse(lease.expiresAt),
+      lastRenewedAt: Date.now(),
+    };
     armRenewal(principal);
     notify();
     return true;
   } catch {
-    // token-gated broker (or network): the badge shows locked; retry via the badge
+    // token-gated broker (or offline): the badge shows locked; retry via the badge
     leaseB64 = null;
     currentLease = null;
     podKeys = {};
-    state = { status: 'locked', meta };
+    state = { status: 'locked', meta, lastRenewedAt: state.lastRenewedAt };
     notify();
     return false;
   }
