@@ -1,0 +1,77 @@
+# OCI distribution-spec conformance against `artipod serve --only registry`
+# (serve plan S4). sha512 digest-algorithm variants are documented-excluded:
+# the store's Digest type is sha256-scoped and the spec says SHOULD, not
+# MUST — the gate fails only on non-sha512 failures.
+name: registry-conformance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/server/**'
+      - 'src/oci/**'
+      - 'src/manager/**'
+      - '.github/workflows/conformance.yml'
+  pull_request:
+    paths:
+      - 'src/server/**'
+      - 'src/oci/**'
+      - 'src/manager/**'
+      - '.github/workflows/conformance.yml'
+  workflow_dispatch:
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: npm ci
+      - run: npm run build
+      - name: Start artipod serve (registry surface)
+        run: |
+          STORE=$(mktemp -d)
+          nohup node dist/cli.js serve --port 18784 --store "$STORE" --only registry > serve.log 2>&1 &
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18784/v2/ || true)
+            [ "$code" = "200" ] && break
+            sleep 0.5
+          done
+          [ "$code" = "200" ] || { cat serve.log; exit 1; }
+      - name: Run distribution-spec conformance
+        run: |
+          git clone --depth 1 https://github.com/opencontainers/distribution-spec /tmp/dist-spec
+          cd /tmp/dist-spec/conformance
+          OCI_ROOT_URL=http://127.0.0.1:18784 \
+          OCI_NAMESPACE=conformance/test \
+          OCI_CROSSMOUNT_NAMESPACE=conformance/other \
+          OCI_TEST_PULL=1 OCI_TEST_PUSH=1 \
+          OCI_TEST_CONTENT_DISCOVERY=1 OCI_TEST_CONTENT_MANAGEMENT=0 \
+          OCI_HIDE_SKIPPED_WORKFLOWS=1 \
+          go test . || true
+      - name: Fail on non-sha512 failures
+        run: |
+          python3 - <<'EOF'
+          import xml.etree.ElementTree as ET, sys
+          from collections import Counter
+          t = ET.parse('/tmp/dist-spec/conformance/results/junit.xml').getroot()
+          counts = Counter(x.get('status') for x in t.iter('testcase'))
+          print(dict(counts))
+          bad = sorted({x.get('name') for x in t.iter('testcase')
+                        if x.get('status') == 'failure' and 'sha512' not in (x.get('name') or '')})
+          for n in bad:
+              print('FAIL:', n)
+          sys.exit(1 if bad else 0)
+          EOF
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report
+          path: /tmp/dist-spec/conformance/results/

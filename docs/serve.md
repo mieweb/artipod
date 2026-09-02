@@ -13,11 +13,19 @@ That prints one URL. The server hosts:
 - a **git smart-HTTP proxy** at `/api/git/<host>/…`,
 - **exec sessions** at `/api/exec` (opt-out with `--no-exec`),
 - a landing page at `/` (the full sync-demo UI arrives in serve plan S2),
-- the **OCI Distribution API** at `/v2/` (pull works now — `docker pull localhost:2784/my-notes:latest`; push arrives S4).
+- the **OCI Distribution API** at `/v2/` — pull *and* push: `docker pull`,
+  `docker push`, upload sessions (chunked + monolithic), cross-repo mount,
+  the referrers API (in-memory index), tags/list + `_catalog`.
 
 > dockerd treats `127.0.0.1:<port>` as implicitly insecure; pulling from any
 > other HTTP host needs that `host:port` in the daemon's
 > `insecure-registries`. TLS is a reverse-proxy concern (see plan §5).
+>
+> Conformance: the official distribution-spec suite runs in CI (pull, push,
+> content discovery) and gates on every non-sha512 test. sha512 digests are
+> **not supported** (the store is sha256-addressed; the spec says SHOULD) —
+> docker/crane/skopeo all push sha256. Content management (deletes) is not
+> implemented.
 
 ## Quickstart
 

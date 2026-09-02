@@ -31,7 +31,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): serve pha
 | S1 — `--publish` folder delight + auto-token + landing | main | **done** (2026-09-02) | |
 | S2 — ship the sync demo UI (static export → OCI artifact, pulled on first serve) | `serve-s2-ui` | todo | |
 | S3 — OCI distribution read (`/v2/` pull) | main | **done** (2026-09-02) | |
-| S4 — OCI distribution write (push + conformance) | `serve-s4-dist-write` | todo | |
+| S4 — OCI distribution write (push + conformance) | main | **done** (2026-09-02) | |
 | S5 — static token auth across all surfaces | `serve-s5-auth` | todo | |
 | S5.5 — key leases + encrypted publish (`/api/keys`) | `serve-s5.5-keys` | todo | |
 | S6 — pull-through cache + `artipod replicate` | `serve-s6-replicate` | todo | |
@@ -249,13 +249,17 @@ Worklog:
 
 ### S4 — distribution write (push + conformance)
 
-- [ ] Upload sessions (POST/PATCH/PUT, temp-file accumulation, TTL eviction, monolithic path); manifest PUT with referenced-blob existence check; V8 overwrite semantics
-- [ ] Cross-repo mount = trivial 201 (same store) — box checked only if conformance wants it
-- [ ] Run the official `opencontainers/distribution-spec` conformance suite (pull + push workflows) in CI against `serve --only registry`; green or documented-excluded per test
-- [ ] `docker push` runbook verified manually; paste transcript
-- [ ] **Done when**: conformance green + `docker push` → `docker pull` round-trip → the pushed image also visible via native `GET /api/pods/refs`
+- [x] Upload sessions (POST/PATCH/PUT, temp-file accumulation, TTL eviction, monolithic path); manifest PUT with referenced-blob existence check; V8 overwrite semantics
+- [x] Cross-repo mount = trivial 201 (same store) — box checked only if conformance wants it
+- [x] Run the official `opencontainers/distribution-spec` conformance suite (pull + push workflows) in CI against `serve --only registry`; green or documented-excluded per test
+- [x] `docker push` runbook verified manually; paste transcript
+- [x] **Done when**: conformance green + `docker push` → `docker pull` round-trip → the pushed image also visible via native `GET /api/pods/refs`
 
 Worklog:
+
+- 2026-09-02: S4 complete. Upload sessions: in-memory map + temp-file accumulation (mkdtemp `artipod-uploads-`), TTL evicted (1h default), monolithic POST?digest= path, cross-repo mount = free 201 (one store). Manifest PUT: JSON-parses, existence-checks config/layers/child manifests — EXCEPT non-distributable/urls layers (foreign blobs) and `subject` (referrers land before/after their subject); V8 overwrite on tag refs via direct `store.putRef`. Conformance drove three extras beyond the plan: `OCI-Subject` response header, an **in-memory referrers API** (`GET /v2/<name>/referrers/<digest>`, artifactType filter + `OCI-Filters-Applied`; restart-lossy like upload sessions — documented), and full blob Range parsing (`A-`, `A-B`, `-N`, 416 + Content-Length on 206). PATCH/PUT chunks with a Content-Range that doesn't continue the offset → 416.
+- Conformance (suite @ 9727462, go1.24.4, macOS): pull+push+content-discovery, content-management off → **450 passed / 81 failed / 168 skipped, ALL 81 failures are sha512 digest variants** — documented-excluded (Digest type is sha256-scoped; spec says SHOULD; docker/crane/skopeo push sha256). `.github/workflows/conformance.yml` runs the suite in CI against `serve --only registry` and fails on any non-sha512 failure (junit-parsed), uploading the report artifact.
+- `docker push` runbook (docker 29.4.0): pull `my-notes:latest` from a --publish serve → retag → **`docker push 127.0.0.1:59514/pushed-back:v1` → "v1: digest: sha256:17f2… size: 720"** ("Layer already exists" — cross-repo dedup) → rmi → `docker pull` back OK → `GET /api/pods/refs` lists both `my-notes:latest` and `pushed-back:v1`. Gate: lint/build/tsc/test → 44 files / 479 tests green.
 
 ### S5 — static token auth everywhere
 
