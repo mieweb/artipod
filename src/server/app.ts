@@ -15,7 +15,7 @@
  */
 
 import type { PodStore } from '../manager/pod-store.js';
-import { json, type AuthHook, type PathHandler } from './common.js';
+import { authorizeAccess, json, type AuthHook, type PathHandler } from './common.js';
 import { createPodStoreHandler, type PodStoreHandlerOptions } from './pod-store-handler.js';
 import { createRegistryRelayHandler } from './registry-relay.js';
 import { createGitProxyHandler } from './git-proxy.js';
@@ -79,6 +79,22 @@ export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
     const url = new URL(req.url);
     const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
     const [first, second, ...rest] = segments;
+    const method = req.method.toUpperCase();
+    // pods//v2/exec gate through their own hooks; the relay, git proxy, and
+    // fallback are gated here so a configured auth covers EVERY surface (V7).
+    // OPTIONS preflights carry no credentials and pass to the CORS layer.
+    if (options.auth && method !== 'OPTIONS') {
+      // pods and /v2 gate through their own hooks; everything else here
+      // (incl. exec — its own auth option is an EXTRA gate when configured)
+      const gatedHere = first !== 'v2' && !(first === 'api' && second === 'pods');
+      if (gatedHere) {
+        const isGit = first === 'api' && second === 'git';
+        // git smart-HTTP POSTs (upload-pack) are reads; everything else keys off the method
+        const need = isGit || method === 'GET' || method === 'HEAD' ? 'ro' : 'rw';
+        const denied = await authorizeAccess(req, options.auth, need);
+        if (denied) return denied;
+      }
+    }
     if (first === 'v2' && dist) return dist(req, [...(second === undefined ? [] : [second]), ...rest]);
     if (first === 'api') {
       if (second === 'pods' && pods) return pods(req, rest);

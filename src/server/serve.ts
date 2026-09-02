@@ -12,8 +12,8 @@ import { spawn } from 'node:child_process';
 import { OciLayoutPodStore } from '../manager/pod-store.js';
 import { PodSessionHost } from '../manager/session-host.js';
 import { nodePodFs } from '../nodePodFs.js';
-import { bearerAuth, json } from './common.js';
-import { createArtipodApp, type ArtipodApp } from './app.js';
+import { bearerAuth, staticTokenAuth } from './common.js';
+import { createArtipodApp } from './app.js';
 import { serveApp } from './node.js';
 import { publishDirectory, materializeRef } from './folder.js';
 import { PublishMap, withinRoots } from './publish-map.js';
@@ -29,6 +29,7 @@ export interface ServeCliOptions {
   /** Host folders published at boot with write-back on push (S1). */
   publish: string[];
   token?: string;
+  readToken?: string;
   open: boolean;
 }
 
@@ -71,18 +72,6 @@ ${refs.length > 0 ? `<h2>refs</h2><ul>${rows}</ul>` : '<p>no refs yet — <code>
   return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
 }
 
-/** Wrap every surface behind a bearer token (V7 — non-localhost auto-token path). */
-function requireToken(app: ArtipodApp, token: string): ArtipodApp {
-  return async (req) => {
-    if (req.headers.get('authorization') === `Bearer ${token}`) return app(req);
-    if (req.method.toUpperCase() === 'OPTIONS') return app(req); // preflights carry no credentials
-    return json(
-      { error: 'unauthorized', hint: 'Authorization: Bearer <token> — the token was printed at serve startup' },
-      401,
-    );
-  };
-}
-
 function openBrowser(url: string): void {
   const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
   const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
@@ -98,13 +87,16 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   const relayHosts = opts.ociAllow.length > 0 ? opts.ociAllow : envList('ARTIPOD_OCI_ALLOWED_HOSTS');
 
   // V7: localhost stays open; a non-localhost bind with no token configured
-  // generates one (Jupyter-style) and requires it on every surface.
+  // generates one (Jupyter-style) and requires it on every surface. S5:
+  // static ro/rw tokens via Bearer or Basic (docker login works).
   let token = opts.token ?? env.ARTIPOD_SERVE_TOKEN;
+  const readToken = opts.readToken ?? env.ARTIPOD_SERVE_READ_TOKEN;
   let tokenGenerated = false;
-  if (!token && !LOCAL_HOSTS.has(opts.host)) {
+  if (!token && !readToken && !LOCAL_HOSTS.has(opts.host)) {
     token = randomBytes(16).toString('hex');
     tokenGenerated = true;
   }
+  const auth = token || readToken ? staticTokenAuth({ rw: () => token, ro: () => readToken }) : undefined;
 
   // --publish (S1): snapshot each folder at boot, remember ref → dir, and
   // write pushed heads back. The dirs themselves are the roots allowlist
@@ -136,6 +128,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   const app = createArtipodApp({
     store,
     surfaces,
+    auth,
     cors: opts.cors,
     relay: { allowedHosts: relayHosts },
     onRefPut,
@@ -148,16 +141,16 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
               execTimeoutMs: 30_000,
               maxFsBytes: 256 * 1024 * 1024,
             }),
-            auth: bearerAuth(() => env.EXEC_API_TOKEN ?? token),
+            // EXEC_API_TOKEN overrides; otherwise exec rides the app auth (rw)
+            ...(env.EXEC_API_TOKEN ? { auth: bearerAuth(() => env.EXEC_API_TOKEN) } : {}),
           }
         : false,
     fallback: surfaces.web
       ? async (req) => landingPage(storeDir, await store.listRefs(), new URL(req.url).origin)
       : undefined,
   });
-  const guarded = token ? requireToken(app, token) : app;
 
-  const { url, close } = await serveApp(guarded, { port: opts.port, host: opts.host });
+  const { url, close } = await serveApp(app, { port: opts.port, host: opts.host });
 
   const refs = await store.listRefs();
   const tildify = (p: string): string => (p.startsWith(homedir()) ? `~${p.slice(homedir().length)}` : p);
@@ -170,9 +163,12 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   );
   for (const line of published) stdout.write(`  publish:  ${line}\n`);
   if (relayHosts.length > 0) stdout.write(`  relay:    ${relayHosts.join(', ')}\n`);
-  if (token) {
-    stdout.write(`  token:    ${tokenGenerated ? `${token} (generated — non-localhost bind)` : 'configured'}\n`);
-    stdout.write(`            every request needs: Authorization: Bearer <token>\n`);
+  if (token || readToken) {
+    if (token) {
+      stdout.write(`  token:    ${tokenGenerated ? `${token} (generated — non-localhost bind)` : 'configured (rw)'}\n`);
+    }
+    if (readToken) stdout.write(`  ro-token: configured (read-only)\n`);
+    stdout.write(`            send as 'Authorization: Bearer <token>' or Basic (docker login: any user, token as password)\n`);
   }
   stdout.write('press Ctrl-C to stop\n');
   if (opts.open) openBrowser(url);

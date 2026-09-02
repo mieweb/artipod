@@ -12,7 +12,17 @@
  * browser bundles must never reach it (pinned by browser-guard.test.ts).
  */
 
-export { bearerAuth, json, type AuthHook, type PathHandler } from './common.js';
+export {
+  bearerAuth,
+  staticTokenAuth,
+  authorize,
+  authorizeAccess,
+  json,
+  type AuthHook,
+  type AuthResult,
+  type Identity,
+  type PathHandler,
+} from './common.js';
 export { createArtipodApp, type ArtipodApp, type ArtipodAppOptions } from './app.js';
 export { serveApp, type RunningServer, type ServeAppOptions } from './node.js';
 export { withCors } from './cors.js';

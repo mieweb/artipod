@@ -93,8 +93,10 @@ flags for serve:
                      env ARTIPOD_STORE)
   --publish <dir>    snapshot a folder into the store at boot (<basename>:latest)
                      and write pushed heads back into it (repeatable)
-  --token <t>        require 'Authorization: Bearer <t>' on every surface
-                     (env ARTIPOD_SERVE_TOKEN)
+  --token <t>        require 'Authorization: Bearer <t>' (or Basic — docker login)
+                     on every surface, read-write (env ARTIPOD_SERVE_TOKEN)
+  --read-token <t>   read-only token: pulls yes, pushes/exec no
+                     (env ARTIPOD_SERVE_READ_TOKEN)
   --only web|registry   narrow the surfaces (default: both)
   --cors <origin>    allow a browser origin (repeatable; default deny)
   --oci-allow <host> allow an upstream registry host for the relay (repeatable;
@@ -227,6 +229,7 @@ function parseArgs(
       else if (a === '--oci-allow') serve.ociAllow.push(rest[++i]);
       else if (a === '--publish') serve.publish.push(rest[++i]);
       else if (a === '--token') serve.token = rest[++i];
+      else if (a === '--read-token') serve.readToken = rest[++i];
       else if (a === '--no-exec') serve.exec = false;
       else if (a === '--open') serve.open = true;
       else {

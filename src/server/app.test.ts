@@ -9,7 +9,7 @@ import type { StoredRef } from '../oci/store.js';
 import type { PodStore } from '../manager/pod-store.js';
 import { createArtipodApp } from './app.js';
 import { withCors } from './cors.js';
-import { json } from './common.js';
+import { json, staticTokenAuth } from './common.js';
 
 class MemoryPodStore implements PodStore {
   private blobs = new Map<string, Uint8Array>();
@@ -143,5 +143,65 @@ describe('withCors', () => {
     const app = createArtipodApp({ store: new MemoryPodStore(), cors: ['http://ui.example'] });
     const res = await app(new Request(`${base}/api/pods/refs`, { headers: { origin: 'http://ui.example' } }));
     expect(res.headers.get('access-control-allow-origin')).toBe('http://ui.example');
+  });
+});
+
+describe('staticTokenAuth matrix (S5)', () => {
+  const auth = staticTokenAuth({ rw: () => 'rw-secret', ro: () => 'ro-secret' });
+  const app = createArtipodApp({
+    store: new MemoryPodStore(),
+    auth,
+    fallback: async () => json({ landing: true }),
+  });
+  const basic = (t: string): string => `Basic ${btoa(`anyuser:${t}`)}`;
+  const req = (path: string, init: RequestInit = {}, token?: string, scheme: 'bearer' | 'basic' = 'bearer') =>
+    app(
+      new Request(`${base}${path}`, {
+        ...init,
+        headers: token ? { authorization: scheme === 'bearer' ? `Bearer ${token}` : basic(token) } : {},
+      }),
+    );
+
+  const digestOf = async (bytes: Uint8Array): Promise<string> => sha256(bytes);
+
+  it('no token → 401 with the Basic challenge on every surface', async () => {
+    for (const [path, init] of [
+      ['/api/pods/refs', {}],
+      ['/v2/', {}],
+      ['/api/exec', { method: 'POST', body: '{}' }],
+      ['/', {}],
+    ] as [string, RequestInit][]) {
+      const res = await req(path, init);
+      expect(res.status, path).toBe(401);
+      expect(res.headers.get('www-authenticate')).toContain('Basic');
+    }
+  });
+
+  it('ro token: reads pass (Bearer and Basic), writes 403', async () => {
+    expect((await req('/api/pods/refs', {}, 'ro-secret')).status).toBe(200);
+    expect((await req('/api/pods/refs', {}, 'ro-secret', 'basic')).status).toBe(200);
+    expect((await req('/v2/', {}, 'ro-secret')).status).toBe(200);
+    expect((await req('/', {}, 'ro-secret')).status).toBe(200);
+    const bytes = new TextEncoder().encode('matrix blob');
+    const digest = await digestOf(bytes);
+    const write = await req(`/api/pods/blobs/${digest}`, { method: 'PUT', body: bytes as BodyInit }, 'ro-secret');
+    expect(write.status).toBe(403);
+    const push = await req('/v2/x/blobs/uploads/', { method: 'POST' }, 'ro-secret');
+    expect(push.status).toBe(403);
+  });
+
+  it('rw token: reads and writes pass (Bearer and Basic — the docker login path)', async () => {
+    const bytes = new TextEncoder().encode('matrix blob rw');
+    const digest = await digestOf(bytes);
+    expect(
+      (await req(`/api/pods/blobs/${digest}`, { method: 'PUT', body: bytes as BodyInit }, 'rw-secret')).status,
+    ).toBe(201);
+    expect((await req('/v2/x/blobs/uploads/', { method: 'POST' }, 'rw-secret', 'basic')).status).toBe(202);
+    expect((await req('/api/pods/refs', {}, 'rw-secret')).status).toBe(200);
+  });
+
+  it('a wrong token is 401 everywhere', async () => {
+    expect((await req('/api/pods/refs', {}, 'nope')).status).toBe(401);
+    expect((await req('/v2/', {}, 'nope', 'basic')).status).toBe(401);
   });
 });

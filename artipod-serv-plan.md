@@ -32,7 +32,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): serve pha
 | S2 — ship the sync demo UI (static export → OCI artifact, pulled on first serve) | `serve-s2-ui` | todo | |
 | S3 — OCI distribution read (`/v2/` pull) | main | **done** (2026-09-02) | |
 | S4 — OCI distribution write (push + conformance) | main | **done** (2026-09-02) | |
-| S5 — static token auth across all surfaces | `serve-s5-auth` | todo | |
+| S5 — static token auth across all surfaces | main | **done** (2026-09-02) | |
 | S5.5 — key leases + encrypted publish (`/api/keys`) | `serve-s5.5-keys` | todo | |
 | S6 — pull-through cache + `artipod replicate` | `serve-s6-replicate` | todo | |
 | S7 — OIDC / RBAC / mirroring / TLS | — | future — documented only (§5) | |
@@ -263,13 +263,16 @@ Worklog:
 
 ### S5 — static token auth everywhere
 
-- [ ] `AuthHook` → `true | false | Identity`; compat for existing boolean hooks; `staticTokenAuth` (Bearer + Basic, ro/rw); `401` + `WWW-Authenticate`
-- [ ] All handlers gate writes on `rw` (pods PUT, `/v2/` push, exec, publish); reads honor `ro`
-- [ ] CLI `--token`/`--read-token` + env; auto-token path switched onto the same code
-- [ ] `docker login localhost:<port>` with the token works (Basic path) — transcript in worklog
-- [ ] **Done when**: matrix test — {no token, ro token, rw token} × {native read, native write, v2 pull, v2 push, exec} behaves per table in `docs/serve.md`
+- [x] `AuthHook` → `true | false | Identity`; compat for existing boolean hooks; `staticTokenAuth` (Bearer + Basic, ro/rw); `401` + `WWW-Authenticate`
+- [x] All handlers gate writes on `rw` (pods PUT, `/v2/` push, exec, publish); reads honor `ro`
+- [x] CLI `--token`/`--read-token` + env; auto-token path switched onto the same code
+- [x] `docker login localhost:<port>` with the token works (Basic path) — transcript in worklog
+- [x] **Done when**: matrix test — {no token, ro token, rw token} × {native read, native write, v2 pull, v2 push, exec} behaves per table in `docs/serve.md`
 
 Worklog:
+
+- 2026-09-02: S5 complete. `common.ts`: `Identity {name, access}`, `AuthResult = boolean | Identity` (boolean hooks stay valid), `staticTokenAuth({rw, ro})` accepting Bearer + Basic(any-user:token), `authorizeAccess(req, auth, need)` → 401+`WWW-Authenticate: Basic realm="artipod"` / 403 for ro-on-write. Gating: pods + /v2 handlers gate internally by method (GET/HEAD=ro else rw; /v2 keeps its `readonly` option as an extra clamp); exec = always rw; relay/git/landing gated centrally in the app router (git POSTs count as reads — upload-pack is a fetch); OPTIONS preflights skip auth. serve.ts: `--token`/`--read-token` + `ARTIPOD_SERVE_TOKEN`/`ARTIPOD_SERVE_READ_TOKEN`, auto-token path now emits an rw staticTokenAuth token; `EXEC_API_TOKEN` remains an exec-specific override. Matrix test in app.test.ts ({none, ro, rw} × {native read/write, v2 pull/push, landing}, Bearer and Basic). Gate: lint/build/tsc/test → 483 green.
+- docker login transcript (docker 29.4.0): serve with `--token s5-rw-secret --read-token s5-ro-secret` → `echo s5-rw-secret | docker login 127.0.0.1:18791 -u artipod --password-stdin` → **Login Succeeded**; `docker pull …/my-notes:latest` OK; curl matrix: no-token refs 401, ro refs 200, ro push 403, rw push 202.
 
 ### S5.5 — key leases + encrypted publish
 

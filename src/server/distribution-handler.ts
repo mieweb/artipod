@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Digest } from '../oci/digest.js';
 import type { PodStore } from '../manager/pod-store.js';
-import { authorize, type AuthHook, type PathHandler } from './common.js';
+import { authorizeAccess, type AuthHook, type PathHandler } from './common.js';
 
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const NAME_RE = /^[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(\/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*$/;
@@ -182,9 +182,9 @@ export function createDistributionHandler(options: DistributionHandlerOptions): 
   };
 
   return async (req, path) => {
-    const denied = await authorize(req, options.auth);
-    if (denied) return denied;
     const method = req.method.toUpperCase();
+    const denied = await authorizeAccess(req, options.auth, method === 'GET' || method === 'HEAD' ? 'ro' : 'rw');
+    if (denied) return denied;
     const url = new URL(req.url);
 
     // GET /v2/ — the ping

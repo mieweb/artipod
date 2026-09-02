@@ -51,12 +51,24 @@ artipod serve --only registry          # registry surface only
 | `--no-exec` | exec on | Disable the exec surface. Exec auth: env `EXEC_API_TOKEN`, falling back to the serve token. |
 | `--open` | — | Open the printed URL in a browser |
 
-## Tokens (V7)
+## Tokens (V7/S5)
 
 Binding to localhost stays open by default. Binding anywhere else with no
 token configured **generates one** (printed at startup, Jupyter-style) and
-requires it on every surface. Static ro/rw tokens and `docker login`
-(Basic) support arrive in serve plan S5.
+requires it on every surface. Tokens are accepted as `Bearer <t>` or
+Basic (`docker login`: any username, the token as password).
+
+| surface | no token configured | ro token | rw token |
+|---|---|---|---|
+| native read (`GET /api/pods/…`) | open | 200 | 200 |
+| native write (`PUT /api/pods/…`) | open | 403 | 201 |
+| `/v2` pull | open | 200 | 200 |
+| `/v2` push | open | 403 | 202/201 |
+| exec (`POST /api/exec`) | open¹ | 403 | 200 |
+| relay / git proxy / landing | open | 200 | 200 |
+
+Unknown or missing tokens get `401` + `WWW-Authenticate: Basic
+realm="artipod"`. ¹ exec can carry its own extra gate via `EXEC_API_TOKEN`.
 
 ## Ref-write semantics (V8)
 

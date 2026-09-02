@@ -15,7 +15,7 @@
 import type { Digest } from '../oci/digest.js';
 import type { PodStore } from '../manager/pod-store.js';
 import { isAncestor, mergeHeads, type MergeOptions } from '../manager/merge.js';
-import { authorize, json, type AuthHook, type PathHandler } from './common.js';
+import { authorizeAccess, json, type AuthHook, type PathHandler } from './common.js';
 
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const OCTET_STREAM = 'application/octet-stream';
@@ -39,10 +39,10 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
   const { store, auth, onRefPut } = options;
   const mergeOptions: MergeOptions | null = options.merge === false ? null : typeof options.merge === 'object' ? options.merge : {};
   return async (req, path) => {
-    const denied = await authorize(req, auth);
+    const method = req.method.toUpperCase();
+    const denied = await authorizeAccess(req, auth, method === 'GET' || method === 'HEAD' ? 'ro' : 'rw');
     if (denied) return denied;
     const [kind, digest] = path;
-    const method = req.method.toUpperCase();
 
     if (kind === 'blobs' && digest && DIGEST_RE.test(digest)) {
       if (method === 'HEAD') {

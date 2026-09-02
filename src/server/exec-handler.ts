@@ -7,7 +7,7 @@
 
 import type { PodSessionHost } from '../manager/session-host.js';
 import { SESSION_ID_PATTERN } from '../manager/session-host.js';
-import { authorize, json, type AuthHook } from './common.js';
+import { authorizeAccess, json, type AuthHook } from './common.js';
 
 export const DEFAULT_MAX_COMMAND_LENGTH = 100_000;
 
@@ -54,7 +54,8 @@ export interface ExecSessionHandlerOptions {
 /** POST body: { sessionId, command } → { stdout, stderr, exitCode, cwd }. */
 export function createExecSessionHandler(options: ExecSessionHandlerOptions): (req: Request) => Promise<Response> {
   return async (req) => {
-    const denied = await authorize(req, options.auth);
+    // exec is arbitrary compute — always a write
+    const denied = await authorizeAccess(req, options.auth, 'rw');
     if (denied) return denied;
 
     let payload: { sessionId?: unknown; command?: unknown };
