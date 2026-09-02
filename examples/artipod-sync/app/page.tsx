@@ -245,7 +245,7 @@ export default function Page() {
 
 /** `/` — every artipod in reach: this server's, this machine's, or a new blank one. */
 function Catalog() {
-  const [serverRefs, setServerRefs] = useState<string[] | null>(null);
+  const [serverRefs, setServerRefs] = useState<{ ref: string; manifestDigest?: string }[] | null>(null);
   const [local, setLocal] = useState<LocalEntry[]>([]);
   // refs with actual local changes: a non-empty overlay upper (/.artipod/upper/<ref>)
   const [changedRefs, setChangedRefs] = useState<Set<string>>(new Set());
@@ -307,7 +307,7 @@ function Catalog() {
     (async () => {
       try {
         const res = await fetch('/api/pods/refs');
-        setServerRefs(res.ok ? ((await res.json()) as { ref: string }[]).map((r) => r.ref) : []);
+        setServerRefs(res.ok ? ((await res.json()) as { ref: string; manifestDigest?: string }[]) : []);
       } catch {
         setServerRefs([]);
       }
@@ -394,7 +394,7 @@ function Catalog() {
   const cowForks = local.filter((e) => e.kind === 'pod' && e.mode === 'cow' && changedRefs.has(e.id));
   const localOnly = [
     ...cowForks,
-    ...local.filter((e) => !serverRefs?.includes(e.id) && !cowForks.includes(e)),
+    ...local.filter((e) => !serverRefs?.some((r) => r.ref === e.id) && !cowForks.includes(e)),
   ];
 
   const row = (id: string, badge: React.ReactNode, note: string, mode: OpenMode = 'rw') => (
@@ -470,12 +470,18 @@ function Catalog() {
           </p>
         ) : (
           <ul className="space-y-2 mb-6">
-            {serverRefs.map((ref) => {
+            {serverRefs.map(({ ref, manifestDigest }) => {
               const opened = localById.get(ref);
               const isCowFork = cowForks.some((e) => e.id === ref);
               return row(
                 ref,
                 <>
+                  {manifestDigest && (
+                    // the tag is a mutable pointer — the digest shows WHERE it points, so movement is visible
+                    <span className="font-mono text-gray-500" title={manifestDigest}>
+                      @{manifestDigest.replace(/^sha256:/, '').slice(0, 8)}
+                    </span>
+                  )}
                   {modeLinks(ref)}
                   {!isCowFork && changedRefs.has(ref) ? (
                     <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
