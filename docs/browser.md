@@ -15,7 +15,7 @@ ZenFS is the single filesystem; every consumer (shell, git, tools, editor, tree)
 | **memory** | tests and server sessions |
 
 - **Migration**: settings UI copies `/` → verify (file count + bytes) → flip pref → reload; progress callback.
-- **Multi-tab**: Web Locks single-writer guard (`navigator.locks`); second tab runs read-only — UI honors `isPrimaryTab`, controllers accept `readOnly`.
+- **Multi-tab**: advisory multi-writer — Web Locks coordinate (`isPrimaryTab`, per-workspace locks) and shared UI state is written race-safely, but per-tab ZenFS caches mean tabs don't see each other's live file writes. Full semantics, failure modes, and the coherence roadmap: [multi-tab.md](multi-tab.md).
 - **Quota**: surface `navigator.storage.estimate()`; large OCI blobs prefer OPFS streaming when available 🔮.
 - Model weights (local ONNX agents) live in OPFS `artipod-models/`, a **sibling** of the pod fs — invisible to agents and never inside any pod.
 

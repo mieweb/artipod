@@ -152,6 +152,7 @@ Built for real disconnection profiles: a 24-hour offline clinic visit, a light-m
 | [docs/containers.md](docs/containers.md) | Orientation for Docker/Podman/Kubernetes users: concept map, where each runtime fits, the pod-term collision |
 | [docs/on-disk-layout.md](docs/on-disk-layout.md) | What lands on disk: `~/.artipod`, the per-pod `/.artipod` store, plaintext vs ciphertext |
 | [docs/browser.md](docs/browser.md) | Browser implementation: ZenFS backends, OPFS/IndexedDB, ingest API, devices |
+| [docs/multi-tab.md](docs/multi-tab.md) | Multi-tab concurrency: shared cow uppers, per-tab caches, last-write-wins hazards, Yjs/SharedWorker roadmap |
 | [docs/linux.md](docs/linux.md) | Linux/server implementation: realizers, Docker hardening, stores, deployment |
 | [docs/bash-isolate.md](docs/bash-isolate.md) | The bash isolate in browser and server: semantics, sessions, limits |
 | [docs/encryption.md](docs/encryption.md) | Encryption at rest, keyring, leases, offline grants, delegation |

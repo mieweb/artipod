@@ -6,7 +6,8 @@ Design-and-status documentation for `@artipod/core`. Every doc carries a status 
 |---|---|---|
 | [containers.md](containers.md) | Orientation for Docker/Podman/Kubernetes users: concept map, runtime detection, the pod-term collision | — |
 | [on-disk-layout.md](on-disk-layout.md) | What lands on disk: `~/.artipod`, the per-pod `/.artipod` store, plaintext vs ciphertext | — |
-| [browser.md](browser.md) | ZenFS storage, ingest API, devices, multi-tab | 0–3, 7 |
+| [browser.md](browser.md) | ZenFS storage, ingest API, devices | 0–3, 7 |
+| [multi-tab.md](multi-tab.md) | Two tabs, one storage bucket: shared uppers vs per-tab caches, race-safe UI state, Yjs/SharedWorker roadmap | — |
 | [linux.md](linux.md) | Node/Linux runtime, Docker hardening, stores, deployment | 0–3, 6 |
 | [bash-isolate.md](bash-isolate.md) | just-bash sandbox semantics, sessions, limits, custom commands | 1–3 |
 | [encryption.md](encryption.md) | Ciphertext at rest, keyring, leases, offline grants, delegation | 4, 6.5 |
