@@ -363,8 +363,8 @@ export default function AgentPanel({ getSandbox, events, getLoopOptions }: Agent
       <div ref={scrollRef} className="flex-1 space-y-2 overflow-auto p-3 text-sm" aria-live="polite">
         {items.length === 0 && (
           <p className="text-gray-400">
-            Ask for something like: “clone https://github.com/isomorphic-git/lightning-fs and summarize
-            the README, then count the JS files”. Tool calls appear here and in the terminal.
+            Ask for something like: “summarize the files in this workspace” or “create a README
+            describing what&apos;s here”. Tool calls appear here and in the terminal.
           </p>
         )}
         {items.map((item, i) => (
