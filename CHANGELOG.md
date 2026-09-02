@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-02
+
+### Added
+
+- **Bundled browser UI**: the npm package ships the demo UI in `dist-ui/`, so `npx artipod serve` is batteries-included — no store import step. Resolution order: `--no-ui` → `ARTIPOD_UI_DIR` → store ref `artipod-ui:latest` (deliberate hot-update override) → bundled `dist-ui` → headless landing. `npm run build:ui` regenerates the bundle in a dev checkout.
+- **`artipod serve --help`**: a focused per-verb help page with the full flag list and worked examples (custom port, LAN bind with generated token, publish folders).
+
+### Changed
+
+- **Catalog hides `artipod-ui:*`**: the UI artifact is infrastructure, not user content.
+- **Demo Layers view shows structure, not files**: with one layer per file, a flat list is just a worse file list — the view now renders collapsed bands (writable upper, replaceable draft layers, permanent base) with counts and total sizes, expandable to capped per-file rows.
+
 ## [0.8.1] - 2026-09-02
 
 ### Fixed
