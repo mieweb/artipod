@@ -47,6 +47,7 @@ artipod serve --only registry          # registry surface only
 | `--publish <dir>` | — | Repeatable. Snapshot the folder at boot as `<basename>:latest` (one layer per file) and materialize pushed heads back into it. Published dirs form the write-back roots allowlist (plus env `ARTIPOD_PUBLISH_ROOTS`), re-checked on every materialize. |
 | `--token <t>` | open on localhost (env `ARTIPOD_SERVE_TOKEN`) | Require `Authorization: Bearer <t>` on every surface |
 | `--lock <ref>` / `--unlock <ref>` | — | Repeatable. Tag immutability — see [Locked tags](#locked-tags). Persisted in `<store>/locks.json`. |
+| `--seal-pattern <regex>` | — (env `ARTIPOD_SEAL_PATTERN`) | Tags matching the regex are **create-once**: the first push lands, every later move or delete is 403. See [Locked tags](#locked-tags) and [dossier.md](dossier.md). |
 | `--only web\|registry` | both | Narrow the surfaces |
 | `--cors <origin>` | deny | Repeatable exact-match origin allowlist for `/api/pods`, `/api/oci` (and later `/v2`). The shipped UI is same-origin and needs none of this. |
 | `--oci-allow <host>` | deny | Repeatable upstream allowlist for the registry relay (env `ARTIPOD_OCI_ALLOWED_HOSTS`) |
@@ -114,6 +115,7 @@ freezes its head:
 ```bash
 artipod serve --lock me/play:1          # persisted in <store>/locks.json
 artipod serve --unlock me/play:1        # release
+artipod serve --seal-pattern '^\d{4}-\d{2}-\d{2}'   # date tags are create-once
 ```
 
 Semantics (enforced server-side, regardless of token):
@@ -123,9 +125,17 @@ Semantics (enforced server-side, regardless of token):
 | read / pull (either surface) | unchanged |
 | `PUT /api/pods/refs` head move | `403` |
 | `PUT /v2/…/manifests/<tag>` | `403 DENIED` |
+| `DELETE /v2/…/manifests/<tag>` or `DELETE /api/pods/refs?name=` | `403` — sealed tags cannot vanish |
 | `PUT /v2/…/manifests/<digest>` | allowed — storing bytes moves no tag |
 | open in **ro** or **cow** mode | unchanged — cow forks are local |
 | **rw** / push-back | refused; fork with cow and `publish` under a new ref |
+
+`--seal-pattern` locks by **shape** instead of by list: a matching tag may be
+*created* (the push that seals a milestone lands) but never moved or deleted
+after — while unmatched tags (e.g. `_`-sigil drafts) stay mutable *and
+deletable* (`DELETE` retires them; blobs and history stay). The full
+naming convention this enables — entities, open workstreams, sealed
+milestones — is [dossier.md](dossier.md).
 
 The refs API marks locked entries (`"locked": true`), so UIs can drop the
 rw affordance up front — the shipped demo shows a `locked` badge and offers

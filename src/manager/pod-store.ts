@@ -25,6 +25,8 @@ export interface PodStore {
   getRef(ref: string): Promise<StoredRef | null>;
   putRef(ref: string, manifestDigest: Digest, mediaType: string): Promise<void>;
   listRefs(): Promise<StoredRef[]>;
+  /** Remove a ref (the pointer only — blobs and history stay). False = no such ref. */
+  deleteRef?(ref: string): Promise<boolean>;
 }
 
 /** The pod's own ZenFS-backed store IS a PodStore. */
@@ -144,5 +146,13 @@ export class OciLayoutPodStore implements PodStore {
         mediaType: m.annotations?.[MEDIA_TYPE_ANNOTATION] ?? m.mediaType,
         pulledAt: m.annotations?.[PULLED_AT_ANNOTATION] ?? '',
       }));
+  }
+
+  async deleteRef(ref: string): Promise<boolean> {
+    const index = await this.readIndex();
+    const manifests = index.manifests.filter((m) => m.annotations?.[REF_ANNOTATION] !== ref);
+    if (manifests.length === index.manifests.length) return false;
+    await this.fs.writeFile(`${this.dir}/index.json`, JSON.stringify({ schemaVersion: 2, manifests }, null, 2));
+    return true;
   }
 }

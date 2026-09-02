@@ -37,6 +37,9 @@ class MemoryPodStore implements PodStore {
   async listRefs(): Promise<StoredRef[]> {
     return [...this.refs.values()];
   }
+  async deleteRef(ref: string): Promise<boolean> {
+    return this.refs.delete(ref);
+  }
 }
 
 const base = 'http://serve.test';
@@ -132,6 +135,44 @@ describe('createArtipodApp', () => {
     const refs = (await (await app(new Request(`${base}/api/pods/refs`))).json()) as { ref: string; locked?: boolean }[];
     expect(refs.find((r) => r.ref === 'pins/app:1')?.locked).toBe(true);
     expect(refs.find((r) => r.ref === 'free/app:1')?.locked).toBeUndefined();
+  });
+
+  it('seal semantics: create-once tags and sigil-tag deletes (the dossier pattern)', async () => {
+    const store = new MemoryPodStore();
+    // serve's --seal-pattern closure: date-shaped tags are immutable once they exist
+    const sealRe = /^\d{4}-\d{2}-\d{2}/;
+    const app = createArtipodApp({
+      store,
+      isLocked: async (ref) => sealRe.test(ref.slice(ref.lastIndexOf(':') + 1)) && !!(await store.getRef(ref)),
+    });
+    const manifest = new TextEncoder().encode(JSON.stringify({ schemaVersion: 2, layers: [] }));
+    const manifestDigest = await store.putBlob(manifest);
+    const putRef = (ref: string) =>
+      app(new Request(`${base}/api/pods/refs`, { method: 'PUT', body: JSON.stringify({ ref, manifestDigest }) }));
+
+    // open workstream: mutable and deletable
+    expect((await putRef('patients/123:_2026-09-02')).status).toBe(201);
+    expect((await putRef('patients/123:_2026-09-02')).status).toBe(201);
+
+    // sealing: the creating PUT lands, the second is refused — on both surfaces
+    expect((await putRef('patients/123:2026-09-02')).status).toBe(201);
+    expect((await putRef('patients/123:2026-09-02')).status).toBe(403);
+    const v2Move = await app(
+      new Request(`${base}/v2/patients/123/manifests/2026-09-02`, { method: 'PUT', body: manifest }),
+    );
+    expect(v2Move.status).toBe(403);
+
+    // retiring the sigil tag: /v2 DELETE works for open tags, never for sealed ones
+    expect((await app(new Request(`${base}/v2/patients/123/manifests/_2026-09-02`, { method: 'DELETE' }))).status).toBe(202);
+    expect((await app(new Request(`${base}/v2/patients/123/manifests/_2026-09-02`, { method: 'DELETE' }))).status).toBe(404);
+    expect((await app(new Request(`${base}/v2/patients/123/manifests/2026-09-02`, { method: 'DELETE' }))).status).toBe(403);
+
+    // native DELETE mirrors it
+    expect((await putRef('patients/123:_again')).status).toBe(201);
+    const del = (name: string) =>
+      app(new Request(`${base}/api/pods/refs?name=${encodeURIComponent(name)}`, { method: 'DELETE' }));
+    expect((await del('patients/123:_again')).status).toBe(204);
+    expect((await del('patients/123:2026-09-02')).status).toBe(403);
   });
 });
 

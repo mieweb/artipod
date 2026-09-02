@@ -134,6 +134,14 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
         await onRefPut?.(body.ref, finalDigest);
         return json({ manifestDigest: finalDigest, merged }, 201);
       }
+      if (method === 'DELETE') {
+        const name = new URL(req.url).searchParams.get('name');
+        if (!name) return json({ error: 'DELETE needs ?name=<ref>' }, 400);
+        if (await isLocked?.(name)) return json({ error: `ref '${name}' is locked — sealed refs cannot be deleted` }, 403);
+        if (!store.deleteRef) return json({ error: 'this store cannot delete refs' }, 501);
+        // pointer removal only — blobs and the parents DAG stay reachable by digest
+        return (await store.deleteRef(name)) ? new Response(null, { status: 204 }) : json({ error: 'not found' }, 404);
+      }
     }
 
     return json({ error: 'usage: <base>/blobs/<digest> | <base>/refs[?name=]' }, 400);

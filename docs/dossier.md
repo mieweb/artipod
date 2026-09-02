@@ -1,11 +1,11 @@
 # The dossier pattern — entities, workstreams, milestones
 
-> **Status: design 🔮 on shipped primitives ✅.** Everything here composes from
-> mechanisms that exist today — per-path LWW merge ([sync.md](sync.md)), the
-> parents DAG, publish/publish-as, and the `isLocked` hook behind
-> [locked tags](serve.md#locked-tags). The two small core additions it calls
-> for (seal patterns, unsealed-tag delete) are marked 🔮. Editing rule: when
-> implementation diverges from this doc, fix the doc in the same PR.
+> **Status: shipped ✅ with demo affordances pending 🔮.** Everything here
+> composes from mechanisms that exist today — per-path LWW merge
+> ([sync.md](sync.md)), the parents DAG, publish/publish-as, the `isLocked`
+> hook behind [locked tags](serve.md#locked-tags), `--seal-pattern`, and
+> unsealed-tag delete. Editing rule: when implementation diverges from this
+> doc, fix the doc in the same PR.
 
 Many domains share one shape: a **long-lived entity** accumulates work through
 **concurrent open workstreams** that eventually **seal into immutable
@@ -98,14 +98,17 @@ The same script reads naturally with *case/filing*, *customer/engagement*,
 *ticket/incident* substituted — only `SEAL_PATTERN`, the rolling-tag name
 (`:chart`, `:docket`, `:account`, `:timeline`), and the folder prefix change.
 
-## What core still needs 🔮
+## What core provides
 
-1. **Seal patterns** — `serve --seal-pattern <regex>` (or per-deployment
-   `isLocked` policy as above) alongside today's explicit `--lock` list.
-2. **Unsealed-tag delete** — `DELETE /v2/<name>/manifests/<tag>` and a native
-   ref-remove, permitted **only** for `^_` tags, so closing a workstream can
-   retire its sigil tag. (Blobs stay; the DAG keeps the history.)
-3. Demo affordances — entity rows grouping sealed milestones + open
+1. **Seal patterns ✅** — `artipod serve --seal-pattern '^\d{4}-\d{2}-\d{2}'`
+   (env `ARTIPOD_SEAL_PATTERN`), or any embedder policy via
+   `createArtipodApp({ isLocked })` as above. Composes with the explicit
+   `--lock` list.
+2. **Unsealed-tag delete ✅** — `DELETE /v2/<name>/manifests/<tag>` (202) and
+   `DELETE /api/pods/refs?name=<ref>` (204), refused with 403 for sealed
+   tags, so closing a workstream retires its sigil tag. Pointer removal
+   only: blobs stay, and the DAG keeps the history.
+3. Demo affordances 🔮 — entity rows grouping sealed milestones + open
    workstreams; "new workstream from: last sealed ▾ / pending draft".
 
 Everything else — seeding from any head, publish/publish-as, merge-on-push,

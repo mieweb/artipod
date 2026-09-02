@@ -331,8 +331,21 @@ export function createDistributionHandler(options: DistributionHandlerOptions): 
       );
     }
 
-    // HEAD|GET|PUT /v2/<name>/manifests/<tag|digest>
+    // HEAD|GET|PUT|DELETE /v2/<name>/manifests/<tag|digest>
     if (repo.kind === 'manifests') {
+      if (method === 'DELETE') {
+        if (options.readonly) return ociError(403, 'DENIED', 'push is disabled (read-only)');
+        if (DIGEST_RE.test(repo.arg)) return ociError(400, 'UNSUPPORTED', 'delete by tag — blobs are kept for history');
+        if (!TAG_RE.test(repo.arg)) return ociError(400, 'TAG_INVALID', `invalid tag ${repo.arg}`);
+        const ref = distRef(repo.name, repo.arg);
+        if (await options.isLocked?.(ref)) {
+          return ociError(403, 'DENIED', `tag ${repo.name}:${repo.arg} is sealed — sealed tags cannot be deleted`);
+        }
+        if (!store.deleteRef) return ociError(405, 'UNSUPPORTED', 'this store cannot delete refs');
+        return (await store.deleteRef(ref))
+          ? new Response(null, { status: 202 })
+          : ociError(404, 'MANIFEST_UNKNOWN', `tag ${repo.name}:${repo.arg} not found`);
+      }
       if (method === 'PUT') {
         if (options.readonly) return ociError(403, 'DENIED', 'push is disabled (read-only)');
         const bytes = new Uint8Array(await req.arrayBuffer());

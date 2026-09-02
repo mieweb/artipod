@@ -287,6 +287,17 @@ export class OciStore {
     }
   }
 
+  async deleteRef(ref: string): Promise<boolean> {
+    const file = `${OCI_ROOT}/refs/${refFileName(ref)}`;
+    try {
+      await this.p.stat(file);
+    } catch {
+      return false;
+    }
+    await this.p.rm(file, { force: true });
+    return true;
+  }
+
   async listRefs(): Promise<StoredRef[]> {
     let names: string[];
     try {

@@ -36,6 +36,8 @@ export interface ServeCliOptions {
   /** Refs to lock/unlock at boot (persisted in <store>/locks.json). */
   lock: string[];
   unlock: string[];
+  /** Tag regex: matching tags are create-once (sealed on first push). */
+  sealPattern?: string;
   open: boolean;
   /** false = --no-ui (headless landing). */
   ui: boolean;
@@ -232,6 +234,19 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
 
   const uiInfo = opts.ui && surfaces.web ? await resolveUiDir(store) : null;
   const locks = await loadLocks(storeDir, opts.lock, opts.unlock);
+  // Seal pattern (dossier pattern): a matching tag is create-once — the PUT
+  // that creates it lands, every later move or delete is 403. Grammar as policy.
+  const sealRaw = opts.sealPattern ?? env.ARTIPOD_SEAL_PATTERN;
+  const sealRe = sealRaw ? new RegExp(sealRaw) : null;
+  const isLocked =
+    locks.size > 0 || sealRe
+      ? async (ref: string): Promise<boolean> => {
+          if (locks.has(ref)) return true;
+          if (!sealRe) return false;
+          const tag = ref.slice(ref.lastIndexOf(':') + 1);
+          return sealRe.test(tag) && !!(await store.getRef(ref));
+        }
+      : undefined;
 
   const app = createArtipodApp({
     store,
@@ -240,7 +255,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     cors: opts.cors,
     relay: { allowedHosts: relayHosts },
     onRefPut,
-    isLocked: locks.size > 0 ? (ref) => locks.has(ref) : undefined,
+    isLocked,
     exec:
       opts.exec && surfaces.web
         ? {
@@ -273,6 +288,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   );
   for (const line of published) stdout.write(`  publish:  ${line}\n`);
   if (locks.size > 0) stdout.write(`  locked:   ${[...locks].sort().join(', ')} (tags cannot move — --unlock <ref> to release)\n`);
+  if (sealRe) stdout.write(`  sealed:   tags matching /${sealRaw}/ are create-once (immutable after first push)\n`);
   if (uiInfo) stdout.write(`  ui:       ${uiInfo.source} — ${tildify(uiInfo.dir)}\n`);
   if (relayHosts.length > 0) stdout.write(`  relay:    ${relayHosts.join(', ')}\n`);
   if (token || readToken) {
