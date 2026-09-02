@@ -10,6 +10,8 @@ import Editor from '@/components/Editor';
 import FileTree from '@/components/FileTree';
 import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
+import EncryptionBadge from '@/components/EncryptionBadge';
+import { installKeyBroker } from '@/lib/keys';
 import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon, UploadCloud } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
@@ -265,7 +267,12 @@ export default function Page() {
     const id = params.get('artipod');
     const modeParam = params.get('mode');
     const mode: OpenMode = modeParam === 'cow' || modeParam === 'ro' ? modeParam : 'rw';
-    setRoute(id ? { id, isRef: id.includes(':'), mode, publishIntent: params.get('publish') ?? undefined } : null);
+    void (async () => {
+      // Broker serves (--encrypt) gate blob access behind key leases: probe,
+      // login, and patch /api/pods fetches BEFORE any view starts syncing.
+      await installKeyBroker(actorId).catch(() => {});
+      setRoute(id ? { id, isRef: id.includes(':'), mode, publishIntent: params.get('publish') ?? undefined } : null);
+    })();
   }, []);
 
   if (route === undefined) return <main className="h-[var(--app-height)] bg-black" />;
@@ -547,7 +554,10 @@ function Catalog() {
     <main className="flex h-[var(--app-height)] flex-col bg-black text-white overflow-hidden">
       <div className="flex-1 overflow-auto">
       <div className="mx-auto max-w-lg p-6">
-        <h1 className="text-2xl font-bold mb-1">artipod</h1>
+        <div className="mb-1 flex items-center gap-2">
+          <h1 className="text-2xl font-bold">artipod</h1>
+          <EncryptionBadge principal={actorId} />
+        </div>
         <p className="text-gray-400 text-sm mb-6">
           a pod for artifacts — files that version, sync, and run tools, right here in the browser.
         </p>
@@ -1359,6 +1369,9 @@ function Workspace({ route }: { route: Route }) {
           {route.mode !== 'rw' && (
             <span className="ml-1.5 rounded border border-gray-600 px-1 text-[10px] uppercase text-gray-400">{route.mode}</span>
           )}
+        </span>
+        <span className="hidden sm:inline-flex shrink-0 px-1">
+          <EncryptionBadge principal={actorId} />
         </span>
         {tab('tree', <FolderTree size={16} />, 'Files')}
         {tab('editor', <FileCode size={16} />, `Editor${editingFile ? ` (${editingFile.split('/').pop()})` : ''}`, !editingFile)}
