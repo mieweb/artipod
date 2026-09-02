@@ -1,6 +1,6 @@
 {
   "name": "@artipod/core",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "bin": {
     "artipod": "dist/cli.js"
   },

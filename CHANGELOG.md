@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-09-02
+
+### Fixed
+
+- **Overlay push data loss**: `buildOverlayHead` replaced *all* of an actor's previous overlay layers wholesale — correct only while the upper mirrored every pushed file. A fresh session (or a publish that retired the upper) then silently dropped the missing paths from the ref's head. Pushes now replace only layers the upper actually supersedes (same path, or whited-out); everything lost this way remained recoverable via the `org.artipod.parents` DAG.
+- **Stale basis on boot**: a workspace opened over a published ref only pulled the index when no local state existed, so reopening showed yesterday's tree. It now re-pulls whenever the remote head moved (same rule as the `artipod open` verb).
+- **Empty-overlay guard**: a completely empty overlay (no files, no deletions) never builds a new head — a fresh session's empty upper says nothing and must not strip previous pushes.
+- **`pod.dispose()` unmounts overlays**: a later session's `openOverlay` at the same path was masked by the previous session's stale mount.
+- **Publish layers are permanent**: publish flows pass `permanent` to `pushOverlay`, minting layers without the replaceable-overlay annotation so later pushes cannot strip them.
+
+### Added
+
+- **Ref operations journal**: `artipod serve` appends every ref mutation to `<store>/ref-log.jsonl` — `{ts, op, surface, ref, from, to, merged}` for both the native API and `/v2`. The parents DAG keeps the data recoverable; the journal keeps the story. Embedders: `createArtipodApp({ onRefOp })`.
+- **Demo**: publish UI everywhere (inline panels — native dialogs are suppressed in driven browsers), the "open draft" `_` checkbox with tooltip, forks presented under their pending `_` draft name with a `forked` badge on the origin, the catalog grouped one row per repository with an expander for older tags, recency sort, truthful hydration (☁︎) badges, and mobile-fit layout throughout.
+
 ## [0.8.0] - 2026-09-02
 
 ### Added
