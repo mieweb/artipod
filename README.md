@@ -42,10 +42,11 @@ artipod run -it field/notes:1    # a ref you pushed earlier
 Pods are kept on the real filesystem by default, so `exit` loses nothing — create-on-write: a
 fresh pod that saw no writes is quietly removed again. `--rm` makes the pod ephemeral (RAM only
 — add `--disk` to back it by a deleted-on-exit temp dir when changes may not fit in memory),
-`artipod rm <pod>` / `artipod prune` clean up kept pods, `--dir <path>` keeps a pod at a path of
-your choosing, `--store <path>` (default `~/.artipod/store`) backs `push`/`pull`/`clone` and REF
-lookup, `-c '<cmd>'` runs one line and exits. Inside the shell, `artipod` lists the pod verbs
-(snapshot, commit, push, hydrate, …).
+`artipod rm <pod>` deletes kept pods and `artipod prune` removes the untagged ones (`-a` for
+all; tag inside the shell with `artipod commit --tag <name>:<tag>`), `--dir <path>` keeps a pod
+at a path of your choosing, `--store <path>` (default `~/.artipod/store`) backs
+`push`/`pull`/`clone` and REF lookup, `-c '<cmd>'` runs one line and exits. Inside the shell,
+`artipod` lists the pod verbs (snapshot, commit, push, hydrate, …).
 
 ### Browser pod with a shell (✅ `@artipod/core/sandbox`)
 

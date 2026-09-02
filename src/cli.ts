@@ -20,7 +20,7 @@ import { stdin, stdout, exit, argv, env } from 'node:process';
 import { createZenFsPod, type ZenFsPod } from './realize/zenfs.js';
 import type { PodManifest } from './manifest.js';
 import { OciLayoutPodStore } from './manager/pod-store.js';
-import { newSuperblock, SUPERBLOCK_PATH, type PodSuperblock } from './oci/store.js';
+import { newSuperblock, OCI_ROOT, SUPERBLOCK_PATH, type PodSuperblock } from './oci/store.js';
 import { storeTransport, materializeImage } from './manager/sync.js';
 import { DirectRegistryTransport, parseImageRef, formatImageRef } from './oci/transport.js';
 import { pullImage } from './oci/pull.js';
@@ -31,7 +31,9 @@ const HELP = `usage:
                                         or materialized from an image/volume REF
   artipod pods [--pods <path>]          list kept pods, newest first (docker ps -a for pods)
   artipod rm [--pods <path>] POD...     delete kept pods by id (unique prefix ok)
-  artipod prune [-f] [--pods <path>]    delete ALL kept pods; asks first unless -f
+  artipod prune [-f] [-a] [--pods <path>]  delete untagged kept pods (-a: ALL); asks first
+                                        unless -f — a pod is tagged once you \`artipod
+                                        commit --tag <name>:<tag>\` inside the shell
   artipod --help | --version
 
 flags for run:
@@ -82,7 +84,7 @@ function parseArgs(
   | { version: true }
   | { pods: true; podsRoot: string }
   | { removeIds: string[]; podsRoot: string }
-  | { prune: true; force: boolean; podsRoot: string } {
+  | { prune: true; force: boolean; all: boolean; podsRoot: string } {
   if (args.includes('--help') || args.includes('-h') || args.length === 0) return { help: true };
   if (args.includes('--version')) return { version: true };
   const [verb, ...rest] = args;
@@ -117,15 +119,17 @@ function parseArgs(
   if (verb === 'prune') {
     let podsRoot = defaultPodsRoot;
     let force = false;
+    let all = false;
     for (let i = 0; i < rest.length; i++) {
       if (rest[i] === '--pods') podsRoot = rest[++i];
       else if (rest[i] === '-f' || rest[i] === '--force') force = true;
+      else if (rest[i] === '-a' || rest[i] === '--all') all = true;
       else {
         stdout.write(`artipod prune: unknown argument '${rest[i]}'\n\n${HELP}`);
         exit(2);
       }
     }
-    return { prune: true, force, podsRoot };
+    return { prune: true, force, all, podsRoot };
   }
   if (verb !== 'run') {
     stdout.write(
@@ -309,11 +313,17 @@ async function listPods(root: string): Promise<void> {
     empty();
     return;
   }
-  const rows: { id: string; created: string; used: string; size: number }[] = [];
+  const rows: { id: string; tags: string; created: string; used: string; size: number }[] = [];
   for (const name of names) {
     try {
       const sb = JSON.parse(await readFile(join(root, name, SUPERBLOCK_PATH), 'utf8')) as PodSuperblock;
-      rows.push({ id: name, created: sb.createdAt, used: sb.updatedAt, size: await duBytes(join(root, name)) });
+      rows.push({
+        id: name,
+        tags: (await podTags(join(root, name))).join(',') || '-',
+        created: sb.createdAt,
+        used: sb.updatedAt,
+        size: await duBytes(join(root, name)),
+      });
     } catch {
       // not a pod dir (no readable superblock) — leave it alone
     }
@@ -324,15 +334,15 @@ async function listPods(root: string): Promise<void> {
   }
   rows.sort((a, b) => (a.used < b.used ? 1 : -1));
   const table: string[][] = [
-    ['POD ID', 'CREATED', 'LAST USED', 'SIZE'],
-    ...rows.map((r) => [r.id, ago(r.created), ago(r.used), fmtSize(r.size)]),
+    ['POD ID', 'TAGS', 'CREATED', 'LAST USED', 'SIZE'],
+    ...rows.map((r) => [r.id, r.tags, ago(r.created), ago(r.used), fmtSize(r.size)]),
   ];
   const widths = table[0].map((_, c) => Math.max(...table.map((row) => row[c].length)));
   for (const row of table) {
     stdout.write(`${row.map((cell, c) => cell.padEnd(widths[c] + 2)).join('').trimEnd()}\n`);
   }
   stdout.write(
-    `\n${rows.length} pod${rows.length === 1 ? '' : 's'} under ${tildify(root)} — resume: artipod run -it <POD ID> · delete: artipod rm <POD ID> · wipe: artipod prune\n`,
+    `\n${rows.length} pod${rows.length === 1 ? '' : 's'} under ${tildify(root)} — resume: artipod run -it <POD ID> · delete: artipod rm <POD ID> · prune untagged: artipod prune (-a: all)\n`,
   );
 }
 
@@ -343,6 +353,16 @@ async function isPodDir(dir: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Tags committed inside the pod — decoded filenames of its private ref store. */
+async function podTags(dir: string): Promise<string[]> {
+  try {
+    const names = await readdir(join(dir, OCI_ROOT, 'refs'));
+    return names.filter((n) => n.endsWith('.json')).map((n) => decodeURIComponent(n.slice(0, -5)));
+  } catch {
+    return [];
   }
 }
 
@@ -357,7 +377,7 @@ async function removePods(root: string, ids: string[]): Promise<void> {
   }
 }
 
-async function prunePods(root: string, force: boolean): Promise<void> {
+async function prunePods(root: string, force: boolean, all: boolean): Promise<void> {
   let names: string[] = [];
   try {
     names = (await readdir(root, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
@@ -365,20 +385,30 @@ async function prunePods(root: string, force: boolean): Promise<void> {
     // no pods root yet
   }
   const pods: string[] = [];
-  for (const name of names) if (await isPodDir(join(root, name))) pods.push(name);
+  let spared = 0;
+  for (const name of names) {
+    if (!(await isPodDir(join(root, name)))) continue;
+    if (!all && (await podTags(join(root, name))).length > 0) {
+      spared++;
+      continue;
+    }
+    pods.push(name);
+  }
+  const sparedNote = spared > 0 ? ` · spared ${spared} tagged pod${spared === 1 ? '' : 's'} (-a removes them too)` : '';
   if (pods.length === 0) {
-    stdout.write('nothing to prune\n');
+    stdout.write(`nothing to prune${sparedNote}\n`);
     return;
   }
   if (!force) {
     if (stdin.isTTY !== true) {
-      throw new Error('prune: refusing to delete every kept pod without -f (stdin is not a TTY)');
+      throw new Error('prune: refusing to delete pods without -f (stdin is not a TTY)');
     }
     const { createInterface } = await import('node:readline/promises');
     const rl = createInterface({ input: stdin, output: stdout });
-    const answer = await rl.question(
-      `WARNING! This deletes ALL ${pods.length} kept pod${pods.length === 1 ? '' : 's'} under ${tildify(root)}.\nAre you sure? [y/N] `,
-    );
+    const what = all
+      ? `ALL ${pods.length} kept pod${pods.length === 1 ? '' : 's'}`
+      : `${pods.length} untagged pod${pods.length === 1 ? '' : 's'}`;
+    const answer = await rl.question(`WARNING! This deletes ${what} under ${tildify(root)}.\nAre you sure? [y/N] `);
     rl.close();
     if (!/^y(es)?$/i.test(answer.trim())) {
       stdout.write('aborted\n');
@@ -392,7 +422,7 @@ async function prunePods(root: string, force: boolean): Promise<void> {
     await rm(dir, { recursive: true, force: true });
     stdout.write(`removed ${name}\n`);
   }
-  stdout.write(`total reclaimed: ${fmtSize(reclaimed)}\n`);
+  stdout.write(`total reclaimed: ${fmtSize(reclaimed)}${sparedNote}\n`);
 }
 
 /** Materialize REF into the pod: store-first, registry fallback. Volume refs
@@ -592,7 +622,7 @@ async function main(): Promise<void> {
     return;
   }
   if ('prune' in parsed) {
-    await prunePods(resolve(parsed.podsRoot), parsed.force);
+    await prunePods(resolve(parsed.podsRoot), parsed.force, parsed.all);
     return;
   }
 
@@ -615,6 +645,15 @@ async function main(): Promise<void> {
     if (baseline && loc.dir && sameState(baseline, await dirState(loc.dir))) {
       await rm(loc.dir, { recursive: true, force: true });
       if (parsed.interactive) stdout.write(`pod ${basename(loc.dir)} untouched — not kept\n`);
+    } else if (loc.kept && loc.dir && parsed.interactive) {
+      const back = parsed.dir
+        ? `artipod run -it --dir ${tildify(loc.dir)}`
+        : `artipod run -it ${basename(loc.dir).slice(0, 8)}`;
+      const tags = parsed.dir ? [] : await podTags(loc.dir);
+      stdout.write(`pod ${basename(loc.dir)} kept${tags.length > 0 ? ` (${tags.join(', ')})` : ''} — get back: ${back}\n`);
+      if (!parsed.dir && tags.length === 0) {
+        stdout.write('untagged — `artipod prune` removes untagged pods; tag inside the shell: artipod commit --tag <name>:<tag>\n');
+      }
     }
     exit(code);
   };

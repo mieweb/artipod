@@ -120,6 +120,29 @@ describe('artipod CLI', () => {
     }
   });
 
+  it('prune spares tagged pods and -a removes them too', async () => {
+    const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
+    try {
+      const tagged = await run(['run', '-c', 'echo t > f.txt && artipod commit --tag keep/me:1'], {
+        env: { ARTIPOD_PODS: podsRoot },
+      });
+      expect(tagged.code).toBe(0);
+      await run(['run', '-c', 'echo u > g.txt'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(await readdir(podsRoot)).toHaveLength(2);
+      const list = await run(['pods'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(list.stdout).toContain('keep/me:1');
+      const pruned = await run(['prune', '-f'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(pruned.code).toBe(0);
+      expect(pruned.stdout).toContain('spared 1 tagged pod');
+      expect(await readdir(podsRoot)).toHaveLength(1);
+      const all = await run(['prune', '-a', '-f'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(all.code).toBe(0);
+      expect(await readdir(podsRoot)).toHaveLength(0);
+    } finally {
+      await rm(podsRoot, { recursive: true, force: true });
+    }
+  });
+
   it('rm deletes a kept pod by prefix; prune -f wipes the root (but never without -f when piped)', async () => {
     const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
     try {
@@ -165,6 +188,7 @@ describe('artipod CLI', () => {
     const r = await run(['run', '-it'], { input: 'mkdir sub\ncd sub\necho inside > f.txt\ncat f.txt\npwd\nexit\n' });
     expect(r.stdout).toContain('inside');
     expect(r.stdout).toContain('/sub');
+    expect(r.stdout).toContain('get back: artipod run -it');
     expect(r.code).toBe(0);
   });
 
