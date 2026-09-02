@@ -606,25 +606,24 @@ function Catalog() {
           <p className="text-sm text-gray-500 mb-6">no local workspaces yet</p>
         ) : (
           <ul className="space-y-2 mb-6">
-            {localOnly.map((e) =>
-              row(
+            {localOnly.map((e) => {
+              // a cow fork IS a pending draft — show it under the _ name it
+              // will publish as, not the pristine tag it diverged from
+              const draftName =
+                e.kind === 'pod' && e.mode === 'cow'
+                  ? nextDraftRef(e.id, new Set((serverRefs ?? []).map((r) => r.ref)))
+                  : null;
+              return row(
                 e.id,
                 <>
                   <button
                     onClick={(ev) => {
                       ev.preventDefault();
                       ev.stopPropagation();
-                      // a fork of a locked ref can't push back — suggest the next free draft tag
-                      const lockedOrigin = e.kind === 'pod' && serverRefs?.find((r) => r.ref === e.id)?.locked;
                       setPub({
                         id: e.id,
                         mode: e.mode ?? 'rw',
-                        value:
-                          e.kind === 'blank'
-                            ? `me/${e.id}:_1`
-                            : lockedOrigin
-                              ? nextDraftRef(e.id, new Set((serverRefs ?? []).map((r) => r.ref)))
-                              : e.id,
+                        value: e.kind === 'blank' ? `me/${e.id}:_1` : (draftName ?? e.id),
                       });
                     }}
                     className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] uppercase text-gray-400 hover:text-white hover:border-gray-400"
@@ -633,15 +632,14 @@ function Catalog() {
                     publish
                   </button>
                   <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">
-                    {e.kind === 'blank' ? 'blank' : e.mode === 'cow' ? 'cow fork' : 'local'}
+                    {e.kind === 'blank' ? 'blank' : e.mode === 'cow' ? 'unpublished fork' : 'local'}
                   </span>
                 </>,
-                e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
+                draftName ? `fork of ${e.id}` : e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
                 e.mode ?? 'rw',
-                // a diverged fork must not wear the pristine tag's name
-                e.kind === 'pod' && e.mode === 'cow' ? `fork of ${e.id}` : e.id,
-              ),
-            )}
+                draftName ?? e.id,
+              );
+            })}
           </ul>
         )}
 
@@ -1183,14 +1181,13 @@ function Workspace({ route }: { route: Route }) {
     setPublishValue(route.isRef ? route.id : `me/${route.id}:_1`);
     setPublishNotice(null);
     setPublishOpen(true);
-    // a fork of a LOCKED ref can never push back — suggest the next free draft tag instead
-    if (route.isRef) {
+    // a fork is a pending draft: suggest its next free _ tag (push back to an
+    // unlocked origin stays one edit away — the ref itself)
+    if (route.isRef && route.mode === 'cow') {
       void (async () => {
         try {
           const refs = (await (await fetch('/api/pods/refs')).json()) as { ref: string; locked?: boolean }[];
-          if (refs.find((r) => r.ref === route.id)?.locked) {
-            setPublishValue(nextDraftRef(route.id, new Set(refs.map((r) => r.ref))));
-          }
+          setPublishValue(nextDraftRef(route.id, new Set(refs.map((r) => r.ref))));
         } catch {
           // offline — keep the plain suggestion
         }
