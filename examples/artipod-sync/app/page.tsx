@@ -645,8 +645,9 @@ function Catalog() {
 
         {/* inline publish editor — the workspace boots its own pod, publish runs there via ?publish= */}
         {pub && (
-          <div className="flex items-center gap-2 mb-6">
-            <span className="text-xs text-gray-400 font-mono shrink-0">publish {pub.id} as</span>
+          <div className="flex flex-wrap items-center gap-2 mb-6">
+            {/* the label takes its own line on phones so the input row fits */}
+            <span className="text-xs text-gray-400 font-mono basis-full sm:basis-auto sm:shrink-0">publish {pub.id} as</span>
             <input
               autoFocus
               value={pub.value}
@@ -657,7 +658,7 @@ function Catalog() {
                   window.location.href = `${workspaceUrl(pub.id, pub.mode)}&publish=${encodeURIComponent(pub.value.trim())}`;
                 }
               }}
-              className="flex-1 px-2 py-1 rounded border border-gray-600 bg-transparent text-sm font-mono text-gray-200"
+              className="flex-1 min-w-0 px-2 py-1 rounded border border-gray-600 bg-transparent text-sm font-mono text-gray-200"
             />
             <label className="flex items-center gap-1.5 text-xs text-gray-300 shrink-0 cursor-pointer" title={OPEN_DRAFT_TIP}>
               <input
