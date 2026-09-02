@@ -48,6 +48,8 @@ export interface DistributionHandlerOptions {
   readonly?: boolean;
   /** Tag immutability: a locked ref rejects tag-moving manifest PUTs with 403 DENIED. */
   isLocked?: (ref: string) => boolean | Promise<boolean>;
+  /** Fires after every ref mutation — the operations-journal hook. */
+  onRefOp?: (op: import('./pod-store-handler.js').RefOperation) => void | Promise<void>;
   /** Upload-session TTL; default 1h. Restart-lossy by design (spec-permitted). */
   uploadTtlMs?: number;
 }
@@ -342,9 +344,10 @@ export function createDistributionHandler(options: DistributionHandlerOptions): 
           return ociError(403, 'DENIED', `tag ${repo.name}:${repo.arg} is sealed — sealed tags cannot be deleted`);
         }
         if (!store.deleteRef) return ociError(405, 'UNSUPPORTED', 'this store cannot delete refs');
-        return (await store.deleteRef(ref))
-          ? new Response(null, { status: 202 })
-          : ociError(404, 'MANIFEST_UNKNOWN', `tag ${repo.name}:${repo.arg} not found`);
+        const current = await store.getRef(ref);
+        if (!(await store.deleteRef(ref))) return ociError(404, 'MANIFEST_UNKNOWN', `tag ${repo.name}:${repo.arg} not found`);
+        await options.onRefOp?.({ op: 'delete', surface: 'v2', ref, from: current?.manifestDigest ?? null, to: null });
+        return new Response(null, { status: 202 });
       }
       if (method === 'PUT') {
         if (options.readonly) return ociError(403, 'DENIED', 'push is disabled (read-only)');
@@ -390,7 +393,9 @@ export function createDistributionHandler(options: DistributionHandlerOptions): 
           }
           const mediaType = req.headers.get('content-type') || DEFAULT_MANIFEST_TYPE;
           // V8: /v2 tag writes are last-write-wins OVERWRITE — registries don't merge.
+          const prev = options.onRefOp ? await store.getRef(distRef(repo.name, repo.arg)) : null;
           await store.putRef(distRef(repo.name, repo.arg), digest, mediaType);
+          await options.onRefOp?.({ op: 'put', surface: 'v2', ref: distRef(repo.name, repo.arg), from: prev?.manifestDigest ?? null, to: digest });
         }
         const headers: Record<string, string> = {
           location: `/v2/${repo.name}/manifests/${digest}`,

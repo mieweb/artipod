@@ -262,6 +262,13 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     relay: { allowedHosts: relayHosts },
     onRefPut,
     isLocked,
+    // The operations journal: every ref move/delete, append-only JSONL beside
+    // the store. The parents DAG keeps the DATA recoverable; this keeps the
+    // STORY — who moved what, when, from where to where.
+    onRefOp: async (op) => {
+      const { appendFile } = await import('node:fs/promises');
+      await appendFile(join(storeDir, 'ref-log.jsonl'), `${JSON.stringify({ ts: new Date().toISOString(), ...op })}\n`).catch(() => {});
+    },
     exec:
       opts.exec && surfaces.web
         ? {

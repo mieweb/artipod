@@ -20,6 +20,20 @@ import { authorizeAccess, json, type AuthHook, type PathHandler } from './common
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const OCTET_STREAM = 'application/octet-stream';
 
+/** One entry in the ref operations journal. */
+export interface RefOperation {
+  op: 'put' | 'delete';
+  /** Which write surface: the native sync API or the OCI registry. */
+  surface: 'api' | 'v2';
+  ref: string;
+  /** Head before the operation (null = the ref was being created). */
+  from: string | null;
+  /** Head after (null = deleted). */
+  to: string | null;
+  /** True when merge-on-push joined diverged heads. */
+  merged?: boolean;
+}
+
 export interface PodStoreHandlerOptions {
   store: PodStore;
   auth?: AuthHook;
@@ -27,6 +41,8 @@ export interface PodStoreHandlerOptions {
   onRefPut?: (ref: string, manifestDigest: Digest) => void | Promise<void>;
   /** Tag immutability: a locked ref rejects every head move with 403 (reads unaffected). */
   isLocked?: (ref: string) => boolean | Promise<boolean>;
+  /** Fires after every ref mutation — the operations-journal hook (append-only audit). */
+  onRefOp?: (op: RefOperation) => void | Promise<void>;
   /**
    * Merge-on-push (sync plan Phase F): a pushed head that has diverged from
    * the current one joins via mergeHeads instead of overwriting; a stale
@@ -38,7 +54,7 @@ export interface PodStoreHandlerOptions {
 }
 
 export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHandler {
-  const { store, auth, onRefPut, isLocked } = options;
+  const { store, auth, onRefPut, isLocked, onRefOp } = options;
   const mergeOptions: MergeOptions | null = options.merge === false ? null : typeof options.merge === 'object' ? options.merge : {};
   return async (req, path) => {
     const method = req.method.toUpperCase();
@@ -115,7 +131,7 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
         }
         let finalDigest = body.manifestDigest as Digest;
         let merged = false;
-        const current = mergeOptions ? await store.getRef(body.ref) : null;
+        const current = (mergeOptions || onRefOp) ? await store.getRef(body.ref) : null;
         if (current && current.manifestDigest !== finalDigest && mergeOptions) {
           if (await isAncestor(store, finalDigest, current.manifestDigest)) {
             finalDigest = current.manifestDigest; // stale push — keep the newer head
@@ -132,6 +148,7 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
           body.mediaType ?? 'application/vnd.oci.image.manifest.v1+json',
         );
         await onRefPut?.(body.ref, finalDigest);
+        await onRefOp?.({ op: 'put', surface: 'api', ref: body.ref, from: current?.manifestDigest ?? null, to: finalDigest, merged });
         return json({ manifestDigest: finalDigest, merged }, 201);
       }
       if (method === 'DELETE') {
@@ -139,8 +156,11 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
         if (!name) return json({ error: 'DELETE needs ?name=<ref>' }, 400);
         if (await isLocked?.(name)) return json({ error: `ref '${name}' is locked — sealed refs cannot be deleted` }, 403);
         if (!store.deleteRef) return json({ error: 'this store cannot delete refs' }, 501);
+        const current = await store.getRef(name);
         // pointer removal only — blobs and the parents DAG stay reachable by digest
-        return (await store.deleteRef(name)) ? new Response(null, { status: 204 }) : json({ error: 'not found' }, 404);
+        if (!(await store.deleteRef(name))) return json({ error: 'not found' }, 404);
+        await onRefOp?.({ op: 'delete', surface: 'api', ref: name, from: current?.manifestDigest ?? null, to: null });
+        return new Response(null, { status: 204 });
       }
     }
 
