@@ -525,9 +525,12 @@ function Workspace({ route }: { route: Route }) {
       if (cancelled) return;
       setFsInfo(info);
       // cow forks must survive the tab: give the overlay upper its own
-      // IndexedDB store instead of the default in-memory one
+      // IndexedDB store instead of the default in-memory one. Encoded like
+      // the upper mount (/.artipod/upper/<enc>) — a raw '/' in the ref would
+      // splinter the /proc/storage/idb tree into fake directories.
       const { IndexedDB } = await import('@zenfs/dom');
-      const cowUpper = route.mode === 'cow' ? { backend: IndexedDB, storeName: `artipod-upper::${route.id}` } : undefined;
+      const cowUpper =
+        route.mode === 'cow' ? { backend: IndexedDB, storeName: `artipod-upper::${encodeURIComponent(route.id)}` } : undefined;
       // Each blank workspace gets its own fresh root; a basis brings its own.
       const blankRoot = `/work/${route.id}`;
       if (!route.isRef) await fs.promises.mkdir(blankRoot, { recursive: true }).catch(() => {});
