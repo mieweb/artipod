@@ -130,6 +130,41 @@ function Catalog() {
   const [termOpen, setTermOpen] = useState(false);
   const [termHeight, setTermHeight] = useState(300);
 
+  // Rescan "on this machine" — runs at load and after every console command.
+  const refreshLocal = useCallback(async () => {
+    const registry = readRegistry();
+    const onDisk: string[] = [];
+    const swept: string[] = [];
+    try {
+      await initFileSystem();
+      const { fs } = await import('@/lib/filesystem');
+      const dirs = (await fs.promises.readdir('/work').catch(() => [])) as string[];
+      const live = await liveWorkspaceIds();
+      for (const id of dirs) {
+        const entries = (await fs.promises.readdir(`/work/${id}`).catch(() => null)) as string[] | null;
+        if (entries && entries.length === 0 && !live.has(id)) {
+          await fs.promises.rm(`/work/${id}`, { recursive: true }).catch(() => {});
+          swept.push(id);
+        } else {
+          onDisk.push(id);
+        }
+      }
+      dropFromRegistry(swept);
+    } catch {
+      // no /work yet (or init failed) — registry alone
+    }
+    // "local changes" = unpushed writes, tracked by the workspace tab (the
+    // overlay upper is a mount only THAT page can see)
+    setChangedRefs(new Set(registry.filter((e) => e.hasChanges).map((e) => e.id)));
+    const byId = new Map<string, LocalEntry>(
+      registry.filter((e) => !swept.includes(e.id) && (e.kind === 'pod' || onDisk.includes(e.id))).map((e) => [e.id, e]),
+    );
+    for (const id of onDisk) {
+      if (!byId.has(id)) byId.set(id, { id, kind: 'blank', lastOpened: 0 });
+    }
+    setLocal(Array.from(byId.values()).sort((a, b) => b.lastOpened - a.lastOpened));
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -143,49 +178,29 @@ function Catalog() {
     // enriched with the localStorage registry (lastOpened, opened pod refs).
     // Create-on-write (same rule as the CLI's kept pods): an EMPTY blank
     // whose tab is gone was never used — sweep it instead of listing it.
+    let disposeEvents: (() => void) | null = null;
     (async () => {
-      const registry = readRegistry();
-      const onDisk: string[] = [];
-      const swept: string[] = [];
-      try {
-        await initFileSystem();
-        const { fs } = await import('@/lib/filesystem');
-        const dirs = (await fs.promises.readdir('/work').catch(() => [])) as string[];
-        const live = await liveWorkspaceIds();
-        for (const id of dirs) {
-          const entries = (await fs.promises.readdir(`/work/${id}`).catch(() => null)) as string[] | null;
-          if (entries && entries.length === 0 && !live.has(id)) {
-            await fs.promises.rm(`/work/${id}`, { recursive: true }).catch(() => {});
-            swept.push(id);
-          } else {
-            onDisk.push(id);
-          }
-        }
-        dropFromRegistry(swept);
-      } catch {
-        // no /work yet (or init failed) — registry alone
-      }
-      // "local changes" = unpushed writes, tracked by the workspace tab (the
-      // overlay upper is a mount only THAT page can see)
-      setChangedRefs(new Set(registry.filter((e) => e.hasChanges).map((e) => e.id)));
-      const byId = new Map<string, LocalEntry>(
-        registry.filter((e) => !swept.includes(e.id) && (e.kind === 'pod' || onDisk.includes(e.id))).map((e) => [e.id, e]),
-      );
-      for (const id of onDisk) {
-        if (!byId.has(id)) byId.set(id, { id, kind: 'blank', lastOpened: 0 });
-      }
-      setLocal(Array.from(byId.values()).sort((a, b) => b.lastOpened - a.lastOpened));
+      await refreshLocal();
       // the catalog's console is a root shell over the raw fs — /proc, every
-      // /work workspace, and the pod internals are all inspectable here
+      // /work workspace, and the pod internals are all inspectable here;
+      // its commands rescan the lists (rm -rf /work/x updates the screen)
       try {
         const { fs } = await import('@/lib/filesystem');
         const { createSandbox } = await import('@artipod/core/sandbox');
-        setRootSandbox(createSandbox({ zfs: fs, cwd: '/', proc: true }));
+        const { PodEvents: Events } = await import('@artipod/core/host');
+        const consoleEvents = new Events();
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        disposeEvents = consoleEvents.on('fs:changed', () => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => void refreshLocal(), 300);
+        });
+        setRootSandbox(createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents }));
       } catch {
         // fs init failed — no console
       }
     })();
-  }, []);
+    return () => disposeEvents?.();
+  }, [refreshLocal]);
 
   // ctrl+` opens the root console here too
   useEffect(() => {
