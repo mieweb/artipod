@@ -39,6 +39,17 @@ async function tryFile(path: string): Promise<Uint8Array | null> {
   }
 }
 
+/**
+ * HTML must revalidate every load (a new UI build changes index.html);
+ * Next's hashed assets are immutable. Without this, browsers heuristically
+ * cache index.html and keep referencing old chunks until a hard refresh.
+ */
+function cacheControl(pathname: string, type: string): string {
+  if (pathname.includes('/_next/static/')) return 'public, max-age=31536000, immutable';
+  if (type.startsWith('text/html')) return 'no-cache';
+  return 'no-cache';
+}
+
 /** Serve files under `dir`; unknown extensionless paths fall back to index.html (SPA). */
 export function createStaticHandler(dir: string): (req: Request) => Promise<Response> {
   const root = resolve(dir);
@@ -64,7 +75,11 @@ export function createStaticHandler(dir: string): (req: Request) => Promise<Resp
       if (bytes) {
         const type = CONTENT_TYPES[extname(candidate).toLowerCase()] ?? 'application/octet-stream';
         return new Response(req.method === 'HEAD' ? null : (bytes as BodyInit), {
-          headers: { 'content-type': type, 'content-length': String(bytes.length) },
+          headers: {
+            'content-type': type,
+            'content-length': String(bytes.length),
+            'cache-control': cacheControl(pathname, type),
+          },
         });
       }
     }
@@ -73,7 +88,11 @@ export function createStaticHandler(dir: string): (req: Request) => Promise<Resp
       const index = await tryFile(join(root, 'index.html'));
       if (index) {
         return new Response(req.method === 'HEAD' ? null : (index as BodyInit), {
-          headers: { 'content-type': CONTENT_TYPES['.html'], 'content-length': String(index.length) },
+          headers: {
+            'content-type': CONTENT_TYPES['.html'],
+            'content-length': String(index.length),
+            'cache-control': 'no-cache',
+          },
         });
       }
     }
