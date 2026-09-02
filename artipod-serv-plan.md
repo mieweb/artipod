@@ -30,7 +30,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): serve pha
 | S0 — node adapter + `createArtipodApp` + `serve` verb | main | **done** (2026-09-02) | |
 | S1 — `--publish` folder delight + auto-token + landing | main | **done** (2026-09-02) | |
 | S2 — ship the sync demo UI (static export → OCI artifact, pulled on first serve) | `serve-s2-ui` | todo | |
-| S3 — OCI distribution read (`/v2/` pull) | `serve-s3-dist-read` | todo | |
+| S3 — OCI distribution read (`/v2/` pull) | main | **done** (2026-09-02) | |
 | S4 — OCI distribution write (push + conformance) | `serve-s4-dist-write` | todo | |
 | S5 — static token auth across all surfaces | `serve-s5-auth` | todo | |
 | S5.5 — key leases + encrypted publish (`/api/keys`) | `serve-s5.5-keys` | todo | |
@@ -236,13 +236,16 @@ Worklog:
 
 ### S3 — distribution read (`/v2/` pull) *(parallel-ok with S2)*
 
-- [ ] `src/server/distribution-handler.ts`: `/v2/` ping, manifests HEAD/GET (tag + digest, content negotiation, `Docker-Content-Digest`), blobs HEAD/GET (Range), tags/list + `_catalog` (pagination), OCI error envelope
-- [ ] Ref-name mapping helpers + property tests (`<name>:<tag>` round-trip, nested names, digest refs)
-- [ ] Wire into `createArtipodApp` behind the registry surface
-- [ ] Smoke script: `crane pull` and `skopeo copy` from a `serve` instance seeded by `--publish` (document in worklog with versions)
-- [ ] **Done when**: `docker pull localhost:<port>/<name>:<tag>` succeeds against a served publish (daemon needs the port in `insecure-registries` — document in `docs/serve.md`)
+- [x] `src/server/distribution-handler.ts`: `/v2/` ping, manifests HEAD/GET (tag + digest, content negotiation, `Docker-Content-Digest`), blobs HEAD/GET (Range), tags/list + `_catalog` (pagination), OCI error envelope
+- [x] Ref-name mapping helpers + property tests (`<name>:<tag>` round-trip, nested names, digest refs)
+- [x] Wire into `createArtipodApp` behind the registry surface
+- [x] Smoke script: `crane pull` and `skopeo copy` from a `serve` instance seeded by `--publish` (document in worklog with versions)
+- [x] **Done when**: `docker pull localhost:<port>/<name>:<tag>` succeeds against a served publish (daemon needs the port in `insecure-registries` — document in `docs/serve.md`)
 
 Worklog:
+
+- 2026-09-02: S3 complete. `createDistributionHandler` over `PodStore` (+ `distRef`/`parseDistRef`/`splitRepoPath` helpers, exported from /server); wired into `createArtipodApp` under `/v2/*` behind the registry surface, CORS-wrapped. Manifest media type: the manifest's own `mediaType` declaration wins over the ref record (manifest lists pass through). Tag lookup enforces distribution name grammar (lowercase) — which caught a test bug: mkdtemp dirs can contain uppercase, so the publish e2e now publishes a lowercase `my-notes` subdir. Tests: distribution-handler.test.ts (10) + /v2 assertions in the serve publish e2e. Gate: lint/build/tsc/test → 44 files / 470 tests green.
+- Manual smoke (macOS, docker 29.4.0; crane/skopeo not installed locally — conformance suite runs in S4): `node dist/cli.js serve --port 0 --publish <tmp>/my-notes` → `curl /v2/` 200 + `Docker-Distribution-API-Version: registry/2.0`; `curl /v2/my-notes/manifests/latest` 200 + `Docker-Content-Digest`; **`docker pull 127.0.0.1:59128/my-notes:latest` → "Status: Downloaded newer image"** (127.0.0.1 is implicitly insecure for dockerd — other hosts need `insecure-registries`, noted in docs/serve.md).
 
 ### S4 — distribution write (push + conformance)
 

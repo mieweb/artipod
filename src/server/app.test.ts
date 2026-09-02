@@ -78,11 +78,20 @@ describe('createArtipodApp', () => {
 
   it('unknown routes return 404 JSON', async () => {
     const app = createArtipodApp({ store: new MemoryPodStore() });
-    for (const path of ['/', '/api/nope', '/v2/']) {
+    for (const path of ['/', '/api/nope']) {
       const res = await app(new Request(`${base}${path}`));
       expect(res.status).toBe(404);
       expect(((await res.json()) as { error: string }).error).toBe('not found');
     }
+  });
+
+  it('routes /v2/ to the distribution handler (ping), off with --only web', async () => {
+    const app = createArtipodApp({ store: new MemoryPodStore() });
+    const ping = await app(new Request(`${base}/v2/`));
+    expect(ping.status).toBe(200);
+    expect(ping.headers.get('docker-distribution-api-version')).toBe('registry/2.0');
+    const webOnly = createArtipodApp({ store: new MemoryPodStore(), surfaces: { registry: false } });
+    expect((await webOnly(new Request(`${base}/v2/`))).status).toBe(404);
   });
 
   it('--only registry (web:false) turns the web surface off', async () => {

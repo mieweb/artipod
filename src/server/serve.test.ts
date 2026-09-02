@@ -5,7 +5,7 @@
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { sha256 } from '../oci/digest.js';
@@ -98,11 +98,14 @@ describe('artipod serve', () => {
   }, 60_000);
 
   it('--publish: folder → ref at boot, pushed heads materialize back (write-back e2e)', async () => {
-    const served = await mkdtemp(join(tmpdir(), 'apod-serve-pub-'));
+    const scratchRoot = await mkdtemp(join(tmpdir(), 'apod-serve-pub-'));
     const clientDir = await mkdtemp(join(tmpdir(), 'apod-serve-client-'));
-    scratch.push(served, clientDir);
+    scratch.push(scratchRoot, clientDir);
+    // lowercase folder name — it becomes the OCI repo name on /v2
+    const served = join(scratchRoot, 'my-notes');
+    await mkdir(served);
     await writeFile(join(served, 'note.md'), 'original content\n');
-    const ref = `${served.split('/').pop()}:latest`;
+    const ref = 'my-notes:latest';
 
     const { url, child, exited } = await startServe(['--publish', served]);
 
@@ -119,6 +122,15 @@ describe('artipod serve', () => {
 
     // write-back: the pushed head materialized into the served folder
     expect(await readFile(join(served, 'note.md'), 'utf8')).toBe('edited by the client\n');
+
+    // the published ref is also visible through the /v2 distribution surface (S3)
+    const ping = await fetch(`${url}/v2/`);
+    expect(ping.status).toBe(200);
+    const manifest = await fetch(`${url}/v2/${ref.replace(':', '/manifests/')}`);
+    expect(manifest.status).toBe(200);
+    expect(manifest.headers.get('docker-content-digest')).toMatch(/^sha256:/);
+    const tags = await fetch(`${url}/v2/${ref.split(':')[0]}/tags/list`);
+    expect(((await tags.json()) as { tags: string[] }).tags).toContain('latest');
 
     child.kill('SIGTERM');
     await exited;

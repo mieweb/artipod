@@ -20,6 +20,7 @@ import { createPodStoreHandler, type PodStoreHandlerOptions } from './pod-store-
 import { createRegistryRelayHandler } from './registry-relay.js';
 import { createGitProxyHandler } from './git-proxy.js';
 import { createExecSessionHandler, type ExecSessionHandlerOptions } from './exec-handler.js';
+import { createDistributionHandler } from './distribution-handler.js';
 import { withCors } from './cors.js';
 
 export interface ArtipodAppOptions {
@@ -50,7 +51,7 @@ export type ArtipodApp = (req: Request) => Promise<Response>;
 
 export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
   const web = options.surfaces?.web ?? true;
-  // Registry surface flag is honored now; the /v2/ handler itself arrives in S3.
+  const registry = options.surfaces?.registry ?? true;
   const cors = options.cors ?? [];
   const pods: PathHandler | null = web
     ? withCors(
@@ -70,11 +71,15 @@ export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
     ? createGitProxyHandler(options.gitAllowlist ? { allowlist: options.gitAllowlist } : {})
     : null;
   const exec = web && options.exec ? createExecSessionHandler(options.exec) : null;
+  const dist: PathHandler | null = registry
+    ? withCors(createDistributionHandler({ store: options.store, auth: options.auth }), cors)
+    : null;
 
   return async (req) => {
     const url = new URL(req.url);
     const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
     const [first, second, ...rest] = segments;
+    if (first === 'v2' && dist) return dist(req, [...(second === undefined ? [] : [second]), ...rest]);
     if (first === 'api') {
       if (second === 'pods' && pods) return pods(req, rest);
       if (second === 'oci' && relay) return relay(req, rest);

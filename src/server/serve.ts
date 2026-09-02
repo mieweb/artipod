@@ -64,7 +64,7 @@ function landingPage(storeDir: string, refs: { ref: string }[], url: string): Re
 </head><body>
 <h1>artipod serve</h1>
 <p>store: <code>${escapeHtml(storeDir)}</code></p>
-<p>native sync surface: <code>${escapeHtml(url)}/api/pods</code> · registry: <code>${escapeHtml(url)}/v2/</code> (arrives S3)</p>
+<p>native sync surface: <code>${escapeHtml(url)}/api/pods</code> · registry pull: <code>docker pull ${escapeHtml(url.replace(/^https?:\/\//, ''))}/&lt;name&gt;:&lt;tag&gt;</code></p>
 ${refs.length > 0 ? `<h2>refs</h2><ul>${rows}</ul>` : '<p>no refs yet — <code>artipod serve --publish &lt;dir&gt;</code> or push one.</p>'}
 <p>this is the headless landing — the full UI ships in serve plan S2.</p>
 </body></html>`;
@@ -164,7 +164,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   stdout.write(`artipod serve listening at ${url}\n`);
   stdout.write(`  store:    ${tildify(storeDir)} (${refs.length} ref${refs.length === 1 ? '' : 's'})\n`);
   stdout.write(
-    `  surfaces: ${[surfaces.web && 'web (/api)', surfaces.registry && 'registry (/v2 — arrives S3)']
+    `  surfaces: ${[surfaces.web && 'web (/api)', surfaces.registry && 'registry (/v2, pull)']
       .filter(Boolean)
       .join(', ')}\n`,
   );

@@ -13,7 +13,11 @@ That prints one URL. The server hosts:
 - a **git smart-HTTP proxy** at `/api/git/<host>/…`,
 - **exec sessions** at `/api/exec` (opt-out with `--no-exec`),
 - a landing page at `/` (the full sync-demo UI arrives in serve plan S2),
-- the **OCI Distribution API** at `/v2/` (pull arrives S3, push S4).
+- the **OCI Distribution API** at `/v2/` (pull works now — `docker pull localhost:2784/my-notes:latest`; push arrives S4).
+
+> dockerd treats `127.0.0.1:<port>` as implicitly insecure; pulling from any
+> other HTTP host needs that `host:port` in the daemon's
+> `insecure-registries`. TLS is a reverse-proxy concern (see plan §5).
 
 ## Quickstart
 

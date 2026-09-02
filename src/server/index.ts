@@ -17,6 +17,13 @@ export { createArtipodApp, type ArtipodApp, type ArtipodAppOptions } from './app
 export { serveApp, type RunningServer, type ServeAppOptions } from './node.js';
 export { withCors } from './cors.js';
 export { PublishMap, withinRoots } from './publish-map.js';
+export {
+  createDistributionHandler,
+  distRef,
+  parseDistRef,
+  splitRepoPath,
+  type DistributionHandlerOptions,
+} from './distribution-handler.js';
 export { createPodStoreHandler, type PodStoreHandlerOptions } from './pod-store-handler.js';
 export {
   DEFAULT_ALLOWED_HOSTS,
