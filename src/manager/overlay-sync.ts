@@ -18,6 +18,7 @@ import {
   ANNOTATION_ACTOR,
   ANNOTATION_OVERLAY,
   ANNOTATION_PARENTS,
+  ANNOTATION_PATH,
 } from '../oci/file-layer.js';
 import { whiteoutPathFor, type TarWriteEntry } from '../oci/tar.js';
 import type { ImageManifest } from '../oci/pull.js';
@@ -107,19 +108,6 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
   };
   const headDiffIds = headConfig.rootfs?.diff_ids ?? [];
 
-  // Base = the head without OUR previous overlay layers (replaced wholesale).
-  const baseLayers: ImageManifest['layers'] = [];
-  const baseDiffIds: string[] = [];
-  headManifest.layers.forEach((layer, i) => {
-    if (layer.annotations?.[ANNOTATION_OVERLAY] === actor) return;
-    baseLayers.push(layer);
-    baseDiffIds.push(headDiffIds[i]);
-  });
-
-  const layers = [...baseLayers];
-  const diffIds = [...baseDiffIds];
-  let overlayLayers = 0;
-
   const upperFiles = await walkUpper(zfs, upperAt);
   // A COMPLETELY empty overlay says nothing — never let it strip previous
   // pushes (a fresh session's in-memory upper starts empty; deleting
@@ -127,6 +115,30 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
   if (upperFiles.length === 0 && deletions.size === 0) {
     return { changed: false, manifestDigest: head.manifestDigest, overlayLayers: 0 };
   }
+
+  // Replace only OUR overlay layers the upper actually supersedes (same path,
+  // or whited-out). Wholesale replacement assumed the upper still mirrored
+  // every previously pushed file — false after the upper is emptied or a
+  // fresh session begins, and it silently dropped the missing paths.
+  const deleted = [...deletions.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+  const superseded = new Set<string>(upperFiles.map((f) => f.podPath));
+  for (const [path] of deleted) superseded.add(path);
+  const emitWhiteout = deleted.length > 0;
+
+  const baseLayers: ImageManifest['layers'] = [];
+  const baseDiffIds: string[] = [];
+  headManifest.layers.forEach((layer, i) => {
+    if (layer.annotations?.[ANNOTATION_OVERLAY] === actor) {
+      const path = layer.annotations?.[ANNOTATION_PATH];
+      if (path === '.wh' ? emitWhiteout : path && superseded.has(path)) return; // rebuilt below
+    }
+    baseLayers.push(layer);
+    baseDiffIds.push(headDiffIds[i]);
+  });
+
+  const layers = [...baseLayers];
+  const diffIds = [...baseDiffIds];
+  let overlayLayers = 0;
 
   const putLayer = async (built: Awaited<ReturnType<typeof buildFileLayer>>) => {
     if (!(await store.hasBlob(built.layerDigest))) await store.putBlob(built.compressed, built.layerDigest);
@@ -147,7 +159,6 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
     );
   }
 
-  const deleted = [...deletions.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
   if (deleted.length > 0) {
     const entries: TarWriteEntry[] = deleted.map(([path, stamp]) => ({
       path: whiteoutPathFor(path),

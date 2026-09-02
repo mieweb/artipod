@@ -1069,8 +1069,10 @@ function Workspace({ route }: { route: Route }) {
         // permanent: the upper is retired below — replaceable overlay layers
         // would be STRIPPED by the next (even empty) push from this actor
         const result = await pushOverlay({ store, zfs: pod.zfs, ref: target, upperAt, deletions, actor, remote, permanent: true });
-        if (route.isRef) {
-          // the changes live under the new name now — the fork is clean again
+        if (route.isRef && route.mode === 'cow') {
+          // a cow fork migrates: its changes live under the new name now.
+          // NEVER empty an rw upper — it mirrors overlay layers already on
+          // the ref's head, and draining it invites the next push to drop them.
           for (const name of (await fs.promises.readdir(upperAt).catch(() => [])) as string[]) {
             await fs.promises.rm(`${upperAt}/${name}`, { recursive: true }).catch(() => {});
           }

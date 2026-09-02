@@ -175,6 +175,33 @@ describe('overlay write-back', () => {
     pod2.dispose();
   });
 
+  it('a partial upper only replaces its own paths — other pushed files survive (haha/123 bug)', async () => {
+    // Session 1 pushes two files.
+    const pod1 = await openPod(false);
+    const shell1 = pod1.createSandbox();
+    await shell1.exec('echo A > /work/andy && echo D > /work/doug');
+    expect((await pod1.pushBasis())?.pushed).toBe(true);
+    pod1.dispose();
+
+    // Session 2: fresh empty upper (as after publish-as emptied it, or a new
+    // page), user writes ONE new file — the old two must survive the push.
+    const pod2 = await openPod(false);
+    const shell2 = pod2.createSandbox();
+    await shell2.exec('echo J > /work/jen');
+    expect((await pod2.pushBasis())?.pushed).toBe(true);
+    const { manifest } = await headManifest(remote, REF);
+    const paths = manifest.layers.map((l) => l.annotations?.[ANNOTATION_PATH]);
+    expect(paths).toContain('/andy');
+    expect(paths).toContain('/doug');
+    expect(paths).toContain('/jen');
+    // …and editing an EXISTING file still replaces (no duplicate layers)
+    await shell2.exec('echo A2 > /work/andy');
+    await pod2.pushBasis();
+    const { manifest: after } = await headManifest(remote, REF);
+    expect(after.layers.filter((l) => l.annotations?.[ANNOTATION_PATH] === '/andy')).toHaveLength(1);
+    pod2.dispose();
+  });
+
   it('boot-time basis open refreshes a moved remote head (no stale local index)', async () => {
     const pod1 = await openPod(false);
     expect((await pod1.createSandbox().exec('cat /work/docs/a.md')).stdout).toBe('alpha v1\n');
