@@ -39,5 +39,24 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Publish to npm
-        run: npm publish --access public
+      - name: Update npm # trusted publishing (OIDC) needs npm >= 11.5.1
+        run: npm install -g npm@latest
+
+      - name: Publish @artipod/core to npm
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if [ -n "$(npm view "@artipod/core@$V" version 2>/dev/null)" ]; then
+            echo "@artipod/core@$V already on the registry — skipping"
+          else
+            npm publish --access public
+          fi
+
+      - name: Publish artipod (CLI alias) to npm
+        working-directory: packages/artipod
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if [ -n "$(npm view "artipod@$V" version 2>/dev/null)" ]; then
+            echo "artipod@$V already on the registry — skipping"
+          else
+            npm publish --access public
+          fi
