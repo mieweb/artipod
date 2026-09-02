@@ -33,6 +33,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Bundle the browser UI (dist-ui — npx artipod serve is batteries-included)
+        run: |
+          cd examples/artipod-sync && npm ci && cd ../..
+          npm run build:ui
+
       - name: Setup Node.js 24 for publish
         uses: actions/setup-node@v4
         with:

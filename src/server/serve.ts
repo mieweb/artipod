@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, stat } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import process, { env, stdout } from 'node:process';
 import { spawn } from 'node:child_process';
 import { digestHex } from '../oci/digest.js';
@@ -183,6 +184,16 @@ async function resolveUiDirInner(store: OciLayoutPodStore): Promise<{ dir: strin
     // Remote fetch of the pinned artifact (release step publishes
     // UI_REMOTE_REF and bumps UI_DIGEST). Not reachable until a pin exists.
     stdout.write(`note: UI artifact ${UI_REMOTE_REF}@${UI_DIGEST} not in the local store — remote fetch not implemented yet, serving headless\n`);
+  }
+  // Bundled UI: the npm package ships the static build at <pkg>/dist-ui, so
+  // `npx artipod serve` is batteries-included offline. A store ref or
+  // ARTIPOD_UI_DIR (above) always wins — they are deliberate overrides.
+  try {
+    const bundled = fileURLToPath(new URL('../../dist-ui', import.meta.url));
+    await stat(join(bundled, 'index.html'));
+    return { dir: bundled, source: 'bundled (dist-ui)' };
+  } catch {
+    // dev checkout without a built dist-ui — headless landing
   }
   return null;
 }

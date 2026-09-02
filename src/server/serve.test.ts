@@ -89,8 +89,10 @@ describe('artipod serve', () => {
     await exited;
   }, 60_000);
 
-  it('serves the headless landing page at /', async () => {
-    const { url, child, exited } = await startServe();
+  it('serves the headless landing page at / with --no-ui', async () => {
+    // without --no-ui a dev checkout may carry a bundled dist-ui — the landing
+    // is the explicit-headless (and no-UI-resolvable) fallback
+    const { url, child, exited } = await startServe(['--no-ui']);
     const res = await fetch(url);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');

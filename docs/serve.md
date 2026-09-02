@@ -57,15 +57,18 @@ artipod serve --only registry          # registry surface only
 ## The UI (S2, local-first)
 
 `/` serves the sync-demo UI when one resolves; resolution never touches the
-network if you have a local copy:
+network:
 
 1. `--no-ui` → headless landing, no resolution.
 2. `ARTIPOD_UI_DIR=<dir>` → serve that static build directly (dev loop).
 3. The `artipod-ui:latest` ref in the store (`ARTIPOD_UI_REF` overrides) →
    materialized once to `~/.artipod/ui/<digest>/` and served from there.
-4. The digest-pinned remote artifact (`ghcr.io/mieweb/artipod-ui`) — only as
-   a cold-start fallback, and dormant until a release pins a digest.
-5. Nothing found → the headless landing. Never an error.
+4. **The bundled UI**: the npm package ships the static build at
+   `<pkg>/dist-ui`, so `npx artipod serve` shows the full UI out of the box,
+   offline — core and UI are built and versioned together, so they cannot
+   skew. (The release workflow runs `npm run build:ui` before publishing.)
+5. Nothing found (a dev checkout without `dist-ui`) → the headless landing.
+   Never an error.
 
 Build it locally:
 
