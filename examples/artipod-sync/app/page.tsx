@@ -10,7 +10,7 @@ import Editor from '@/components/Editor';
 import FileTree from '@/components/FileTree';
 import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
-import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot } from 'lucide-react';
+import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
 const Terminal = dynamicImport(() => import('@/components/Terminal'), {
@@ -19,7 +19,7 @@ const Terminal = dynamicImport(() => import('@/components/Terminal'), {
 
 export const dynamic = 'force-dynamic';
 
-type ViewMode = 'terminal' | 'tree' | 'editor' | 'settings' | 'agent';
+type ViewMode = 'home' | 'terminal' | 'tree' | 'editor' | 'settings' | 'agent';
 
 /** undefined = start screen pending; null = blank workspace; string = basis ref. */
 type BasisChoice = string | null | undefined;
@@ -28,9 +28,13 @@ export default function Home() {
   const [fsReady, setFsReady] = useState(false);
   const [fsInfo, setFsInfo] = useState<InitResult | null>(null);
   const [editingFile, setEditingFile] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<ViewMode>('terminal');
+  const [activeView, setActiveView] = useState<ViewMode>('home');
   const [availableRefs, setAvailableRefs] = useState<string[] | null>(null);
   const [basisChoice, setBasisChoice] = useState<BasisChoice>(undefined);
+  // Blank workspaces are per-id (/work/<id>) so "Blank workspace" is truly
+  // blank every time; the id rides the route, so the URL reopens the same one.
+  const [blankId, setBlankId] = useState<string | null>(null);
+  const routed = useRef(false);
   const [workspaceRoot, setWorkspaceRoot] = useState('/repo');
   const sandboxRef = useRef<Sandbox | null>(null);
   const podRef = useRef<Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>> | null>(null);
@@ -38,6 +42,31 @@ export default function Home() {
   const eventsRef = useRef<PodEvents | null>(null);
   if (!eventsRef.current) eventsRef.current = new PodEvents();
   const events = eventsRef.current;
+
+  const openPod = (ref: string) => {
+    window.history.replaceState(null, '', `#/pod/${encodeURIComponent(ref)}`);
+    setBasisChoice(ref);
+  };
+  const startBlank = (id = crypto.randomUUID().slice(0, 8)) => {
+    window.history.replaceState(null, '', `#/new/${id}`);
+    setBlankId(id);
+    setBasisChoice(null);
+  };
+
+  // Routes (static export → hash): #/pod/<ref> opens that artipod directly,
+  // #/new/<id> reopens a specific blank workspace.
+  useEffect(() => {
+    const hash = decodeURIComponent(window.location.hash.slice(1));
+    if (hash.startsWith('/pod/')) {
+      routed.current = true;
+      setBasisChoice(hash.slice('/pod/'.length));
+    } else if (hash.startsWith('/new/')) {
+      routed.current = true;
+      const id = hash.slice('/new/'.length) || crypto.randomUUID().slice(0, 8);
+      setBlankId(id);
+      setBasisChoice(null);
+    }
+  }, []);
 
   // The demo's front door: published artipods on this server (sync plan D).
   useEffect(() => {
@@ -48,11 +77,11 @@ export default function Home() {
         const refs = res.ok ? ((await res.json()) as { ref: string }[]).map((r) => r.ref) : [];
         if (cancelled) return;
         setAvailableRefs(refs);
-        if (refs.length === 0) setBasisChoice(null); // nothing published — skip the picker
+        if (refs.length === 0 && !routed.current) startBlank(); // nothing published — skip the picker
       } catch {
         if (!cancelled) {
           setAvailableRefs([]);
-          setBasisChoice(null);
+          if (!routed.current) startBlank();
         }
       }
     })();
@@ -75,6 +104,9 @@ export default function Home() {
       ]);
       if (cancelled) return;
       setFsInfo(info);
+      // Each blank workspace gets its own fresh root; a basis brings its own.
+      const blankRoot = `/work/${blankId ?? 'scratch'}`;
+      if (!basisChoice) await fs.promises.mkdir(blankRoot, { recursive: true }).catch(() => {});
       // PAT prompt for git push/fetch to private repos (token kept off the sandbox fs)
       const { setAuthPrompt } = await import('@/lib/git-auth');
       setAuthPrompt(async (origin) =>
@@ -98,7 +130,7 @@ export default function Home() {
           adopt: fs,
           events,
           // A chosen basis becomes the workspace (cwd follows the overlay).
-          cwd: basisChoice ? undefined : '/repo',
+          cwd: basisChoice ? undefined : blankRoot,
           // browser pulls go through the /api/oci relay (allowlist server-side)
           oci: { transport: new ArtipodRegistryProxyTransport('/api/oci') },
           // push/pull/clone talk to this deployment's manager store
@@ -133,12 +165,13 @@ export default function Home() {
       // demo/debug escape hatch (see docs/console.md's future replacement)
       (window as unknown as { __artipod?: unknown }).__artipod = pod;
       if (pod.basis) setWorkspaceRoot(pod.basis.at);
+      else setWorkspaceRoot(blankRoot);
       setFsReady(true);
     })().catch((e) => console.error('Sandbox init failed:', e));
     return () => {
       cancelled = true;
     };
-  }, [basisChoice]);
+  }, [basisChoice, blankId]);
 
   // iOS Safari: the keyboard shrinks only the *visual* viewport, so mirror its
   // height into --app-height and keep the page pinned to the top.
@@ -174,7 +207,7 @@ export default function Home() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && (e.code === 'Backquote' || e.key === '`')) {
         e.preventDefault();
-        setActiveView((view) => (view === 'terminal' ? 'editor' : 'terminal'));
+        setActiveView((view) => (view === 'terminal' ? 'home' : 'terminal'));
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -185,6 +218,18 @@ export default function Home() {
     <main className="flex h-[var(--app-height)] flex-col bg-black text-white overflow-hidden pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* Navigation Bar */}
       <div className="flex items-center bg-[#2d2d2d] border-b border-gray-700 px-2">
+        <button
+          onClick={() => setActiveView('home')}
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            activeView === 'home'
+              ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500'
+              : 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
+          }`}
+          aria-label="Home"
+        >
+          <HomeIcon size={16} />
+          Home
+        </button>
         <button
           onClick={() => setActiveView('terminal')}
           className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
@@ -273,7 +318,7 @@ export default function Home() {
                 {availableRefs!.map((ref) => (
                   <li key={ref}>
                     <button
-                      onClick={() => setBasisChoice(ref)}
+                      onClick={() => openPod(ref)}
                       className="w-full text-left px-3 py-2 rounded bg-[#333] hover:bg-[#3d3d3d] font-mono text-sm"
                     >
                       {ref}
@@ -282,7 +327,7 @@ export default function Home() {
                 ))}
               </ul>
               <button
-                onClick={() => setBasisChoice(null)}
+                onClick={() => startBlank()}
                 className="w-full px-3 py-2 rounded border border-gray-600 text-gray-300 hover:bg-[#333] text-sm"
               >
                 Blank workspace
@@ -290,6 +335,68 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        {/* Home: the simple landing — the tools are one keystroke/click away */}
+        <div className={`absolute inset-0 overflow-auto ${activeView === 'home' ? 'z-10' : 'z-0 invisible'}`}>
+          {fsReady && (
+            <div className="flex min-h-full items-center justify-center p-6">
+              <div className="w-full max-w-lg">
+                <h1 className="text-2xl font-bold mb-1">artipod</h1>
+                <p className="text-gray-400 text-sm mb-6">
+                  a pod for artifacts — files that version, sync, and run tools, right here in the browser.
+                </p>
+                <div className="rounded-lg border border-gray-700 bg-[#252526] p-4 mb-6 font-mono text-sm">
+                  <div className="flex justify-between gap-4">
+                    <span className="text-gray-400">workspace</span>
+                    <span>{basisChoice ?? `blank ${blankId ?? ''}`}</span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-gray-400">root</span>
+                    <span>{workspaceRoot}</span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-gray-400">url</span>
+                    <span className="truncate">{typeof window !== 'undefined' ? window.location.hash || '#' : '#'}</span>
+                  </div>
+                </div>
+                <ul className="space-y-2 text-sm text-gray-300">
+                  <li>
+                    <button onClick={() => setActiveView('terminal')} className="text-blue-400 hover:underline">
+                      Open the terminal
+                    </button>{' '}
+                    — or press <kbd className="px-1.5 py-0.5 rounded bg-[#333] border border-gray-600 font-mono">ctrl+`</kbd> anytime
+                  </li>
+                  <li>
+                    <button onClick={() => setActiveView('tree')} className="text-blue-400 hover:underline">
+                      Browse the files
+                    </button>{' '}
+                    — reads hydrate lazily from the server
+                  </li>
+                  <li>
+                    <button onClick={() => setActiveView('agent')} className="text-blue-400 hover:underline">
+                      Ask the agent
+                    </button>{' '}
+                    — it uses the same pod and terminal
+                  </li>
+                  <li>
+                    <a
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        window.history.replaceState(null, '', '#');
+                        window.location.reload();
+                      }}
+                      className="text-blue-400 hover:underline"
+                    >
+                      Switch artipod
+                    </a>{' '}
+                    — back to the picker
+                  </li>
+                </ul>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Terminal View - Always mounted to preserve state */}
         <div 
