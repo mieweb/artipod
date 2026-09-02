@@ -13,7 +13,7 @@ import AgentPanel from '@/components/AgentPanel';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import SyncStatus from '@/components/SyncStatus';
 import OfflineToggle from '@/components/OfflineToggle';
-import { installKeyBroker, getBrokerKey, getBrokerLease, getBrokerState, requireBrokerKey, brokerLogin, onBrokerChange } from '@/lib/keys';
+import { installKeyBroker, getBrokerKey, getBrokerLease, getBrokerState, requireBrokerKey, brokerLogin, onBrokerChange, isForcedOffline } from '@/lib/keys';
 import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon, UploadCloud } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
@@ -1319,9 +1319,27 @@ function Workspace({ route }: { route: Route }) {
       // The catalog's synced/out-of-sync verdict rides push OUTCOMES, not
       // trust in autoPush — a failed push (offline, released lease) marks
       // the entry unsynced until a later push lands.
+      let needsPush = route.mode === 'rw' && ((await readRegistry()).find((e) => e.id === route.id)?.unsynced ?? false);
       events.on('sync:push', (e) => {
+        needsPush = !e.ok;
         void patchRegistry(route.id, { unsynced: !e.ok });
       });
+      // Auto-push is edit-driven — a failed push must ALSO retry without a new
+      // edit: at boot (offline session left work behind), on reconnect (the
+      // offline toggle notifies), and on a slow timer (server came back).
+      const retryPush = async (): Promise<void> => {
+        if (!needsPush || route.mode !== 'rw' || isForcedOffline()) return;
+        const result = await pod.pushBasis();
+        if (result && !result.pushed) {
+          // nothing pending after all — the flag was stale
+          needsPush = false;
+          void patchRegistry(route.id, { unsynced: false });
+        }
+      };
+      void retryPush();
+      onBrokerChange(() => void retryPush());
+      // page-lifetime like the pod itself (full reload on navigation)
+      setInterval(() => void retryPush(), 15_000);
       // Lease renewals re-key the pod's keyring (else it locks mid-session at
       // the old expiry); a released/expired lease LOCKS it — encrypted reads
       // fail with EACCES until login. Page-lifetime subscription.
