@@ -298,6 +298,8 @@ function Catalog() {
     { ref: string; manifestDigest?: string; locked?: boolean; pulledAt?: string; encrypted?: boolean; mediaType?: string }[] | null
   >(null);
   const [local, setLocal] = useState<LocalEntry[]>([]);
+  // ref → manifest digest in THIS machine's store — 'synced' is a verified claim
+  const [localHeads, setLocalHeads] = useState<Map<string, string>>(new Map());
   // refs with actual local changes: a non-empty overlay upper (/.artipod/upper/<ref>)
   const [changedRefs, setChangedRefs] = useState<Set<string>>(new Set());
   // root console: the WHOLE browser fs (all of /work, /proc, pod internals)
@@ -318,6 +320,16 @@ function Catalog() {
     try {
       const info = await initFileSystem();
       const { fs } = await import('@/lib/filesystem');
+      // local heads for the digest-verified synced badge (refs are cleartext
+      // pointers — readable without a key even on encrypted stores)
+      try {
+        const { OciStore } = await import('@artipod/core/oci');
+        const store = new OciStore(fs as unknown as ConstructorParameters<typeof OciStore>[0]);
+        await store.init();
+        setLocalHeads(new Map((await store.listRefs()).map((r) => [r.ref, r.manifestDigest])));
+      } catch {
+        // no local store yet
+      }
       const dirs = (await fs.promises.readdir('/work').catch(() => [])) as string[];
       const live = await liveWorkspaceIds();
       for (const id of dirs) {
@@ -679,9 +691,21 @@ function Catalog() {
                         </span>
                       ) : !isCowFork && changedRefs.has(ref) ? (
                         <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
-                      ) : (
-                        !isCowFork && opened && <span className="rounded bg-gray-700 px-1.5 py-0.5">synced</span>
-                      )}
+                      ) : !isCowFork && opened ? (
+                        localHeads.get(ref) === manifestDigest ? (
+                          // verified: this machine's head IS the server's head
+                          <span className="rounded bg-gray-700 px-1.5 py-0.5" title={`verified: local head matches the server (@${manifestDigest?.replace(/^sha256:/, '').slice(0, 8)})`}>
+                            synced
+                          </span>
+                        ) : localHeads.has(ref) ? (
+                          <span
+                            className="rounded bg-sky-900/60 px-1.5 py-0.5 text-sky-200"
+                            title="the server tag moved since this machine last synced — open the workspace to pull the newer head"
+                          >
+                            update available
+                          </span>
+                        ) : null // opened once, but the local store no longer holds it — claim nothing
+                      ) : null}
                       {extra}
                     </>,
                     opened?.lastOpened && !isCowFork ? new Date(opened.lastOpened).toLocaleDateString() : '',
