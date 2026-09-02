@@ -100,10 +100,11 @@ flags for serve:
   --lock <ref>       lock a tag (immutable: every head move is refused with 403;
                      repeatable, persisted in <store>/locks.json)
   --unlock <ref>     release a locked tag (repeatable)
-  --seal-pattern <re>  tags matching the regex are create-once: the first push
-                     lands, every later move or delete is 403 (the dossier
-                     pattern — e.g. '^\\d{4}-\\d{2}-\\d{2}' seals date tags;
-                     env ARTIPOD_SEAL_PATTERN)
+  --seal-pattern <re>  which tags are create-once. DEFAULT: '^[^_]' — every tag
+                     not starting with _ seals on its first push; _-tags stay
+                     mutable (open drafts/workstreams). A sealed tag refuses
+                     moves and deletes with 403 (env ARTIPOD_SEAL_PATTERN)
+  --no-seal          disable seal enforcement (classic mutable-tag registry)
   --only web|registry   narrow the surfaces (default: both)
   --cors <origin>    allow a browser origin (repeatable; default deny)
   --oci-allow <host> allow an upstream registry host for the relay (repeatable;
@@ -253,7 +254,7 @@ function parseArgs(
           stdout.write(`artipod serve: invalid --seal-pattern '${serve.sealPattern}'\n`);
           exit(2);
         }
-      }
+      } else if (a === '--no-seal') serve.noSeal = true;
       else if (a === '--no-exec') serve.exec = false;
       else if (a === '--no-ui') serve.ui = false;
       else if (a === '--open') serve.open = true;

@@ -36,8 +36,10 @@ export interface ServeCliOptions {
   /** Refs to lock/unlock at boot (persisted in <store>/locks.json). */
   lock: string[];
   unlock: string[];
-  /** Tag regex: matching tags are create-once (sealed on first push). */
+  /** Tag regex: matching tags are create-once (sealed on first push). Default: '^[^_]'. */
   sealPattern?: string;
+  /** Disable seal enforcement entirely (classic mutable-tag registry). */
+  noSeal?: boolean;
   open: boolean;
   /** false = --no-ui (headless landing). */
   ui: boolean;
@@ -234,15 +236,19 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
 
   const uiInfo = opts.ui && surfaces.web ? await resolveUiDir(store) : null;
   const locks = await loadLocks(storeDir, opts.lock, opts.unlock);
-  // Seal pattern (dossier pattern): a matching tag is create-once — the PUT
-  // that creates it lands, every later move or delete is 403. Grammar as policy.
-  const sealRaw = opts.sealPattern ?? env.ARTIPOD_SEAL_PATTERN;
+  // Seal enforcement (dossier pattern) is ON BY DEFAULT: any tag not
+  // starting with `_` is create-once — the name declares the lifecycle
+  // (`_` = open draft, everything else = sealed milestone). --no-seal
+  // restores classic mutable tags; --seal-pattern narrows the rule.
+  const sealRaw = opts.noSeal ? undefined : (opts.sealPattern ?? env.ARTIPOD_SEAL_PATTERN ?? '^[^_]');
   const sealRe = sealRaw ? new RegExp(sealRaw) : null;
   const isLocked =
     locks.size > 0 || sealRe
       ? async (ref: string): Promise<boolean> => {
           if (locks.has(ref)) return true;
           if (!sealRe) return false;
+          // --publish refs are living folder mirrors — write-back is their point
+          if (await publishMap.dirFor(ref)) return false;
           const tag = ref.slice(ref.lastIndexOf(':') + 1);
           return sealRe.test(tag) && !!(await store.getRef(ref));
         }
@@ -288,7 +294,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   );
   for (const line of published) stdout.write(`  publish:  ${line}\n`);
   if (locks.size > 0) stdout.write(`  locked:   ${[...locks].sort().join(', ')} (tags cannot move — --unlock <ref> to release)\n`);
-  if (sealRe) stdout.write(`  sealed:   tags matching /${sealRaw}/ are create-once (immutable after first push)\n`);
+  if (sealRe) stdout.write(`  sealed:   tags matching /${sealRaw}/ are create-once (immutable after first push; _-tags stay open — --no-seal to disable)\n`);
   if (uiInfo) stdout.write(`  ui:       ${uiInfo.source} — ${tildify(uiInfo.dir)}\n`);
   if (relayHosts.length > 0) stdout.write(`  relay:    ${relayHosts.join(', ')}\n`);
   if (token || readToken) {

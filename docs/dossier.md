@@ -144,10 +144,12 @@ history.
 
 ## What core provides
 
-1. **Seal patterns ✅** — `artipod serve --seal-pattern '^\d{4}-\d{2}-\d{2}'`
-   (env `ARTIPOD_SEAL_PATTERN`), or any embedder policy via
-   `createArtipodApp({ isLocked })` as above. Composes with the explicit
-   `--lock` list.
+1. **Seal patterns ✅ (enforced by default)** — `artipod serve` ships with
+   `^[^_]`: every tag except `_`-prefixed drafts is create-once out of the
+   box. Narrow it (`--seal-pattern '^\d{4}-\d{2}-\d{2}'`), disable it
+   (`--no-seal`), or embed any policy via `createArtipodApp({ isLocked })`.
+   `--publish` folder refs are exempt (living mirrors). Composes with the
+   explicit `--lock` list.
 2. **Unsealed-tag delete ✅** — `DELETE /v2/<name>/manifests/<tag>` (202) and
    `DELETE /api/pods/refs?name=<ref>` (204), refused with 403 for sealed
    tags, so closing a workstream retires its sigil tag. Pointer removal

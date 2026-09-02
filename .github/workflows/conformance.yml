@@ -37,7 +37,7 @@ jobs:
       - name: Start artipod serve (registry surface)
         run: |
           STORE=$(mktemp -d)
-          nohup node dist/cli.js serve --port 18784 --store "$STORE" --only registry > serve.log 2>&1 &
+          nohup node dist/cli.js serve --port 18784 --store "$STORE" --only registry --no-seal > serve.log 2>&1 &
           for i in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18784/v2/ || true)
             [ "$code" = "200" ] && break

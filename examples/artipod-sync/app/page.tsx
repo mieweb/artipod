@@ -574,7 +574,7 @@ function Catalog() {
                     onClick={(ev) => {
                       ev.preventDefault();
                       ev.stopPropagation();
-                      setPub({ id: e.id, mode: e.mode ?? 'rw', value: e.kind === 'blank' ? `me/${e.id}:1` : e.id });
+                      setPub({ id: e.id, mode: e.mode ?? 'rw', value: e.kind === 'blank' ? `me/${e.id}:_1` : e.id });
                     }}
                     className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] uppercase text-gray-400 hover:text-white hover:border-gray-400"
                     title="Publish to the server"
@@ -661,8 +661,8 @@ function NewWorkspace() {
     const id = crypto.randomUUID().slice(0, 8);
     const target = name.trim();
     if (!target) return void (window.location.href = workspaceUrl(id));
-    // no tag = tag 1 (native dialogs are suppressed in driven browsers — don't alert)
-    const ref = target.includes(':') ? target : `${target}:1`;
+    // no tag = open tag _1 (tags without _ seal on first push — name lifecycle)
+    const ref = target.includes(':') ? target : `${target}:_1`;
     window.location.href = `${workspaceUrl(id)}&publish=${encodeURIComponent(ref)}`;
   };
   return (
@@ -671,7 +671,7 @@ function NewWorkspace() {
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && go()}
-        placeholder="name:tag (optional — publishes right away)"
+        placeholder="name:_tag (optional — publishes right away; _ keeps it open)"
         className="flex-1 px-3 py-2 rounded border border-gray-600 bg-transparent text-sm text-gray-200 placeholder-gray-500 font-mono"
       />
       <button
@@ -896,7 +896,7 @@ function Workspace({ route }: { route: Route }) {
         const MANIFEST_TYPE = 'application/vnd.oci.image.manifest.v1+json';
         const enc = new TextEncoder();
         if (!target || target === route.id) {
-          if (!route.isRef) throw new Error('a blank workspace needs a name — publish <name:tag>, e.g. publish me/scratch:1');
+          if (!route.isRef) throw new Error('a blank workspace needs a name — publish <name:tag>, e.g. publish me/scratch:_1 (_-tags stay open; others seal on first push)');
           // push back — pushOverlay directly (not pod.pushBasis) so a server
           // refusal (e.g. a sealed tag) surfaces here instead of a console warning
           const result = await pushOverlay({
@@ -912,7 +912,7 @@ function Workspace({ route }: { route: Route }) {
           await patchRegistry(route.id, { hasChanges: false });
           return `pushed ${route.id}: ${result.overlayLayers} overlay layer(s) → ${result.manifestDigest.slice(0, 19)}…`;
         }
-        if (!target.includes(':')) throw new Error(`include a tag — e.g. publish ${target}:1`);
+        if (!target.includes(':')) throw new Error(`include a tag — e.g. publish ${target}:_1 (_ = open; without _ it seals on first push)`);
         let upperAt: string;
         let deletions = new Map<string, number>();
         if (route.isRef) {
@@ -1113,7 +1113,8 @@ function Workspace({ route }: { route: Route }) {
   };
 
   const openPublish = () => {
-    setPublishValue(route.isRef ? route.id : `me/${route.id}:1`);
+    // suggest an OPEN (_) tag — the server seals everything else on first push
+    setPublishValue(route.isRef ? route.id : `me/${route.id}:_1`);
     setPublishNotice(null);
     setPublishOpen(true);
   };
