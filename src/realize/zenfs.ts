@@ -499,6 +499,8 @@ export async function createZenFsPod(
     dispose() {
       if (pushTimer) clearTimeout(pushTimer);
       offAutoPush?.();
+      // Unmount overlays — a later session must not read this one's stale view.
+      if (hydrator) for (const ref of [...hydrator.overlays.keys()]) hydrator.closeOverlay(ref);
       disposeProc?.();
       disposeKeysProc?.();
       disposeHydrationProc?.();

@@ -154,6 +154,45 @@ describe('overlay write-back', () => {
     expect((await shell.exec('cat /work/note.txt')).stdout).toBe('mine\n');
   });
 
+  // Regression: the second-session lifecycle. Every earlier test lived inside
+  // ONE continuous session; reopening is where three real bugs hid.
+  it('a second session with a fresh empty upper never strips the pushed layers', async () => {
+    const pod1 = await openPod(false);
+    await pod1.createSandbox().exec('echo hi > /work/testfile.txt');
+    expect((await pod1.pushBasis())?.pushed).toBe(true);
+    pod1.dispose();
+    const { manifest: afterPush } = await headManifest(remote, REF);
+    expect(afterPush.layers.some((l) => l.annotations?.[ANNOTATION_PATH] === '/testfile.txt')).toBe(true);
+
+    // Session 2: same actor, brand-new (empty) overlay upper.
+    const pod2 = await openPod(false);
+    const push2 = await pod2.pushBasis();
+    expect(push2?.pushed ?? false).toBe(false); // an empty overlay says nothing
+    const { manifest: after2 } = await headManifest(remote, REF);
+    expect(after2.layers.some((l) => l.annotations?.[ANNOTATION_PATH] === '/testfile.txt')).toBe(true);
+    // …and the reopened workspace SEES the pushed file (no stale index).
+    expect((await pod2.createSandbox().exec('cat /work/testfile.txt')).stdout).toBe('hi\n');
+    pod2.dispose();
+  });
+
+  it('boot-time basis open refreshes a moved remote head (no stale local index)', async () => {
+    const pod1 = await openPod(false);
+    expect((await pod1.createSandbox().exec('cat /work/docs/a.md')).stdout).toBe('alpha v1\n');
+    pod1.dispose();
+
+    // The server republishes with new content while no session is open.
+    await writeFile(join(dir, 'docs', 'a.md'), 'alpha v3\n');
+    await writeFile(join(dir, 'fresh.md'), 'brand new\n');
+    await publishDirectory(remote, dir, REF, { actor: 'server:test' });
+
+    // A new session must see the new head at BOOT — not yesterday's tree.
+    const pod2 = await openPod(false);
+    const shell = pod2.createSandbox();
+    expect((await shell.exec('cat /work/docs/a.md')).stdout).toBe('alpha v3\n');
+    expect((await shell.exec('cat /work/fresh.md')).stdout).toBe('brand new\n');
+    pod2.dispose();
+  });
+
   it('debounced auto-push fires after the quiet window', async () => {
     const pod = await openPod({ debounceMs: 25 });
     const shell = pod.createSandbox();
