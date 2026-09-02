@@ -45,6 +45,37 @@ A standard **OCI image-layout directory** (`OciLayoutPodStore`): `oci-layout` ma
 | `oci/snapshots/` | `HEAD`, plus per-snapshot `<id>.json` manifests and `<id>.index.json` cumulative indexes. |
 | `oci/upper/` | CoW upper for layered (base + upper) pods. |
 
+## The uppers — where writes live before they are layers
+
+"Upper" is OverlayFS vocabulary: opened layers form the read-only **lower**,
+and every write lands in a writable **upper** stacked on top (the same idea
+as `upperdir` in Linux OverlayFS or a container's writable layer). Pushing
+freezes the upper into new diff layers; until then the upper *is* your
+uncommitted local state. There are three of them:
+
+| Upper | Where | Lifetime |
+|---|---|---|
+| Layered-pod upper | `/.artipod/oci/upper/` (table above) | Persistent — part of the pod store; frozen by `commit`/`snapshot`. |
+| **Basis-overlay upper** (`artipod open <ref>` / `sync.basis`) | Mounted at `/.artipod/upper/<urlencoded-ref>`; backing is **in-memory by default** — safe because auto-push drains it into a new head within ~2 s | Session — unless the embedder passes `sync.basis.upperConfig` (any ZenFS mount config) to place it on persistent storage. A **cow fork** is exactly that: `autoPush: false` + a persistent upper. |
+| Browser-demo cow upper | OPFS `artipod-fs/uppers/<urlencoded-ref>/` (plain real files; IndexedDB store `artipod-upper::<urlencoded-ref>` when OPFS is unavailable) | Persistent until the fork is discarded. |
+
+### The browser's "disk" (artipod-sync demo)
+
+The demo's whole filesystem lives in the origin's OPFS under one sandbox
+directory (falling back to IndexedDB where OPFS is unavailable):
+
+```
+artipod-fs/                     ← OPFS sandbox dir (the ZenFS root)
+├── work/<id>/                  ← blank workspaces (?artipod=<id>); empty+abandoned ones are swept
+├── open/<sanitized-ref>/       ← overlay mount points for opened pods (view, not data)
+├── uppers/<urlencoded-ref>/    ← persistent cow-fork uppers (real files)
+└── .artipod/…                  ← the pod store, exactly the table above
+```
+
+`/proc/storage` inside the shell renders this same map live (`idb/`,
+`opfs.json`, `origin.json`), and the catalog's Root console can walk all of
+it — a workspace shell is confined to its own root and sees none of it.
+
 ## What is plaintext, what is ciphertext
 
 Encryption ([encryption.md](encryption.md)) is **per pod store**, opt-in, and covers *blobs* — layers, snapshots, the CoW upper — as chunked AEAD (AES-256-GCM). The honest map:
