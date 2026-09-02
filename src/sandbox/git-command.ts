@@ -9,6 +9,7 @@ import { defineCommand } from 'just-bash/browser';
 import type { GitOps, GitStatusResult } from './git.js';
 import { getAuthor, setAuthor } from './git.js';
 import { persistenceEnabled, setPersistence } from './git-auth.js';
+import { joinPosix } from '../pathUtils.js';
 
 const ok = (stdout: string) => ({ stdout, stderr: '', exitCode: 0 });
 const err = (stderr: string, exitCode = 1) => ({ stdout: '', stderr, exitCode });
@@ -50,6 +51,14 @@ function assertHttpsUrl(url: string | undefined): string {
     throw new Error(`only https:// repository URLs are supported (got ${parsed.protocol}//)`);
   }
   return url;
+}
+
+/** Real-git rule: last path segment of the URL, minus trailing slashes and a `.git` suffix. */
+function cloneDirName(url: string): string {
+  const path = new URL(url).pathname.replace(/\/+$/, '');
+  const name = path.slice(path.lastIndexOf('/') + 1).replace(/\.git$/, '');
+  if (!name) throw new Error(`could not derive a directory name from '${url}'`);
+  return name;
 }
 
 function parseFlags(args: string[], flagsWithValue: string[] = []): { flags: Map<string, string>; positional: string[] } {
@@ -97,9 +106,13 @@ export const makeGitCommand = (gitOps: GitOps) =>
     const dir = ctx.cwd;
     try {
       switch (sub) {
-        case 'clone':
-          await gitOps.clone(assertHttpsUrl(rest[0]), dir);
-          return ok('Cloned.\n');
+        case 'clone': {
+          const url = assertHttpsUrl(rest[0]);
+          const target = rest[1] ?? cloneDirName(url);
+          const dest = target.startsWith('/') ? target : joinPosix(dir, target);
+          await gitOps.clone(url, dest);
+          return ok(`Cloning into '${target}'...\n`);
+        }
         case 'status':
           return ok(renderStatus(await gitOps.status(dir)));
         case 'files':

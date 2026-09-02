@@ -121,6 +121,10 @@ export function createGitOps(getFs: () => ZenFsLike) {
 
   const ops = {
     clone: async (url: string, dir: string) => {
+      const zfs = getFs();
+      if ((await zfs.promises.exists(dir)) && (await zfs.promises.readdir(dir)).length > 0) {
+        throw new Error(`destination path '${dir}' already exists and is not an empty directory`);
+      }
       await git.clone({ ...network(dir, url), url, singleBranch: true, depth: 1 });
     },
 

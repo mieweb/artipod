@@ -136,6 +136,28 @@ describe('git custom command (Phase 3 surface)', () => {
     const r2 = await sandbox.exec("git clone 'javascript:alert(1)'");
     expect(r2.exitCode).not.toBe(0);
   });
+
+  it('clone derives the target directory from the URL like real git', async () => {
+    // Pre-populate the derived destination so the non-empty check fires
+    // before any network I/O — proves both the derivation and the check.
+    await zfs.promises.mkdir('/repo/proj');
+    await zfs.promises.writeFile('/repo/proj/f.txt', 'x\n');
+    const r = await sandbox.exec('git clone https://example.com/things/proj.git');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/destination path '\/repo\/proj' already exists and is not an empty directory/);
+  });
+
+  it('clone honors an explicit target directory argument', async () => {
+    await zfs.promises.mkdir('/repo/dest');
+    await zfs.promises.writeFile('/repo/dest/f.txt', 'x\n');
+    const r = await sandbox.exec('git clone https://example.com/a.git dest');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/destination path '\/repo\/dest' already exists/);
+
+    const abs = await sandbox.exec('git clone https://example.com/a.git /repo/dest');
+    expect(abs.exitCode).not.toBe(0);
+    expect(abs.stderr).toMatch(/destination path '\/repo\/dest' already exists/);
+  });
 });
 
 describe('createGitOps direct API', () => {
