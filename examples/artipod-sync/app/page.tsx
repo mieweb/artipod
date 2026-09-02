@@ -135,8 +135,9 @@ function Catalog() {
     const registry = readRegistry();
     const onDisk: string[] = [];
     const swept: string[] = [];
+    let changed = new Set(registry.filter((e) => e.hasChanges).map((e) => e.id));
     try {
-      await initFileSystem();
+      const info = await initFileSystem();
       const { fs } = await import('@/lib/filesystem');
       const dirs = (await fs.promises.readdir('/work').catch(() => [])) as string[];
       const live = await liveWorkspaceIds();
@@ -150,12 +151,25 @@ function Catalog() {
         }
       }
       dropFromRegistry(swept);
+      // On OPFS the physical cow uppers (.artipod/uppers/<enc>) are REAL dirs
+      // the catalog can read — the filesystem is the source of truth, and the
+      // registry is just a cache (rm -rf / must empty the screen). On the
+      // IndexedDB fallback the uppers are invisible here, so trust the flags.
+      if (info?.backend === 'opfs') {
+        changed = new Set<string>();
+        const uppers = (await fs.promises.readdir('/.artipod/uppers').catch(() => [])) as string[];
+        for (const name of uppers) {
+          const entries = (await fs.promises.readdir(`/.artipod/uppers/${name}`).catch(() => [])) as string[];
+          if (entries.length > 0) changed.add(decodeURIComponent(name));
+        }
+        for (const e of registry) {
+          if (e.hasChanges && !changed.has(e.id)) patchRegistry(e.id, { hasChanges: false });
+        }
+      }
     } catch {
       // no /work yet (or init failed) — registry alone
     }
-    // "local changes" = unpushed writes, tracked by the workspace tab (the
-    // overlay upper is a mount only THAT page can see)
-    setChangedRefs(new Set(registry.filter((e) => e.hasChanges).map((e) => e.id)));
+    setChangedRefs(changed);
     const byId = new Map<string, LocalEntry>(
       registry.filter((e) => !swept.includes(e.id) && (e.kind === 'pod' || onDisk.includes(e.id))).map((e) => [e.id, e]),
     );
@@ -183,18 +197,54 @@ function Catalog() {
       await refreshLocal();
       // the catalog's console is a root shell over the raw fs — /proc, every
       // /work workspace, and the pod internals are all inspectable here;
-      // its commands rescan the lists (rm -rf /work/x updates the screen)
+      // its commands rescan the lists (fs:changed after every exec)
       try {
         const { fs } = await import('@/lib/filesystem');
         const { createSandbox } = await import('@artipod/core/sandbox');
         const { PodEvents: Events } = await import('@artipod/core/host');
+        const { defineCommand } = await import('just-bash/browser');
+        // The safe alternative to rm -rf: erases ONLY artipod state (the OPFS
+        // sandbox dir, artipod IndexedDB stores, the workspace registry) and
+        // reloads into a factory-fresh machine. Server pods are untouched.
+        const factoryReset = defineCommand('factory-reset', async (args: string[]) => {
+          if (!args.includes('-f')) {
+            return {
+              stdout: '',
+              stderr:
+                'factory-reset erases ALL local artipod data in this browser:\n' +
+                '  - the OPFS filesystem (workspaces, cow forks, pod store)\n' +
+                '  - artipod IndexedDB stores\n' +
+                '  - the workspace registry\n' +
+                'Server pods are untouched. Run `factory-reset -f` to confirm.\n',
+              exitCode: 1,
+            };
+          }
+          try {
+            const opfsRoot = await navigator.storage.getDirectory();
+            await opfsRoot.removeEntry('artipod-fs', { recursive: true }).catch(() => {});
+            for (const db of await indexedDB.databases()) {
+              if (db.name && (db.name.startsWith('artipod') || db.name === 'browser-git-fs')) {
+                await new Promise((r) => {
+                  const req = indexedDB.deleteDatabase(db.name!);
+                  req.onsuccess = req.onerror = req.onblocked = r;
+                });
+              }
+            }
+            localStorage.removeItem(REGISTRY_KEY);
+          } finally {
+            setTimeout(() => window.location.reload(), 500);
+          }
+          return { stdout: 'local artipod data erased — reloading a factory-fresh machine…\n', stderr: '', exitCode: 0 };
+        });
         const consoleEvents = new Events();
         let timer: ReturnType<typeof setTimeout> | null = null;
         disposeEvents = consoleEvents.on('fs:changed', () => {
           if (timer) clearTimeout(timer);
           timer = setTimeout(() => void refreshLocal(), 300);
         });
-        setRootSandbox(createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents }));
+        setRootSandbox(
+          createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents, extraCommands: [factoryReset] }),
+        );
       } catch {
         // fs init failed — no console
       }
