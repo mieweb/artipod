@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`artipod prune` spares tagged pods** (docker dangling-image semantics): only pods without a committed tag are pruned; `-a`/`--all` removes tagged ones too. `artipod pods` grew a TAGS column, and exiting an interactive session now prints how to get back (`artipod run -it <id>`) and, for untagged pods, that prune would remove them.
 
+### Security
+
+- **All dependabot alerts cleared (173 → 0 across every manifest)**: non-breaking `npm audit fix` everywhere, plus targeted `overrides` for transitives whose parents ship no fixed release (dockerode→uuid 11, onnxruntime-node→adm-zip 0.6, transformers→sharp 0.35, minimatch@9→9.0.7, monaco→dompurify 3.4.13, next→postcss 8.5.23). The `examples/artipod-sync` demo moved to Next 15.5 + React 19 — Next 14 never received backports for ~20 high-severity advisories (DoS/SSRF/cache poisoning) — with the Next-15 async `params` migration and the `serverExternalPackages` rename. The attic web-demo's stale lockfiles are deleted (dead code, 26 alerts).
+
 ## [0.5.0] - 2026-09-01
 
 ### Changed

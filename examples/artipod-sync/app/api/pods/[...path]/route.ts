@@ -39,16 +39,16 @@ function getHandler(): Promise<PathHandler> {
   return handlerPromise;
 }
 
-type Ctx = { params: { path: string[] } };
+type Ctx = { params: Promise<{ path: string[] }> };
 
 export async function GET(req: Request, { params }: Ctx): Promise<Response> {
-  return (await getHandler())(req, params.path ?? []);
+  return (await getHandler())(req, (await params).path ?? []);
 }
 
 export async function HEAD(req: Request, { params }: Ctx): Promise<Response> {
-  return (await getHandler())(req, params.path ?? []);
+  return (await getHandler())(req, (await params).path ?? []);
 }
 
 export async function PUT(req: Request, { params }: Ctx): Promise<Response> {
-  return (await getHandler())(req, params.path ?? []);
+  return (await getHandler())(req, (await params).path ?? []);
 }

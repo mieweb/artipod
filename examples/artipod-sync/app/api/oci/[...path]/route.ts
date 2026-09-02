@@ -13,6 +13,6 @@ const handler = createRegistryRelayHandler({
   allowedHosts: (process.env.ARTIPOD_OCI_ALLOWED_HOSTS ?? '').split(','),
 });
 
-export async function GET(req: Request, { params }: { params: { path: string[] } }): Promise<Response> {
-  return handler(req, params.path ?? []);
+export async function GET(req: Request, { params }: { params: Promise<{ path: string[] }> }): Promise<Response> {
+  return handler(req, (await params).path ?? []);
 }

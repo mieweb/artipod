@@ -11,14 +11,14 @@ export const runtime = 'nodejs';
 
 const handler = createGitProxyHandler({ allowlist: allowedHosts(process.env.GIT_PROXY_ALLOWED_HOSTS) });
 
-type Ctx = { params: { path: string[] } };
+type Ctx = { params: Promise<{ path: string[] }> };
 
 export async function GET(req: Request, { params }: Ctx): Promise<Response> {
-  return handler(req, params.path ?? []);
+  return handler(req, (await params).path ?? []);
 }
 
 export async function POST(req: Request, { params }: Ctx): Promise<Response> {
-  return handler(req, params.path ?? []);
+  return handler(req, (await params).path ?? []);
 }
 
 export async function OPTIONS(req: Request): Promise<Response> {
