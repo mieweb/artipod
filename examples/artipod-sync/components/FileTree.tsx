@@ -60,14 +60,23 @@ export default function FileTree({ onSelectFile, events, roots, getDehydratedPat
       getDehydratedPaths()
         .then((paths) => {
           if (cancelled) return;
-          dehydratedRef.current = new Set(paths);
-          sourceRef.current?.invalidate();
+          const next = new Set(paths);
+          const changed = next.size !== dehydratedRef.current.size || paths.some((p) => !dehydratedRef.current.has(p));
+          dehydratedRef.current = next;
+          if (changed) sourceRef.current?.invalidate();
         })
         .catch(() => {});
     refresh();
     const offs = [events?.on('fetch:done', refresh), events?.on('fs:changed', refresh)];
+    // Badges must never LIE about locality: while any ☁︎ is showing, poll the
+    // hydration state — fetch-on-read can hydrate through paths that emit no
+    // event this component sees.
+    const timer = setInterval(() => {
+      if (dehydratedRef.current.size > 0) refresh();
+    }, 2000);
     return () => {
       cancelled = true;
+      clearInterval(timer);
       for (const off of offs) off?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
