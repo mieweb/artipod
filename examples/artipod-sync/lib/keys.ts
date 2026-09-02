@@ -42,12 +42,42 @@ let podKeys: Record<string, CryptoKey> = {};
 let renewTimer: ReturnType<typeof setTimeout> | null = null;
 let probePromise: Promise<KeysMeta | null> | null = null;
 let installed = false;
+/** Demo toggle: reject every same-origin /api request like a dead network. */
+let forcedOffline = false;
+/** Explicit lease release — suppresses the 401 auto-relogin until the user logs in again. */
+let released = false;
 const listeners = new Set<() => void>();
 
 const notify = () => listeners.forEach((l) => l());
 
 export function getBrokerState(): BrokerState {
   return state;
+}
+
+export function isForcedOffline(): boolean {
+  return forcedOffline;
+}
+
+/** Flip the demo's forced-offline mode: /api requests fail like a dead network. */
+export function setForcedOffline(value: boolean): void {
+  forcedOffline = value;
+  notify();
+}
+
+/**
+ * Drop the lease + keys from this tab NOW (≈ `artipod lock`): the badge goes
+ * locked, encrypted reads start failing, and nothing auto-relogins until the
+ * user clicks login. Ciphertext at rest is untouched — login restores.
+ */
+export function releaseLease(): void {
+  released = true;
+  if (renewTimer) clearTimeout(renewTimer);
+  renewTimer = null;
+  leaseB64 = null;
+  currentLease = null;
+  podKeys = {};
+  if (state.status !== 'none') state = { status: 'locked', meta: state.meta, lastRenewedAt: state.lastRenewedAt };
+  notify();
 }
 
 /** The live lease document (for adopting into a pod's keyring), or null. */
@@ -128,6 +158,7 @@ async function deviceKeyPair(): Promise<{ privateKey: CryptoKey; publicKeyB64: s
 export async function brokerLogin(principal: string): Promise<boolean> {
   const meta = await probe();
   if (!meta) return false;
+  released = false; // an explicit or auto login re-arms the session
   state = { ...state, meta, renewing: true };
   notify();
   try {
@@ -178,19 +209,26 @@ const isPodsUrl = (input: RequestInfo | URL): boolean => {
   return url.startsWith('/api/pods') || url.startsWith(`${location.origin}/api/pods`);
 };
 
+const isApiUrl = (input: RequestInfo | URL): boolean => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  return url.startsWith('/api/') || url.startsWith(`${location.origin}/api/`);
+};
+
 /**
  * Probe the serve and, when it brokers keys, login and patch fetch so every
- * /api/pods request carries the lease (401 → one re-login + retry).
- * Idempotent — call from any entry point.
+ * /api/pods request carries the lease (401 → one re-login + retry). The
+ * patch installs on EVERY serve (it also carries the forced-offline toggle);
+ * on plaintext serves it is a passthrough. Idempotent.
  */
 export async function installKeyBroker(principal: () => Promise<string>): Promise<BrokerState> {
-  const meta = await probe();
-  if (!meta) return state; // plaintext serve — zero overhead, no patch
   if (!installed) {
     installed = true;
     const original = globalThis.fetch.bind(globalThis);
     bareFetch = original;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (forcedOffline && isApiUrl(input)) {
+        throw new TypeError('Failed to fetch — forced offline (demo toggle)');
+      }
       if (!isPodsUrl(input)) return original(input, init);
       const attempt = () => {
         const req = new Request(input as string | URL, init);
@@ -198,10 +236,12 @@ export async function installKeyBroker(principal: () => Promise<string>): Promis
         return original(req);
       };
       let res = await attempt();
-      if (res.status === 401 && (await brokerLogin(await principal()))) res = await attempt();
+      if (res.status === 401 && !released && (await brokerLogin(await principal()))) res = await attempt();
       return res;
     }) as typeof fetch;
   }
+  const meta = await probe();
+  if (!meta) return state; // plaintext serve — the patch stays a passthrough
   if (state.status !== 'leased') await brokerLogin(await principal());
   return state;
 }

@@ -12,6 +12,7 @@ import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import SyncStatus from '@/components/SyncStatus';
+import OfflineToggle from '@/components/OfflineToggle';
 import { installKeyBroker, getBrokerKey, getBrokerLease, getBrokerState, requireBrokerKey, brokerLogin, onBrokerChange } from '@/lib/keys';
 import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon, UploadCloud } from 'lucide-react';
 
@@ -600,6 +601,7 @@ function Catalog() {
         <div className="mb-1 flex items-center gap-2">
           <h1 className="text-2xl font-bold">artipod</h1>
           <EncryptionBadge principal={actorId} />
+          <OfflineToggle />
         </div>
         <p className="text-gray-400 text-sm mb-6">
           a pod for artifacts — files that version, sync, and run tools, right here in the browser.
@@ -1282,11 +1284,13 @@ function Workspace({ route }: { route: Route }) {
       // upper + store ciphertext; blank /work trees stay plaintext
       await patchRegistry(route.id, { encrypted: !!brokerKey && route.isRef });
       // Lease renewals re-key the pod's keyring (else it locks mid-session at
-      // the old expiry). Page-lifetime subscription, like the events wiring.
+      // the old expiry); a released/expired lease LOCKS it — encrypted reads
+      // fail with EACCES until login. Page-lifetime subscription.
       onBrokerChange(() => {
         const lease = getBrokerLease();
         const key = getBrokerKey();
         if (lease && key) void pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key });
+        else if (getBrokerState().status === 'locked') void pod.locker.lock();
       });
       // demo/debug escape hatch (see docs/console.md's future replacement)
       (window as unknown as { __artipod?: unknown }).__artipod = pod;
@@ -1463,6 +1467,7 @@ function Workspace({ route }: { route: Route }) {
         <span className="hidden sm:inline-flex shrink-0 items-center gap-1.5 px-1">
           <EncryptionBadge principal={actorId} />
           <SyncStatus events={events} active={route.isRef && route.mode === 'rw'} />
+          <OfflineToggle />
         </span>
         {tab('tree', <FolderTree size={16} />, 'Files')}
         {tab('editor', <FileCode size={16} />, `Editor${editingFile ? ` (${editingFile.split('/').pop()})` : ''}`, !editingFile)}
