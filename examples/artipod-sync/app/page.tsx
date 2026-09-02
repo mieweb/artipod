@@ -99,7 +99,17 @@ async function writeStateText(text: string): Promise<void> {
     const fsDir = await root.getDirectoryHandle('artipod-fs', { create: true });
     const dir = await fsDir.getDirectoryHandle('.artipod', { create: true });
     const handle = await dir.getFileHandle('ui-state.json', { create: true });
-    const w = await handle.createWritable();
+    // Hard backstop under the Web Lock: an exclusive writable makes a racing
+    // tab's write THROW (NoModificationAllowedError) instead of silently
+    // clobbering. Older engines ignore/reject the option — retry plain.
+    let w: FileSystemWritableFileStream;
+    try {
+      w = await (
+        handle as { createWritable(o?: { mode?: string }): Promise<FileSystemWritableFileStream> }
+      ).createWritable({ mode: 'exclusive' });
+    } catch {
+      w = await handle.createWritable();
+    }
     await w.write(text);
     await w.close();
     return;
