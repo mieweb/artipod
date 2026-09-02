@@ -86,7 +86,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "postbuild": "node scripts/buildinfo.mjs",
+    "postbuild": "node scripts/buildinfo.mjs && node scripts/devlink.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
