@@ -407,11 +407,12 @@ function Catalog() {
       {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
       <a
         href={workspaceUrl(id, mode)}
-        className="flex items-center justify-between gap-3 px-3 py-2 rounded bg-[#333] hover:bg-[#3d3d3d] text-sm"
+        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2 rounded bg-[#333] hover:bg-[#3d3d3d] text-sm"
       >
-        <span className="font-mono truncate">{id}</span>
-        <span className="flex items-center gap-2 shrink-0 text-xs text-gray-400">
-          {note && <span>{note}</span>}
+        {/* the name always wins the width fight — badges wrap to a second line on phones */}
+        <span className="font-mono truncate min-w-0 flex-1 basis-40">{id}</span>
+        <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-gray-400">
+          {note && <span className="hidden sm:inline">{note}</span>}
           {badge}
         </span>
       </a>
