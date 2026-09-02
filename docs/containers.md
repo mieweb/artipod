@@ -41,7 +41,7 @@ Docker/Podman is one of three execution backends a pod can attach to — the pod
 2. **Docker/Podman realizer** ✅ — real container execution for pods whose mounts are host directories ([linux.md](linux.md)).
 3. **container2wasm via 9P** 🔮 — a full Linux VM in WASM, unscheduled.
 
-The realizer speaks the Docker API (via dockerode) and auto-detects sockets in this order: **rootless Podman first** (`$XDG_RUNTIME_DIR/podman/podman.sock`), rootless Docker, then the macOS user sockets (Docker Desktop, Colima, Lima, Rancher Desktop, Podman machine), and rootful Podman/Docker only as fallbacks. Containers are hardened by default and this must not regress: `CapDrop ALL`, read-only rootfs, `no-new-privileges`, private IPC, `NetworkMode: none`, noexec tmpfs, memory/CPU/pids limits, optional seccomp allowlist ([container/](../container/)).
+The realizer speaks the Docker API (via dockerode, an optional peer — `npm install dockerode` to enable this backend) and auto-detects sockets in this order: **rootless Podman first** (`$XDG_RUNTIME_DIR/podman/podman.sock`), rootless Docker, then the macOS user sockets (Docker Desktop, Colima, Lima, Rancher Desktop, Podman machine), and rootful Podman/Docker only as fallbacks. Containers are hardened by default and this must not regress: `CapDrop ALL`, read-only rootfs, `no-new-privileges`, private IPC, `NetworkMode: none`, noexec tmpfs, memory/CPU/pids limits, optional seccomp allowlist ([container/](../container/)).
 
 One honest constraint: Docker cannot bind-mount a *virtual* (browser-synced) mount. The pattern is sync the pod to a server, materialize it on disk, then run the container job — a manifest with virtual sources fails fast on this realizer.
 

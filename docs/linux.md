@@ -56,6 +56,6 @@ Restart=always
 
 ## Node facts
 
-- Node ≥ 18 (`engines`); Node 20 LTS recommended. Pure ESM package.
-- `dockerode` is confined to `@artipod/core/docker` — browser entries never import it.
+- Node ≥ 20 (`engines`); Node 20 LTS recommended. Pure ESM package.
+- `dockerode` is confined to `@artipod/core/docker` — browser entries never import it. It's an **optional peer**: `npm install dockerode` to enable the docker backend.
 - The full streaming `Sandbox` class of just-bash (incremental stdio over real dirs) is available on Node only; the browser is buffered-only ([bash-isolate.md](bash-isolate.md#the-buffered-io-constraint)).

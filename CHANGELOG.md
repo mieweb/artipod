@@ -7,15 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [0.5.0] - 2026-09-01
 
-- **`npx artipod`**: the bare `artipod` npm package ([packages/artipod](packages/artipod)) is an alias whose bin runs `@artipod/core`'s CLI in-process — same versions, published alongside core.
+### Changed
+
+- **`dockerode` is now an optional peer** (was a hard dependency): `npx artipod` and plain installs no longer pull the docker client (~100 packages and npm's `uuid@10` deprecation warning) — `npm install dockerode` to use the `/docker` execution backend. Using it without the peer now fails with an error that says exactly that.
 
 ## [0.4.0] - 2026-09-01
 
 First npm release as [`@artipod/core`](https://www.npmjs.com/package/@artipod/core).
 
 ### Added
+
+- **`npx artipod`**: the bare `artipod` npm package ([packages/artipod](packages/artipod)) is an alias whose bin runs `@artipod/core`'s CLI in-process — same versions, published alongside core.
 
 - **`artipod pods`**: list kept pods (pod id, created, last used, size), newest first — the `docker ps -a` of pods. `--pods <path>`/`ARTIPOD_PODS` overrides the root.
 - **`artipod rm <pod>...` and `artipod prune`**: delete kept pods by id (unique prefix ok) or wipe them all; prune asks first unless `-f`, and both only touch dirs carrying a pod superblock.

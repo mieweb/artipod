@@ -12,9 +12,20 @@ import type { PodManifest } from './manifest.js';
 // browser bundles: loaded on first container use, node-only. webpackIgnore
 // keeps webpack from following the dynamic edge (vite/vitest still resolve it).
 const dockerBackend = () =>
-  import(/* webpackIgnore: true */ './docker/containerUtils.js') as Promise<
-    typeof import('./docker/containerUtils.js')
-  >;
+  (
+    import(/* webpackIgnore: true */ './docker/containerUtils.js') as Promise<
+      typeof import('./docker/containerUtils.js')
+    >
+  ).catch((e: unknown) => {
+    // dockerode is an optional peer — name the fix, not just the module.
+    if (e instanceof Error && e.message.includes('dockerode')) {
+      throw new Error(
+        "the docker execution backend needs the optional peer 'dockerode' — npm install dockerode",
+        { cause: e },
+      );
+    }
+    throw e;
+  });
 
 /** Isomorphic 16-byte hex id (WebCrypto exists in browsers and Node ≥20). */
 function randomHexId(): string {
