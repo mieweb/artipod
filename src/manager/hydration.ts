@@ -463,8 +463,13 @@ export class Hydrator {
    * WRITABLE CopyOnWrite overlay whose lower is the ref's lazy view. Writes
    * land in the upper (Phase E pushes them as diff layers); reads pass
    * through — fetch-on-read when onDemand is 'fetch'.
+   *
+   * The upper defaults to InMemory — fine when auto-push drains it, but a
+   * long-lived local fork (cow mode) should pass `upperConfig` (any ZenFS
+   * resolveMountConfig input, e.g. an IndexedDB store) so writes survive
+   * the page.
    */
-  async openOverlay(ref: string, at: string): Promise<void> {
+  async openOverlay(ref: string, at: string, opts?: { upperConfig?: unknown }): Promise<void> {
     const { layers, layerBytes } = await this.loadView(ref);
     const view = buildOciView({ layers, layerBytes, name: `basis:${ref}`, onDehydrated: this.onDemandHook(ref) });
     const zen = await import('@zenfs/core');
@@ -474,7 +479,9 @@ export class Hydrator {
     const cow = await zen.resolveMountConfig({
       backend: (zen as unknown as { CopyOnWrite: never }).CopyOnWrite,
       readable: view,
-      writable: existing ? (existing.upper as never) : { backend: zen.InMemory, label: `upper:${ref}` },
+      writable: existing
+        ? (existing.upper as never)
+        : ((opts?.upperConfig ?? { backend: zen.InMemory, label: `upper:${ref}` }) as never),
       ...(existing ? { journal: existing.journal as never } : {}),
     } as never);
     const upperAt = `/.artipod/upper/${encodeURIComponent(ref)}`;

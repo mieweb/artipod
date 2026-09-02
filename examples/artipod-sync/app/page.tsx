@@ -10,7 +10,7 @@ import Editor from '@/components/Editor';
 import FileTree from '@/components/FileTree';
 import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
-import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive } from 'lucide-react';
+import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
 const Terminal = dynamicImport(() => import('@/components/Terminal'), {
@@ -20,23 +20,33 @@ const Terminal = dynamicImport(() => import('@/components/Terminal'), {
 export const dynamic = 'force-dynamic';
 
 /**
- * Routing (?artipod=<ref-or-id>, static-export friendly):
+ * Routing (?artipod=<ref-or-id>&mode=rw|cow|ro, static-export friendly):
  *   /                     → the catalog (server + local artipods, new blank)
  *   /?artipod=me/play:1   → workspace over that published pod (refs contain ':')
  *   /?artipod=71702f6e    → workspace over blank /work/71702f6e
+ * Modes (server pods): rw = overlay auto-pushes (default); cow = overlay
+ * stays local — the pod forks into an "on this machine" variant; ro = no
+ * writes at all.
  */
+type OpenMode = 'rw' | 'cow' | 'ro';
+
 interface Route {
   id: string;
   isRef: boolean;
+  mode: OpenMode;
 }
 
-const workspaceUrl = (id: string): string => `/?artipod=${encodeURIComponent(id)}`;
+const workspaceUrl = (id: string, mode: OpenMode = 'rw'): string =>
+  `/?artipod=${encodeURIComponent(id)}${mode === 'rw' ? '' : `&mode=${mode}`}`;
 
 /** Workspaces this browser has opened before (the "on this machine" list). */
 interface LocalEntry {
   id: string;
   kind: 'pod' | 'blank';
   lastOpened: number;
+  mode?: OpenMode;
+  /** Maintained by the workspace: the overlay upper holds unpushed writes. */
+  hasChanges?: boolean;
 }
 
 const REGISTRY_KEY = 'artipod-workspaces';
@@ -49,9 +59,21 @@ function readRegistry(): LocalEntry[] {
   }
 }
 
-function recordWorkspace(id: string, kind: 'pod' | 'blank'): void {
+function recordWorkspace(id: string, kind: 'pod' | 'blank', mode: OpenMode): void {
+  const prev = readRegistry().find((e) => e.id === id);
   const rest = readRegistry().filter((e) => e.id !== id);
-  localStorage.setItem(REGISTRY_KEY, JSON.stringify([{ id, kind, lastOpened: Date.now() }, ...rest].slice(0, 50)));
+  localStorage.setItem(
+    REGISTRY_KEY,
+    JSON.stringify([{ ...prev, id, kind, mode, lastOpened: Date.now() }, ...rest].slice(0, 50)),
+  );
+}
+
+function patchRegistry(id: string, patch: Partial<LocalEntry>): void {
+  const entries = readRegistry();
+  const hit = entries.find((e) => e.id === id);
+  if (!hit) return;
+  Object.assign(hit, patch);
+  localStorage.setItem(REGISTRY_KEY, JSON.stringify(entries));
 }
 
 function dropFromRegistry(ids: string[]): void {
@@ -85,8 +107,11 @@ export default function Page() {
     const hash = decodeURIComponent(window.location.hash.slice(1));
     if (hash.startsWith('/pod/')) return window.location.replace(workspaceUrl(hash.slice('/pod/'.length)));
     if (hash.startsWith('/new/')) return window.location.replace(workspaceUrl(hash.slice('/new/'.length)));
-    const id = new URLSearchParams(window.location.search).get('artipod');
-    setRoute(id ? { id, isRef: id.includes(':') } : null);
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('artipod');
+    const modeParam = params.get('mode');
+    const mode: OpenMode = modeParam === 'cow' || modeParam === 'ro' ? modeParam : 'rw';
+    setRoute(id ? { id, isRef: id.includes(':'), mode } : null);
   }, []);
 
   if (route === undefined) return <main className="h-[var(--app-height)] bg-black" />;
@@ -133,17 +158,12 @@ function Catalog() {
           }
         }
         dropFromRegistry(swept);
-        // "local layer" = the overlay upper holds writes, not merely "was opened"
-        const uppers = (await fs.promises.readdir('/.artipod/upper').catch(() => [])) as string[];
-        const changed = new Set<string>();
-        for (const name of uppers) {
-          const entries = (await fs.promises.readdir(`/.artipod/upper/${name}`).catch(() => [])) as string[];
-          if (entries.length > 0) changed.add(decodeURIComponent(name));
-        }
-        setChangedRefs(changed);
       } catch {
         // no /work yet (or init failed) — registry alone
       }
+      // "local changes" = unpushed writes, tracked by the workspace tab (the
+      // overlay upper is a mount only THAT page can see)
+      setChangedRefs(new Set(registry.filter((e) => e.hasChanges).map((e) => e.id)));
       const byId = new Map<string, LocalEntry>(
         registry.filter((e) => !swept.includes(e.id) && (e.kind === 'pod' || onDisk.includes(e.id))).map((e) => [e.id, e]),
       );
@@ -155,14 +175,19 @@ function Catalog() {
   }, []);
 
   const localById = new Map(local.map((e) => [e.id, e]));
-  const localOnly = local.filter((e) => !serverRefs?.includes(e.id));
+  // cow-opened pods with unpushed writes have FORKED — they belong to this machine
+  const cowForks = local.filter((e) => e.kind === 'pod' && e.mode === 'cow' && changedRefs.has(e.id));
+  const localOnly = [
+    ...cowForks,
+    ...local.filter((e) => !serverRefs?.includes(e.id) && !cowForks.includes(e)),
+  ];
 
-  const row = (id: string, badge: React.ReactNode, note: string) => (
-    <li key={id}>
+  const row = (id: string, badge: React.ReactNode, note: string, mode: OpenMode = 'rw') => (
+    <li key={`${id}:${mode}`}>
       {/* full reload on purpose: a workspace boots its FS once per page */}
       {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
       <a
-        href={workspaceUrl(id)}
+        href={workspaceUrl(id, mode)}
         className="flex items-center justify-between gap-3 px-3 py-2 rounded bg-[#333] hover:bg-[#3d3d3d] text-sm"
       >
         <span className="font-mono truncate">{id}</span>
@@ -172,6 +197,24 @@ function Catalog() {
         </span>
       </a>
     </li>
+  );
+
+  /** rw / cow / ro choices per server pod — how the overlay behaves. */
+  const modeLinks = (ref: string) => (
+    <span className="flex items-center gap-1 font-mono">
+      {(['rw', 'cow', 'ro'] as const).map((m) => (
+        // eslint-disable-next-line @next/next/no-html-link-for-pages
+        <a
+          key={m}
+          href={workspaceUrl(ref, m)}
+          onClick={(e) => e.stopPropagation()}
+          title={m === 'rw' ? 'writes auto-push to the server' : m === 'cow' ? 'writes stay on this machine (fork)' : 'read-only'}
+          className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] uppercase text-gray-400 hover:text-white hover:border-gray-400"
+        >
+          {m}
+        </a>
+      ))}
+    </span>
   );
 
   return (
@@ -195,19 +238,20 @@ function Catalog() {
           <ul className="space-y-2 mb-6">
             {serverRefs.map((ref) => {
               const opened = localById.get(ref);
+              const isCowFork = cowForks.some((e) => e.id === ref);
               return row(
                 ref,
                 <>
-                  {/* the overlay auto-pushes (~2s debounce): a non-empty upper is
-                      UNPUSHED work; opened + empty upper means fully synced */}
-                  {changedRefs.has(ref) ? (
+                  {modeLinks(ref)}
+                  {!isCowFork && changedRefs.has(ref) ? (
                     <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
                   ) : (
-                    opened && <span className="rounded bg-gray-700 px-1.5 py-0.5">synced</span>
+                    !isCowFork && opened && <span className="rounded bg-gray-700 px-1.5 py-0.5">synced</span>
                   )}
                   <span className="rounded bg-blue-900/60 px-1.5 py-0.5">server</span>
                 </>,
-                opened?.lastOpened ? new Date(opened.lastOpened).toLocaleDateString() : '',
+                opened?.lastOpened && !isCowFork ? new Date(opened.lastOpened).toLocaleDateString() : '',
+                opened?.mode === 'cow' || opened?.mode === 'ro' ? opened.mode : 'rw',
               );
             })}
           </ul>
@@ -223,8 +267,11 @@ function Catalog() {
             {localOnly.map((e) =>
               row(
                 e.id,
-                <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">{e.kind === 'blank' ? 'blank' : 'local'}</span>,
+                <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">
+                  {e.kind === 'blank' ? 'blank' : e.mode === 'cow' ? 'cow fork' : 'local'}
+                </span>,
                 e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
+                e.mode ?? 'rw',
               ),
             )}
           </ul>
@@ -242,7 +289,122 @@ function Catalog() {
   );
 }
 
-type ViewMode = 'tree' | 'editor' | 'settings' | 'agent';
+type ViewMode = 'tree' | 'editor' | 'settings' | 'agent' | 'layers';
+
+interface LayerRow {
+  path: string;
+  size: number;
+  mtime?: string;
+  digest: string;
+}
+
+/** The pod's stack: local upper (top) over the basis manifest's layers. */
+function LayersView({ route, ready }: { route: Route; ready: boolean }) {
+  const [layers, setLayers] = useState<LayerRow[] | null>(null);
+  const [upperFiles, setUpperFiles] = useState<string[]>([]);
+  const [head, setHead] = useState<{ digest: string; actor?: string; parents?: string } | null>(null);
+
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      const { fs } = await import('@/lib/filesystem');
+      // the local upper is the writable top layer
+      const upperDir = route.isRef ? `/.artipod/upper/${encodeURIComponent(route.id)}` : `/work/${route.id}`;
+      const walk = async (dir: string, prefix = ''): Promise<string[]> => {
+        const out: string[] = [];
+        const entries = (await fs.promises.readdir(dir).catch(() => [])) as string[];
+        for (const name of entries) {
+          const full = `${dir}/${name}`;
+          const stat = await fs.promises.stat(full).catch(() => null);
+          if (stat?.isDirectory()) out.push(...(await walk(full, `${prefix}${name}/`)));
+          else out.push(`${prefix}${name}`);
+        }
+        return out;
+      };
+      setUpperFiles(await walk(upperDir));
+
+      if (!route.isRef) {
+        setLayers([]);
+        return;
+      }
+      try {
+        const refRes = await fetch(`/api/pods/refs?name=${encodeURIComponent(route.id)}`);
+        if (!refRes.ok) throw new Error(String(refRes.status));
+        const { manifestDigest } = (await refRes.json()) as { manifestDigest: string };
+        const manifest = (await (await fetch(`/api/pods/blobs/${manifestDigest}`)).json()) as {
+          layers: { digest: string; size: number; annotations?: Record<string, string> }[];
+          annotations?: Record<string, string>;
+        };
+        setHead({
+          digest: manifestDigest,
+          actor: manifest.annotations?.['org.artipod.actor'],
+          parents: manifest.annotations?.['org.artipod.parents'],
+        });
+        setLayers(
+          manifest.layers.map((l) => ({
+            path: l.annotations?.['org.artipod.path'] ?? '(layer)',
+            size: l.size,
+            mtime: l.annotations?.['org.artipod.mtime'],
+            digest: l.digest,
+          })),
+        );
+      } catch {
+        setLayers([]);
+      }
+    })();
+  }, [route.id, route.isRef, ready]);
+
+  const fmtSize = (n: number): string => (n > 1024 * 1024 ? `${(n / 1048576).toFixed(1)} MB` : n > 1024 ? `${(n / 1024).toFixed(1)} kB` : `${n} B`);
+
+  return (
+    <div className="mx-auto max-w-2xl p-6 text-sm">
+      <h2 className="font-semibold mb-1">Layers</h2>
+      <p className="text-gray-400 mb-4">
+        top wins on conflicts — the writable upper sits over the basis layers{route.mode === 'cow' ? ' (cow: the upper never pushes)' : route.mode === 'ro' ? ' (ro: the upper stays empty)' : ' (rw: the upper auto-pushes into a new head)'}
+      </p>
+
+      <div className="rounded border border-emerald-800 bg-emerald-950/40 px-3 py-2 mb-2">
+        <div className="flex justify-between">
+          <span className="font-mono">upper (this machine, writable)</span>
+          <span className="text-gray-400">{upperFiles.length} file{upperFiles.length === 1 ? '' : 's'}</span>
+        </div>
+        {upperFiles.length > 0 && (
+          <ul className="mt-1 text-gray-400 font-mono text-xs">
+            {upperFiles.slice(0, 20).map((f) => (
+              <li key={f}>/{f}</li>
+            ))}
+            {upperFiles.length > 20 && <li>… {upperFiles.length - 20} more</li>}
+          </ul>
+        )}
+      </div>
+
+      {route.isRef &&
+        (layers === null ? (
+          <p className="text-gray-500">loading basis manifest…</p>
+        ) : (
+          <>
+            {head && (
+              <p className="text-xs text-gray-500 mb-2 font-mono">
+                head {head.digest.slice(7, 19)}…{head.actor ? ` · pushed by ${head.actor}` : ''}
+                {head.parents ? ' · has parents (history reachable)' : ''}
+              </p>
+            )}
+            <ul className="space-y-1">
+              {layers.map((l) => (
+                <li key={l.digest + l.path} className="rounded border border-gray-700 bg-[#252526] px-3 py-1.5 flex justify-between gap-3">
+                  <span className="font-mono truncate">{l.path}</span>
+                  <span className="shrink-0 text-xs text-gray-400">
+                    {l.mtime ? `${new Date(l.mtime).toLocaleString()} · ` : ''}
+                    {fmtSize(l.size)} · {l.digest.slice(7, 15)}…
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ))}
+    </div>
+  );
+}
 
 function Workspace({ route }: { route: Route }) {
   const [fsReady, setFsReady] = useState(false);
@@ -261,7 +423,7 @@ function Workspace({ route }: { route: Route }) {
   const events = eventsRef.current;
 
   useEffect(() => {
-    recordWorkspace(route.id, route.isRef ? 'pod' : 'blank');
+    recordWorkspace(route.id, route.isRef ? 'pod' : 'blank', route.mode);
     // Hold a lifetime lock so the catalog's sweeper knows this tab is alive.
     try {
       void navigator.locks.request(wsLockName(route.id), { mode: 'shared' }, () => new Promise(() => {}));
@@ -280,6 +442,10 @@ function Workspace({ route }: { route: Route }) {
       ]);
       if (cancelled) return;
       setFsInfo(info);
+      // cow forks must survive the tab: give the overlay upper its own
+      // IndexedDB store instead of the default in-memory one
+      const { IndexedDB } = await import('@zenfs/dom');
+      const cowUpper = route.mode === 'cow' ? { backend: IndexedDB, storeName: `artipod-upper::${route.id}` } : undefined;
       // Each blank workspace gets its own fresh root; a basis brings its own.
       const blankRoot = `/work/${route.id}`;
       if (!route.isRef) await fs.promises.mkdir(blankRoot, { recursive: true }).catch(() => {});
@@ -322,7 +488,9 @@ function Workspace({ route }: { route: Route }) {
               }
               return actor;
             })(),
-            ...(route.isRef ? { basis: { ref: route.id } } : {}),
+            ...(route.isRef
+              ? { basis: { ref: route.id, upperConfig: cowUpper }, autoPush: route.mode === 'rw' }
+              : {}),
           },
           // The demo reads transparently hydrate (sync plan D6); find/ls stay zero-fetch.
           hydration: {
@@ -342,6 +510,23 @@ function Workspace({ route }: { route: Route }) {
       (window as unknown as { __artipod?: unknown }).__artipod = pod;
       setWorkspaceRoot(pod.basis ? pod.basis.at : blankRoot);
       setFsReady(true);
+
+      // Track unpushed work for the catalog: after each change (and each
+      // successful push) probe the upper and persist the verdict.
+      const upperAt = route.isRef ? `/.artipod/upper/${encodeURIComponent(route.id)}` : blankRoot;
+      let probeTimer: ReturnType<typeof setTimeout> | null = null;
+      const probe = () => {
+        if (probeTimer) clearTimeout(probeTimer);
+        probeTimer = setTimeout(() => {
+          void (async () => {
+            const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
+            patchRegistry(route.id, { hasChanges: entries.length > 0 });
+          })();
+        }, 500);
+      };
+      events.on('fs:changed', probe);
+      events.on('sync:push', probe);
+      probe();
     })().catch((e) => console.error('Sandbox init failed:', e));
     return () => {
       cancelled = true;
@@ -441,9 +626,13 @@ function Workspace({ route }: { route: Route }) {
         </a>
         <span className="px-2 font-mono text-sm text-gray-300 truncate max-w-[14rem]" title={route.id}>
           {route.isRef ? route.id : `blank ${route.id}`}
+          {route.mode !== 'rw' && (
+            <span className="ml-1.5 rounded border border-gray-600 px-1 text-[10px] uppercase text-gray-400">{route.mode}</span>
+          )}
         </span>
         {tab('tree', <FolderTree size={16} />, 'Files')}
         {tab('editor', <FileCode size={16} />, `Editor${editingFile ? ` (${editingFile.split('/').pop()})` : ''}`, !editingFile)}
+        {tab('layers', <LayersIcon size={16} />, 'Layers')}
         {tab('agent', <Bot size={16} />, 'Agent')}
         <div className="ml-auto flex items-center">
           <button
@@ -511,7 +700,7 @@ function Workspace({ route }: { route: Route }) {
               filepath={editingFile}
               onClose={handleCloseEditor}
               events={events}
-              readOnly={fsInfo ? !fsInfo.isPrimaryTab : false}
+              readOnly={route.mode === 'ro' || (fsInfo ? !fsInfo.isPrimaryTab : false)}
             />
           </div>
         )}
@@ -526,6 +715,13 @@ function Workspace({ route }: { route: Route }) {
         {activeView === 'settings' && fsInfo && (
           <div className="absolute inset-0 z-10">
             <StorageSettings backend={fsInfo.backend} isPrimaryTab={fsInfo.isPrimaryTab} />
+          </div>
+        )}
+
+        {/* Layers: the pod's stack — basis manifest layers + the local upper on top */}
+        {activeView === 'layers' && (
+          <div className="absolute inset-0 z-10 overflow-auto">
+            <LayersView route={route} ready={fsReady} />
           </div>
         )}
       </div>
@@ -545,7 +741,7 @@ function Workspace({ route }: { route: Route }) {
             <Terminal
               sandbox={sandboxRef.current}
               events={events}
-              readOnly={fsInfo ? !fsInfo.isPrimaryTab : false}
+              readOnly={route.mode === 'ro' || (fsInfo ? !fsInfo.isPrimaryTab : false)}
             />
           )}
         </div>

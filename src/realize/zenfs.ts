@@ -164,7 +164,12 @@ export interface ZenFsPodOptions
      * Phase D): index pull if needed → lazy view → writable CoW overlay at
      * `at` (default /open/<ref-slug>); default cwd moves there.
      */
-    basis?: { ref: string; at?: string };
+    basis?: {
+      ref: string;
+      at?: string;
+      /** ZenFS mount config for the overlay upper (default: InMemory). Pass a persistent backend for cow forks. */
+      upperConfig?: unknown;
+    };
     /** LWW identity on pushed layers (Decision D8). Default: random per boot. */
     actor?: string;
     /**
@@ -329,7 +334,7 @@ export async function createZenFsPod(
     const at = options.sync.basis.at ?? `/open/${ref.replace(/[^a-zA-Z0-9._-]+/g, '_')}`;
     try {
       if (!(await hydrator.stateFor(ref))) await hydrator.pullIndex(ref);
-      await hydrator.openOverlay(ref, at);
+      await hydrator.openOverlay(ref, at, { upperConfig: options.sync.basis.upperConfig });
       basis = { ref, at };
       if (!options.cwd) defaultCwd = at;
     } catch (e) {
