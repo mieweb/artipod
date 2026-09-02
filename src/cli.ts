@@ -28,6 +28,36 @@ import { publishDirectory } from './server/folder.js';
 import type { ServeCliOptions } from './server/serve.js';
 import { nodePodFs } from './nodePodFs.js';
 
+const SERVE_FLAGS = `  --port <n>         listen port (default 2784; 0 = OS-assigned)
+  --host <addr>      bind address (default 127.0.0.1); a non-localhost bind with
+                     no token generates one and requires it on every surface
+  --store <path>     the served OCI-layout store (default ~/.artipod/store,
+                     env ARTIPOD_STORE)
+  --publish <dir>    snapshot a folder into the store at boot (<basename>:latest)
+                     and write pushed heads back into it (repeatable)
+  --token <t>        require 'Authorization: Bearer <t>' (or Basic — docker login)
+                     on every surface, read-write (env ARTIPOD_SERVE_TOKEN)
+  --read-token <t>   read-only token: pulls yes, pushes/exec no
+                     (env ARTIPOD_SERVE_READ_TOKEN)
+  --lock <ref>       lock a tag (immutable: every head move is refused with 403;
+                     repeatable, persisted in <store>/locks.json)
+  --unlock <ref>     release a locked tag (repeatable)
+  --seal-pattern <re>  which tags are create-once. DEFAULT: '^[^_]' — every tag
+                     not starting with _ seals on its first push; _-tags stay
+                     mutable (open drafts/workstreams). A sealed tag refuses
+                     moves and deletes with 403 (env ARTIPOD_SEAL_PATTERN)
+  --no-seal          disable seal enforcement (classic mutable-tag registry)
+  --only web|registry   narrow the surfaces (default: both)
+  --cors <origin>    allow a browser origin (repeatable; default deny)
+  --oci-allow <host> allow an upstream registry host for the relay (repeatable;
+                     env ARTIPOD_OCI_ALLOWED_HOSTS; default deny)
+  --no-exec          disable the exec-session surface
+  --no-ui            headless landing only (skip UI resolution); the UI resolves
+                     local-first: ARTIPOD_UI_DIR (a static build), then the
+                     ARTIPOD_UI_REF ref in the store (default artipod-ui:latest)
+  --open             open the printed URL in a browser
+`;
+
 const HELP = `usage:
   artipod run [-it] [REF|POD] [flags]   boot a pod: empty, resumed from a kept POD id,
                                         or materialized from an image/volume REF
@@ -86,37 +116,23 @@ examples:
   artipod run -it -v ~/data:/mnt/data:ro   # live host mount to copy from (cp into /work)
 
 flags for serve:
-  --port <n>         listen port (default 2784; 0 = OS-assigned)
-  --host <addr>      bind address (default 127.0.0.1); a non-localhost bind with
-                     no token generates one and requires it on every surface
-  --store <path>     the served OCI-layout store (default ~/.artipod/store,
-                     env ARTIPOD_STORE)
-  --publish <dir>    snapshot a folder into the store at boot (<basename>:latest)
-                     and write pushed heads back into it (repeatable)
-  --token <t>        require 'Authorization: Bearer <t>' (or Basic — docker login)
-                     on every surface, read-write (env ARTIPOD_SERVE_TOKEN)
-  --read-token <t>   read-only token: pulls yes, pushes/exec no
-                     (env ARTIPOD_SERVE_READ_TOKEN)
-  --lock <ref>       lock a tag (immutable: every head move is refused with 403;
-                     repeatable, persisted in <store>/locks.json)
-  --unlock <ref>     release a locked tag (repeatable)
-  --seal-pattern <re>  which tags are create-once. DEFAULT: '^[^_]' — every tag
-                     not starting with _ seals on its first push; _-tags stay
-                     mutable (open drafts/workstreams). A sealed tag refuses
-                     moves and deletes with 403 (env ARTIPOD_SEAL_PATTERN)
-  --no-seal          disable seal enforcement (classic mutable-tag registry)
-  --only web|registry   narrow the surfaces (default: both)
-  --cors <origin>    allow a browser origin (repeatable; default deny)
-  --oci-allow <host> allow an upstream registry host for the relay (repeatable;
-                     env ARTIPOD_OCI_ALLOWED_HOSTS; default deny)
-  --no-exec          disable the exec-session surface
-  --no-ui            headless landing only (skip UI resolution); the UI resolves
-                     local-first: ARTIPOD_UI_DIR (a static build), then the
-                     ARTIPOD_UI_REF ref in the store (default artipod-ui:latest)
-  --open             open the printed URL in a browser
-
+${SERVE_FLAGS}
 inside the shell, run \`artipod\` for the pod verbs (snapshot, commit, push, …).
 `;
+
+const SERVE_HELP = `usage: artipod serve [flags] — host the store over HTTP (web UI at /, native sync
+API at /api, OCI registry at /v2). Full docs: docs/serve.md.
+
+examples:
+  artipod serve                          # http://127.0.0.1:2784, open on localhost
+  artipod serve --port 8080              # change the port
+  artipod serve --host 0.0.0.0           # serve the network — a token is GENERATED
+                                         # and printed (required on every surface)
+  artipod serve --host 0.0.0.0 --token s3cret --read-token viewer
+  artipod serve --publish ~/notes        # snapshot the folder, write pushes back
+
+flags:
+${SERVE_FLAGS}`;
 
 interface RunArgs {
   ref?: string;
@@ -146,6 +162,11 @@ function parseArgs(
   | { prune: true; force: boolean; all: boolean; podsRoot: string }
   | { importDir: string; importRef: string; store: string }
   | { serve: ServeCliOptions } {
+  // per-verb help: `artipod serve --help` answers serve questions without the run wall
+  if (args[0] === 'serve' && (args.includes('--help') || args.includes('-h'))) {
+    stdout.write(SERVE_HELP);
+    exit(0);
+  }
   if (args.includes('--help') || args.includes('-h') || args.length === 0) return { help: true };
   if (args.includes('--version')) return { version: true };
   const [verb, ...rest] = args;
