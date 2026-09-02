@@ -11,7 +11,7 @@ import FileTree from '@/components/FileTree';
 import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
 import EncryptionBadge from '@/components/EncryptionBadge';
-import { installKeyBroker } from '@/lib/keys';
+import { installKeyBroker, getBrokerKey, getBrokerLease, requireBrokerKey, brokerLogin, onBrokerChange } from '@/lib/keys';
 import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon, UploadCloud } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
@@ -1045,8 +1045,13 @@ function Workspace({ route }: { route: Route }) {
       // — one local working state per ref; the mode only chooses whether it
       // auto-pushes. An in-memory rw upper would start every session empty,
       // and its first push would strip the previous session's overlay layers.
-      const { mountConfigForSpec } = await import('@artipod/core/sandbox');
-      const cowUpper =
+      const { mountConfigForSpec, encryptedMount } = await import('@artipod/core/sandbox');
+      // Broker serve (--encrypt): the working tree encrypts at rest too —
+      // the persistent upper is an EncryptedFS over the same backing store,
+      // keyed off the leased (device-unwrapped, non-extractable) KEK.
+      const brokerKey = getBrokerKey();
+      const brokerLease = getBrokerLease();
+      const rawUpper =
         route.isRef && route.mode !== 'ro'
           ? await mountConfigForSpec(
               info?.backend === 'opfs'
@@ -1054,6 +1059,7 @@ function Workspace({ route }: { route: Route }) {
                 : { type: 'indexeddb', store: `artipod-upper::${encodeURIComponent(route.id)}` },
             )
           : undefined;
+      const cowUpper = rawUpper && brokerKey ? await encryptedMount({ inner: rawUpper, getKey: requireBrokerKey }) : rawUpper;
       // Each blank workspace gets its own fresh root; a basis brings its own.
       const blankRoot = `/work/${route.id}`;
       if (!route.isRef) await fs.promises.mkdir(blankRoot, { recursive: true }).catch(() => {});
@@ -1188,6 +1194,23 @@ function Workspace({ route }: { route: Route }) {
             onDemand: 'fetch',
             ...(route.isRef ? { defaultRef: route.id } : {}),
           },
+          // Broker mode: the pod's local blob store encrypts at rest with the
+          // leased KEK, adopted at boot (before the basis pull writes a byte).
+          authority:
+            brokerKey && brokerLease
+              ? {
+                  encrypt: true,
+                  adopt: { lease: brokerLease, key: brokerKey },
+                  login: async () => {
+                    if (!(await brokerLogin(actor))) throw new Error('broker login failed — is the serve still running with --encrypt?');
+                    const lease = getBrokerLease();
+                    const key = getBrokerKey();
+                    const podId = podRef.current?.oci.store.getSuperblock().podId;
+                    if (!lease || !key || !podId) throw new Error('broker login failed');
+                    return { lease, cryptoKeys: { [podId]: key } };
+                  },
+                }
+              : undefined,
           onEdit: (path) => {
             setEditingFile(path);
             setActiveView('editor');
@@ -1198,6 +1221,13 @@ function Workspace({ route }: { route: Route }) {
       );
       sandboxRef.current = pod.createSandbox({ confineTo: pod.basis ? pod.basis.at : blankRoot });
       podRef.current = pod;
+      // Lease renewals re-key the pod's keyring (else it locks mid-session at
+      // the old expiry). Page-lifetime subscription, like the events wiring.
+      onBrokerChange(() => {
+        const lease = getBrokerLease();
+        const key = getBrokerKey();
+        if (lease && key) void pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key });
+      });
       // demo/debug escape hatch (see docs/console.md's future replacement)
       (window as unknown as { __artipod?: unknown }).__artipod = pod;
       setWorkspaceRoot(pod.basis ? pod.basis.at : blankRoot);

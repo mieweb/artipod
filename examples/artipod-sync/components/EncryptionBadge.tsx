@@ -19,7 +19,7 @@ export default function EncryptionBadge({ principal }: { principal: () => Promis
     return (
       <span
         className="inline-flex items-center gap-1 rounded bg-emerald-900/60 px-1.5 py-0.5 text-[11px] text-emerald-200"
-        title={`encrypted at rest on the server (key broker: ${state.meta?.authority}) — this tab holds a key lease as ${state.principal} until ${timeShort(state.expiresAt)}; it renews automatically and lives in memory only`}
+        title={`encrypted at rest on the server (key broker: ${state.meta?.authority}) — this tab holds a key lease as ${state.principal} until ${timeShort(state.expiresAt)}; the key arrived ECDH-wrapped to this device (non-extractable, memory only) and also encrypts this tab's local store and working tree`}
       >
         <Lock size={11} /> encrypted · leased until {timeShort(state.expiresAt)}
       </span>
