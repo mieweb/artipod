@@ -40,6 +40,10 @@ Publish-as is also the designated exit from a [locked tag](serve.md#locked-tags)
 the server refuses to move the locked head (403), but a cow fork plus
 `publish <new-ref>` branches it under a name you own.
 
+How these gestures compose into a full lifecycle — long-lived entities with
+concurrent open workstreams that seal into immutable milestones (patients,
+cases, customers, tickets) — is written up in [dossier.md](dossier.md).
+
 ## Composing with Yjs (YORM)
 
 [mieweb/yorm](https://github.com/mieweb/yorm) keeps a canonical object in a `Y.Doc`, syncs it live over its own websocket runtime, and persists encoded Yjs state. Both layers are join-semilattices; they compose because they operate at different granularities with different tempos:

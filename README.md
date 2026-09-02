@@ -157,6 +157,7 @@ Built for real disconnection profiles: a 24-hour offline clinic visit, a light-m
 | [docs/bash-isolate.md](docs/bash-isolate.md) | The bash isolate in browser and server: semantics, sessions, limits |
 | [docs/encryption.md](docs/encryption.md) | Encryption at rest, keyring, leases, offline grants, delegation |
 | [docs/security-model.md](docs/security-model.md) | Agent confinement, `sudo`, approval flow, admin policy |
+| [docs/dossier.md](docs/dossier.md) | The dossier pattern: long-lived entities (patients, cases, customers, tickets) with open workstreams and sealed, immutable milestones |
 | [docs/console.md](docs/console.md) | The Ctrl+~ installable console module |
 | [artipod-layer-plan.md](artipod-layer-plan.md) | The living implementation plan (phases, decisions, worklogs) |
 
