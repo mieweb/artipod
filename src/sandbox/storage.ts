@@ -81,7 +81,9 @@ export interface MountSpec {
   dir?: string;
 }
 
-async function mountConfigForSpec(spec: MountSpec): Promise<MountConfig> {
+/** Resolve a MountSpec to a ZenFS mount config (what `mount -t` uses; also
+ * the right way to place overlay uppers on the same backend as the app). */
+export async function mountConfigForSpec(spec: MountSpec): Promise<MountConfig> {
   const { InMemory } = await import('@zenfs/core');
   if (spec.type === 'memory') return { backend: InMemory };
   const { IndexedDB, WebAccess } = await import('@zenfs/dom');

@@ -525,12 +525,18 @@ function Workspace({ route }: { route: Route }) {
       if (cancelled) return;
       setFsInfo(info);
       // cow forks must survive the tab: give the overlay upper its own
-      // IndexedDB store instead of the default in-memory one. Encoded like
-      // the upper mount (/.artipod/upper/<enc>) — a raw '/' in the ref would
-      // splinter the /proc/storage/idb tree into fake directories.
-      const { IndexedDB } = await import('@zenfs/dom');
+      // persistent store ON THE SAME BACKEND as the app fs — an OPFS subdir
+      // when the app runs on OPFS, IndexedDB otherwise. Encoded like the
+      // upper mount (/.artipod/upper/<enc>) so /proc/storage stays aligned.
+      const { mountConfigForSpec } = await import('@artipod/core/sandbox');
       const cowUpper =
-        route.mode === 'cow' ? { backend: IndexedDB, storeName: `artipod-upper::${encodeURIComponent(route.id)}` } : undefined;
+        route.mode === 'cow'
+          ? await mountConfigForSpec(
+              info?.backend === 'opfs'
+                ? { type: 'opfs', dir: `uppers/${encodeURIComponent(route.id)}` }
+                : { type: 'indexeddb', store: `artipod-upper::${encodeURIComponent(route.id)}` },
+            )
+          : undefined;
       // Each blank workspace gets its own fresh root; a basis brings its own.
       const blankRoot = `/work/${route.id}`;
       if (!route.isRef) await fs.promises.mkdir(blankRoot, { recursive: true }).catch(() => {});
