@@ -29,12 +29,15 @@ Three consumer surfaces, one layer:
 ### The CLI: a pod in your terminal (✅)
 
 ```sh
-npx github:mieweb/artipod run -it              # fresh pod → artipod-bash, kept under ~/.artipod/pods
-npx github:mieweb/artipod run -it alpine:3.22  # a registry image, cloned in writable
-artipod pods                                   # past runs — the `docker ps -a` of pods
-artipod run -it 500edf8b                       # resume a kept pod by id prefix
-artipod run -it field/notes:1                  # a ref you pushed earlier (npm i -g @artipod/core)
+npx @artipod/core run -it              # fresh pod → artipod-bash, kept under ~/.artipod/pods
+npx @artipod/core run -it alpine:3.22  # a registry image, cloned in writable
+npm install -g @artipod/core           # permanent `artipod` on PATH
+artipod pods                           # past runs — the `docker ps -a` of pods
+artipod run -it 500edf8b               # resume a kept pod by id prefix
+artipod run -it field/notes:1          # a ref you pushed earlier
 ```
+
+(`npx github:mieweb/artipod` also works — it compiles from source on first run and caches.)
 
 Pods are kept on the real filesystem by default, so `exit` loses nothing — create-on-write: a
 fresh pod that saw no writes is quietly removed again. `--rm` makes the pod ephemeral (RAM only
@@ -129,6 +132,7 @@ Built for real disconnection profiles: a 24-hour offline clinic visit, a light-m
 | Doc | Contents |
 |---|---|
 | [docs/containers.md](docs/containers.md) | Orientation for Docker/Podman/Kubernetes users: concept map, where each runtime fits, the pod-term collision |
+| [docs/on-disk-layout.md](docs/on-disk-layout.md) | What lands on disk: `~/.artipod`, the per-pod `/.artipod` store, plaintext vs ciphertext |
 | [docs/browser.md](docs/browser.md) | Browser implementation: ZenFS backends, OPFS/IndexedDB, ingest API, devices |
 | [docs/linux.md](docs/linux.md) | Linux/server implementation: realizers, Docker hardening, stores, deployment |
 | [docs/bash-isolate.md](docs/bash-isolate.md) | The bash isolate in browser and server: semantics, sessions, limits |
