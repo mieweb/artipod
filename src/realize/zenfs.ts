@@ -156,6 +156,8 @@ export interface ZenFsPodOptions
   cwd?: string;
   /** OCI layer: transport for `artipod image pull` (store always available). */
   oci?: { transport?: OciTransport };
+  /** `artipod publish [<name:tag>]` handler (app-provided — see docs/sync.md). */
+  publish?: (target?: string) => Promise<string>;
   /** Manager sync: the remote PodStore push/pull/clone talk to. */
   sync?: {
     remote?: import('../manager/pod-store.js').PodStore;
@@ -465,6 +467,7 @@ export async function createZenFsPod(
             authority: authorityContext,
             hydrator,
             pushBasis,
+            publish: options.publish,
           }),
           ...(options.extraCommands ?? []),
         ],

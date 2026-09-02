@@ -10,7 +10,7 @@ import Editor from '@/components/Editor';
 import FileTree from '@/components/FileTree';
 import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
-import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon } from 'lucide-react';
+import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon, UploadCloud } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
 const Terminal = dynamicImport(() => import('@/components/Terminal'), {
@@ -34,6 +34,8 @@ interface Route {
   id: string;
   isRef: boolean;
   mode: OpenMode;
+  /** ?publish=<name:tag> — publish right after the workspace boots (catalog one-step flow). */
+  publishIntent?: string;
 }
 
 const workspaceUrl = (id: string, mode: OpenMode = 'rw'): string =>
@@ -235,7 +237,7 @@ export default function Page() {
     const id = params.get('artipod');
     const modeParam = params.get('mode');
     const mode: OpenMode = modeParam === 'cow' || modeParam === 'ro' ? modeParam : 'rw';
-    setRoute(id ? { id, isRef: id.includes(':'), mode } : null);
+    setRoute(id ? { id, isRef: id.includes(':'), mode, publishIntent: params.get('publish') ?? undefined } : null);
   }, []);
 
   if (route === undefined) return <main className="h-[var(--app-height)] bg-black" />;
@@ -512,9 +514,29 @@ function Catalog() {
             {localOnly.map((e) =>
               row(
                 e.id,
-                <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">
-                  {e.kind === 'blank' ? 'blank' : e.mode === 'cow' ? 'cow fork' : 'local'}
-                </span>,
+                <>
+                  <button
+                    onClick={(ev) => {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      const target = window.prompt(
+                        e.kind === 'blank'
+                          ? 'Publish this workspace to the server as (name:tag):'
+                          : `Publish: keep "${e.id}" to push back, or enter a new name:tag to branch`,
+                        e.kind === 'blank' ? `me/${e.id}:1` : e.id,
+                      );
+                      // the workspace boots its own pod — publish runs there via ?publish=
+                      if (target) window.location.href = `${workspaceUrl(e.id, e.mode ?? 'rw')}&publish=${encodeURIComponent(target)}`;
+                    }}
+                    className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] uppercase text-gray-400 hover:text-white hover:border-gray-400"
+                    title="Publish to the server"
+                  >
+                    publish
+                  </button>
+                  <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">
+                    {e.kind === 'blank' ? 'blank' : e.mode === 'cow' ? 'cow fork' : 'local'}
+                  </span>
+                </>,
                 e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
                 e.mode ?? 'rw',
               ),
@@ -522,13 +544,7 @@ function Catalog() {
           </ul>
         )}
 
-        {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-        <a
-          href={workspaceUrl(crypto.randomUUID().slice(0, 8))}
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded border border-gray-600 text-gray-300 hover:bg-[#333] text-sm"
-        >
-          <Plus size={14} /> New blank workspace
-        </a>
+        <NewWorkspace />
 
         <button
           onClick={() => setTermOpen((o) => !o)}
@@ -558,6 +574,35 @@ function Catalog() {
 }
 
 type ViewMode = 'tree' | 'editor' | 'settings' | 'agent' | 'layers';
+
+/** New workspace: blank, or named-and-published in a single step (?publish= intent). */
+function NewWorkspace() {
+  const [name, setName] = useState('');
+  const go = () => {
+    const id = crypto.randomUUID().slice(0, 8);
+    const target = name.trim();
+    if (!target) return void (window.location.href = workspaceUrl(id));
+    if (!target.includes(':')) return alert(`include a tag — e.g. ${target}:1`);
+    window.location.href = `${workspaceUrl(id)}&publish=${encodeURIComponent(target)}`;
+  };
+  return (
+    <div className="flex gap-2">
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && go()}
+        placeholder="name:tag (optional — publishes right away)"
+        className="flex-1 px-3 py-2 rounded border border-gray-600 bg-transparent text-sm text-gray-200 placeholder-gray-500 font-mono"
+      />
+      <button
+        onClick={go}
+        className="flex items-center justify-center gap-2 px-3 py-2 rounded border border-gray-600 text-gray-300 hover:bg-[#333] text-sm shrink-0"
+      >
+        <Plus size={14} /> {name.trim() ? 'Create & publish' : 'New blank workspace'}
+      </button>
+    </div>
+  );
+}
 
 interface LayerRow {
   path: string;
@@ -685,6 +730,9 @@ function Workspace({ route }: { route: Route }) {
   const [termHeight, setTermHeight] = useState(300);
   const sandboxRef = useRef<Sandbox | null>(null);
   const podRef = useRef<Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>> | null>(null);
+  // publish action shared by the shell verb, the nav button, and ?publish= intents
+  const doPublishRef = useRef<((target?: string) => Promise<string>) | null>(null);
+  const [publishing, setPublishing] = useState(false);
   // One event bus per pod: terminal, tree, editor and agent stay coherent.
   const eventsRef = useRef<PodEvents | null>(null);
   if (!eventsRef.current) eventsRef.current = new PodEvents();
@@ -735,86 +783,85 @@ function Workspace({ route }: { route: Route }) {
         window.prompt(`Personal access token for ${origin} (stored in memory):`),
       );
       const remote = new HttpPodStore('/api/pods');
-      // `publish [<name:tag>]` — the workspace's door to the server:
+      // publish [<name:tag>] — the workspace's door to the server (docs/sync.md):
       //   cow fork,  no arg  → push back: the fork's changes advance its own ref
       //   any ws,   <ref>    → publish-as: this workspace becomes a NEW server ref
       //   blank              → <ref> required (an anonymous scratch dir has no name to push to)
+      // Canonical verb: `artipod publish` (core); `publish` and the UI button alias it.
+      const doPublish = async (target?: string): Promise<string> => {
+        const pod = podRef.current;
+        if (!pod) throw new Error('workspace still opening — try again');
+        if (route.mode === 'ro') throw new Error('read-only workspace');
+        const { pushOverlay } = await import('@artipod/core/manager');
+        const { sha256 } = await import('@artipod/core/oci');
+        const store = pod.oci.store;
+        const MANIFEST_TYPE = 'application/vnd.oci.image.manifest.v1+json';
+        const enc = new TextEncoder();
+        if (!target || target === route.id) {
+          if (!route.isRef) throw new Error('a blank workspace needs a name — publish <name:tag>, e.g. publish me/scratch:1');
+          // push back — pushOverlay directly (not pod.pushBasis) so a server
+          // refusal (e.g. a sealed tag) surfaces here instead of a console warning
+          const result = await pushOverlay({
+            store,
+            zfs: pod.zfs,
+            ref: route.id,
+            upperAt: `/.artipod/upper/${encodeURIComponent(route.id)}`,
+            deletions: pod.hydrator?.overlayDeletions(route.id) ?? new Map(),
+            actor,
+            remote,
+          });
+          if (!result.pushed) return `nothing to push for ${route.id}`;
+          await patchRegistry(route.id, { hasChanges: false });
+          return `pushed ${route.id}: ${result.overlayLayers} overlay layer(s) → ${result.manifestDigest.slice(0, 19)}…`;
+        }
+        if (!target.includes(':')) throw new Error(`include a tag — e.g. publish ${target}:1`);
+        let upperAt: string;
+        let deletions = new Map<string, number>();
+        if (route.isRef) {
+          // publish-as: new ref = basis layers + this fork's upper; the source tag never moves
+          const basisHead = await store.getRef(route.id);
+          if (!basisHead) throw new Error(`no local head for ${route.id}`);
+          await store.putRef(target, basisHead.manifestDigest, MANIFEST_TYPE);
+          upperAt = `/.artipod/upper/${encodeURIComponent(route.id)}`;
+          deletions = pod.hydrator?.overlayDeletions(route.id) ?? deletions;
+        } else {
+          // blank: seed an empty head, then the whole workspace is the overlay
+          const config = enc.encode(JSON.stringify({ artipod: { formatVersion: 1 }, rootfs: { type: 'layers', diff_ids: [] } }));
+          const configDigest = await sha256(config);
+          await store.putBlob(config, configDigest);
+          const manifest = {
+            schemaVersion: 2,
+            mediaType: MANIFEST_TYPE,
+            config: { mediaType: 'application/vnd.oci.image.config.v1+json', digest: configDigest, size: config.length },
+            layers: [],
+          };
+          const manifestBytes = enc.encode(JSON.stringify(manifest));
+          const manifestDigest = await sha256(manifestBytes);
+          await store.putBlob(manifestBytes, manifestDigest);
+          await store.putRef(target, manifestDigest, MANIFEST_TYPE);
+          upperAt = blankRoot;
+        }
+        const result = await pushOverlay({ store, zfs: pod.zfs, ref: target, upperAt, deletions, actor, remote });
+        if (route.isRef) {
+          // the changes live under the new name now — the fork is clean again
+          for (const name of (await fs.promises.readdir(upperAt).catch(() => [])) as string[]) {
+            await fs.promises.rm(`${upperAt}/${name}`, { recursive: true }).catch(() => {});
+          }
+          deletions.clear();
+          await patchRegistry(route.id, { hasChanges: false });
+        }
+        setTimeout(() => {
+          window.location.href = workspaceUrl(target, 'rw');
+        }, 800);
+        return `published ${target} (${result.overlayLayers} layer(s) over ${route.isRef ? `${route.id}'s basis` : 'an empty basis'}) — opening it read-write…`;
+      };
+      doPublishRef.current = doPublish;
       const { defineCommand } = await import('just-bash/browser');
       const publishCmd = defineCommand('publish', async (cmdArgs) => {
-        const failCmd = (msg: string) => ({ stdout: '', stderr: `publish: ${msg}\n`, exitCode: 1 });
-        const pod = podRef.current;
-        if (!pod) return failCmd('workspace still opening — try again');
-        if (route.mode === 'ro') return failCmd('read-only workspace');
-        const target = cmdArgs[0];
         try {
-          const { pushOverlay } = await import('@artipod/core/manager');
-          const { sha256 } = await import('@artipod/core/oci');
-          const store = pod.oci.store;
-          const MANIFEST_TYPE = 'application/vnd.oci.image.manifest.v1+json';
-          const enc = new TextEncoder();
-          if (!target) {
-            if (!route.isRef) return failCmd('a blank workspace needs a name — publish <name:tag>, e.g. publish me/scratch:1');
-            // push back — pushOverlay directly (not pod.pushBasis) so a server
-            // refusal (e.g. a locked tag) surfaces here instead of a console warning
-            const result = await pushOverlay({
-              store,
-              zfs: pod.zfs,
-              ref: route.id,
-              upperAt: `/.artipod/upper/${encodeURIComponent(route.id)}`,
-              deletions: pod.hydrator?.overlayDeletions(route.id) ?? new Map(),
-              actor,
-              remote,
-            });
-            if (!result.pushed) return { stdout: `nothing to push for ${route.id}\n`, stderr: '', exitCode: 0 };
-            await patchRegistry(route.id, { hasChanges: false });
-            return { stdout: `pushed ${route.id}: ${result.overlayLayers} overlay layer(s) → ${result.manifestDigest.slice(0, 19)}…\n`, stderr: '', exitCode: 0 };
-          }
-          if (!target.includes(':')) return failCmd(`include a tag — e.g. publish ${target}:1`);
-          let upperAt: string;
-          let deletions = new Map<string, number>();
-          if (route.isRef) {
-            // publish-as: new ref = basis layers + this fork's upper; the source tag never moves
-            const basisHead = await store.getRef(route.id);
-            if (!basisHead) return failCmd(`no local head for ${route.id}`);
-            await store.putRef(target, basisHead.manifestDigest, MANIFEST_TYPE);
-            upperAt = `/.artipod/upper/${encodeURIComponent(route.id)}`;
-            deletions = pod.hydrator?.overlayDeletions(route.id) ?? deletions;
-          } else {
-            // blank: seed an empty head, then the whole workspace is the overlay
-            const config = enc.encode(JSON.stringify({ artipod: { formatVersion: 1 }, rootfs: { type: 'layers', diff_ids: [] } }));
-            const configDigest = await sha256(config);
-            await store.putBlob(config, configDigest);
-            const manifest = {
-              schemaVersion: 2,
-              mediaType: MANIFEST_TYPE,
-              config: { mediaType: 'application/vnd.oci.image.config.v1+json', digest: configDigest, size: config.length },
-              layers: [],
-            };
-            const manifestBytes = enc.encode(JSON.stringify(manifest));
-            const manifestDigest = await sha256(manifestBytes);
-            await store.putBlob(manifestBytes, manifestDigest);
-            await store.putRef(target, manifestDigest, MANIFEST_TYPE);
-            upperAt = blankRoot;
-          }
-          const result = await pushOverlay({ store, zfs: pod.zfs, ref: target, upperAt, deletions, actor, remote });
-          if (route.isRef) {
-            // the changes live under the new name now — the fork is clean again
-            for (const name of (await fs.promises.readdir(upperAt).catch(() => [])) as string[]) {
-              await fs.promises.rm(`${upperAt}/${name}`, { recursive: true }).catch(() => {});
-            }
-            deletions.clear();
-            await patchRegistry(route.id, { hasChanges: false });
-          }
-          setTimeout(() => {
-            window.location.href = workspaceUrl(target, 'rw');
-          }, 800);
-          return {
-            stdout: `published ${target} (${result.overlayLayers} layer(s) over ${route.isRef ? `${route.id}'s basis` : 'an empty basis'}) — opening it read-write…\n`,
-            stderr: '',
-            exitCode: 0,
-          };
+          return { stdout: `${await doPublish(cmdArgs[0])}\n`, stderr: '', exitCode: 0 };
         } catch (e) {
-          return failCmd((e as Error).message);
+          return { stdout: '', stderr: `publish: ${(e as Error).message}\n`, exitCode: 1 };
         }
       });
       // Phase 3: the app's layout is a declarative manifest; initFileSystem
@@ -856,6 +903,7 @@ function Workspace({ route }: { route: Route }) {
             setEditingFile(path);
             setActiveView('editor');
           },
+          publish: doPublish,
           extraCommands: [publishCmd],
         },
       );
@@ -865,6 +913,16 @@ function Workspace({ route }: { route: Route }) {
       (window as unknown as { __artipod?: unknown }).__artipod = pod;
       setWorkspaceRoot(pod.basis ? pod.basis.at : blankRoot);
       setFsReady(true);
+
+      // Catalog one-step flow: /?artipod=<id>&publish=<name:tag>
+      if (route.publishIntent) {
+        window.history.replaceState(null, '', workspaceUrl(route.id, route.mode));
+        try {
+          await doPublish(route.publishIntent);
+        } catch (e) {
+          alert(`publish ${route.publishIntent}: ${(e as Error).message}`);
+        }
+      }
 
       // Track unpushed work for the catalog: after each change (and each
       // successful push) probe the upper and persist the verdict.
@@ -989,6 +1047,38 @@ function Workspace({ route }: { route: Route }) {
         {tab('editor', <FileCode size={16} />, `Editor${editingFile ? ` (${editingFile.split('/').pop()})` : ''}`, !editingFile)}
         {tab('layers', <LayersIcon size={16} />, 'Layers')}
         {tab('agent', <Bot size={16} />, 'Agent')}
+        {route.mode !== 'ro' && (
+          <button
+            onClick={() => {
+              void (async () => {
+                const doPublish = doPublishRef.current;
+                if (!doPublish || publishing) return;
+                const suggestion = route.isRef ? route.id : `me/${route.id}:1`;
+                const target = window.prompt(
+                  route.isRef
+                    ? `Publish: keep "${route.id}" to push back, or enter a new name:tag to branch`
+                    : 'Publish this workspace to the server as (name:tag):',
+                  suggestion,
+                );
+                if (!target) return;
+                setPublishing(true);
+                try {
+                  alert(await doPublish(target));
+                } catch (e) {
+                  alert(`publish: ${(e as Error).message}`);
+                } finally {
+                  setPublishing(false);
+                }
+              })();
+            }}
+            disabled={!fsReady || publishing}
+            className="flex items-center gap-2 px-4 py-3 text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d] disabled:opacity-40"
+            title="Publish this workspace to the server (also: `artipod publish` in the terminal)"
+          >
+            <UploadCloud size={16} />
+            {publishing ? 'Publishing…' : 'Publish'}
+          </button>
+        )}
         <div className="ml-auto flex items-center">
           <button
             onClick={() => setTermOpen((o) => !o)}

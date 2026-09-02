@@ -41,6 +41,12 @@ export interface ArtipodCommandContext {
   hydrator?: Hydrator;
   /** Phase E/F: push the open overlay's changes (merge-on-push joins heads). */
   pushBasis?: () => Promise<unknown>;
+  /**
+   * `artipod publish [<name:tag>]` — app-provided: push this workspace to the
+   * server under a (new) name. Resolves a user-facing message; throws on
+   * refusal (e.g. a sealed tag). See docs/sync.md § Publishing a workspace.
+   */
+  publish?: (target?: string) => Promise<string>;
   /** Phase 6.5: login/lock/status against the pod's authority. */
   authority?: {
     /** App-provided authentication → lease + keys (crosses the wire in real deployments). */
@@ -75,6 +81,8 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   gc                                   delete unreachable blobs, report bytes
   push <ref>                           sync a ref to the manager (missing digests only)
   pull <ref>                           sync a ref from the manager + index it
+  publish [<name:tag>]                 push this workspace to the server (docs/sync.md);
+                                       no arg = push back to the opened ref
   clone <ref> [path]                   materialize a ref as a writable tree
   login                                authenticate → lease → keyring populated
   lock [--all|<pod>]                   drop keys now (reads fail EACCES until login)
@@ -99,10 +107,17 @@ async function resolveStoredRef(store: OciStore, refArg: string): Promise<{ disp
 
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
   defineCommand('artipod', async (args) => {
-    const { store, zfs, transport, events, snapshots, remote, authority, hydrator, pushBasis } = podContext;
+    const { store, zfs, transport, events, snapshots, remote, authority, hydrator, pushBasis, publish } = podContext;
     const [group, sub, ...rest] = args;
 
     try {
+      if (group === 'publish') {
+        if (!publish) return fail('artipod publish: not available in this pod (no publish handler configured)');
+        const message = await publish(sub);
+        events?.emit('fs:changed', { origin: 'exec' });
+        return ok(message.endsWith('\n') ? message : `${message}\n`);
+      }
+
       if (group === 'login') {
         if (!authority) return fail('artipod: no authority configured for this pod (set authority in pod options)');
         const result = await authority.login();
