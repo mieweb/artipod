@@ -12,6 +12,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { TerminalSession } from '@artipod/core/host';
 import type { PodEvents } from '@artipod/core/host';
+// version of the bundled @artipod/core (resolved at build time)
+import corePkg from '@artipod/core/package.json';
 import type { Sandbox } from '@/lib/sandbox/types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -34,10 +36,10 @@ const BANNER = [
   `${CYAN}├─┤├┬┘ │ │├─┘│ │ ││───├┴┐├─┤└─┐├─┤${RESET}`,
   `${CYAN}┴ ┴┴└─ ┴ ┴┴  └─┘─┴┘   └─┘┴ ┴└─┘┴ ┴${RESET}`,
   '',
-  `${DIM}bash over ZenFS · just-bash${RESET}`,
+  `${DIM}@artipod/core ${corePkg.version} · bash over ZenFS · just-bash${RESET}`,
   REPO_URL,
   `${DIM}Type 'help' or 'notes' to get started.${RESET}`,
-  `${DIM}Tab completes · Ctrl+C cancels${RESET}`,
+  `${DIM}Tab completes · Ctrl+C cancels · Ctrl+\` toggles terminal${RESET}`,
 ];
 
 export default function Terminal({ sandbox, events, readOnly }: TerminalProps) {

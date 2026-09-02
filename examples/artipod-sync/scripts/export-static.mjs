@@ -28,6 +28,14 @@ if (existsSync(stash)) {
 await rename(apiDir, stash);
 let code = 1;
 try {
+  // The file:../.. dep is COPIED into node_modules at install time and goes
+  // stale silently (a 0.5.0 copy once shipped inside a 0.7.1 export) —
+  // refresh it every export.
+  console.log('refreshing the copied @artipod/core from ../.. …');
+  await rm(join(root, 'node_modules/@artipod/core'), { recursive: true, force: true });
+  const install = spawnSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: root, stdio: 'inherit' });
+  if (install.status !== 0) process.exit(install.status ?? 1);
+
   await rm(join(root, '.next'), { recursive: true, force: true });
   await rm(join(root, 'out'), { recursive: true, force: true });
   code = spawnSync('npx', ['next', 'build'], {
