@@ -119,6 +119,7 @@ export function releaseLease(): void {
   leaseB64 = null;
   currentLease = null;
   podKeys = {};
+  void idbPut('session', undefined).catch(() => {}); // explicit release drops the persisted grant too
   if (state.status !== 'none') state = { status: 'locked', meta: state.meta, lastRenewedAt: state.lastRenewedAt };
   notify();
 }
@@ -187,36 +188,92 @@ function cachedMeta(): KeysMeta | null {
   }
 }
 
-/** This tab's ECDH device keypair (non-extractable, structured-cloned into IndexedDB). */
-async function deviceKeyPair(): Promise<{ privateKey: CryptoKey; publicKeyB64: string }> {
-  const DB = 'artipod-keys';
-  const STORE = 'device';
-  const db = await new Promise<IDBDatabase>((resolveDb, reject) => {
-    const req = indexedDB.open(DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+/** Small IndexedDB access for this tab's key material (one DB, one store). */
+const DB_NAME = 'artipod-keys';
+const DB_STORE = 'device';
+
+async function openDb(): Promise<IDBDatabase> {
+  return new Promise((resolveDb, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(DB_STORE);
     req.onsuccess = () => resolveDb(req.result);
     req.onerror = () => reject(req.error);
   });
-  const read = await new Promise<{ privateKey: CryptoKey; publicKeyB64: string } | undefined>((resolveGet, reject) => {
-    const req = db.transaction(STORE).objectStore(STORE).get('keypair');
-    req.onsuccess = () => resolveGet(req.result as { privateKey: CryptoKey; publicKeyB64: string } | undefined);
-    req.onerror = () => reject(req.error);
-  });
-  if (read) {
+}
+
+async function idbGet<T>(key: string): Promise<T | undefined> {
+  const db = await openDb();
+  try {
+    return await new Promise<T | undefined>((resolveGet, reject) => {
+      const req = db.transaction(DB_STORE).objectStore(DB_STORE).get(key);
+      req.onsuccess = () => resolveGet(req.result as T | undefined);
+      req.onerror = () => reject(req.error);
+    });
+  } finally {
     db.close();
-    return read;
   }
+}
+
+async function idbPut(key: string, value: unknown): Promise<void> {
+  const db = await openDb();
+  try {
+    await new Promise<void>((resolvePut, reject) => {
+      const tx = db.transaction(DB_STORE, 'readwrite');
+      if (value === undefined) tx.objectStore(DB_STORE).delete(key);
+      else tx.objectStore(DB_STORE).put(value, key);
+      tx.oncomplete = () => resolvePut();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+/** This tab's ECDH device keypair (non-extractable, structured-cloned into IndexedDB). */
+async function deviceKeyPair(): Promise<{ privateKey: CryptoKey; publicKeyB64: string }> {
+  const read = await idbGet<{ privateKey: CryptoKey; publicKeyB64: string }>('keypair');
+  if (read) return read;
   const { generateDeviceKeyPair } = await import('@artipod/core/manager');
   const pair = await generateDeviceKeyPair();
   const record = { privateKey: pair.privateKey, publicKeyB64: pair.publicKeyB64 };
-  await new Promise<void>((resolvePut, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(record, 'keypair');
-    tx.oncomplete = () => resolvePut();
-    tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+  await idbPut('keypair', record);
   return record;
+}
+
+/**
+ * The persisted session is the OFFLINE-GRANT exception (docs/encryption.md):
+ * lease + device-WRAPPED keys — ciphertext only this device's non-extractable
+ * key can unwrap, bounded by the lease's validity. Raw/unwrapped keys never
+ * persist; without it, every reload while offline would lose a live lease
+ * (online reloads just hid that by silently re-logging-in).
+ */
+async function restoreSession(): Promise<boolean> {
+  try {
+    const wire = await idbGet<WireWrappedLoginResult>('session');
+    if (!wire) return false;
+    if (Date.parse(wire.lease.expiresAt) <= Date.now() + 5_000) {
+      await idbPut('session', undefined);
+      return false;
+    }
+    const device = await deviceKeyPair();
+    const { unwrapLoginResult } = await import('@artipod/core/manager');
+    const { lease, cryptoKeys } = await unwrapLoginResult(wire, device.privateKey);
+    currentLease = lease;
+    podKeys = cryptoKeys;
+    leaseB64 = btoa(JSON.stringify(lease));
+    state = {
+      status: 'leased',
+      meta: state.meta ?? cachedMeta(),
+      principal: lease.principal,
+      expiresAt: Date.parse(lease.expiresAt),
+      lastRenewedAt: state.lastRenewedAt,
+    };
+    armRenewal(lease.principal);
+    notify();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Login against the broker; principal is the catalog's LWW actor id. */
@@ -237,6 +294,7 @@ export async function brokerLogin(principal: string): Promise<boolean> {
     const wire = (await res.json()) as WireWrappedLoginResult;
     const { unwrapLoginResult } = await import('@artipod/core/manager');
     const { lease, cryptoKeys } = await unwrapLoginResult(wire, device.privateKey);
+    await idbPut('session', wire).catch(() => {}); // wrapped ciphertext only — the offline-grant exception
     currentLease = lease;
     podKeys = cryptoKeys;
     leaseB64 = btoa(JSON.stringify(lease));
@@ -305,10 +363,14 @@ export async function installKeyBroker(principal: () => Promise<string>): Promis
       return res;
     }) as typeof fetch;
   }
+  // A still-valid device-wrapped session survives reloads — ONLINE AND
+  // OFFLINE alike (no silent re-login needed, no lost lease when the
+  // network is gone). Falls through to a fresh login when absent/expired.
+  if (state.status !== 'leased') await restoreSession();
   const meta = await probe();
   if (!meta) {
-    // unreachable serve: a previously-seen broker shows LOCKED (offline
-    // reload), an unknown serve shows nothing
+    // unreachable serve: a restored lease stays leased; a previously-seen
+    // broker without one shows LOCKED; an unknown serve shows nothing
     const known = cachedMeta();
     if (known && state.status === 'none') {
       state = { status: 'locked', meta: known };
