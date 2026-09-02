@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-02
+
+### Added
+
+- **`artipod serve`** ([docs/serve.md](docs/serve.md)): one process, one OCI-layout store, three surfaces — the browser UI at `/`, the native sync API at `/api`, and a real OCI Distribution registry at `/v2` (pull *and* push; the conformance suite runs in CI). `--publish <dir>` snapshots folders at boot and materializes pushed heads back into them; `--cors`, `--oci-allow`, `--only web|registry`, `--open` shape the deployment. Default port 2784 ("ARTI").
+- **Embeddable app**: `createArtipodApp({ store, … })` is a single WinterCG fetch handler — mount it in Next.js, Hono, Bun/Deno, or the bundled node adapter (`serveApp`). The CLI runs the same object.
+- **Tokens (V7/S5)**: localhost stays open; a non-localhost bind with no token generates one (Jupyter-style). `--token` (rw) and `--read-token` (ro) accept Bearer or Basic — `docker login` works.
+- **Sealed tags — enforced by default** ([docs/dossier.md](docs/dossier.md)): tags not starting with `_` are **create-once** — the push that creates them lands, every later move or delete is 403 on both write surfaces. `_`-tags are open drafts (mutable, deletable, collaborative). `--seal-pattern <re>` narrows the rule, `--no-seal` restores classic mutable tags, `--lock`/`--unlock <ref>` add explicit per-ref locks (persisted in `<store>/locks.json`). `--publish` folder refs are exempt (write-back is their point). The refs API marks sealed entries `locked` so UIs can drop write affordances up front.
+- **Tag delete**: `DELETE /v2/<name>/manifests/<tag>` and `DELETE /api/pods/refs?name=` retire a ref pointer (blobs and the parents DAG stay) — refused with 403 for sealed tags. `PodStore` gains optional `deleteRef`.
+- **`artipod publish [<name:tag>]`** (pod verb + `publish` alias in the demo shell): push the workspace to the server. A blank workspace publishes under a new name; an opened ref pushes back with no argument or **publishes-as** a new ref sharing every basis layer (content-addressed — nothing re-uploads). `pushOverlay` gains `permanent` for publish flows, so a later empty overlay push can never strip published layers.
+- **Demo: catalog + modes** ([examples/artipod-sync](examples/artipod-sync)): `/` lists the server's refs (manifest digest chip, locked badge, per-ref `rw`/`cow`/`ro` open modes) and this machine's workspaces; cow forks persist across tabs in their own upper; publish buttons in the File Explorer and Layers views, one-step "create & publish" for new workspaces, and content-based reconciliation that recognizes a published blank as its server ref and retires the local copy.
+- **Terminal line editing**: Ctrl+A/E, Home/End, arrows, forward Delete, mid-line insert, and Ctrl+R reverse-i-search over history in the pod terminal (`TerminalSession`).
+- **The dossier pattern** ([docs/dossier.md](docs/dossier.md)): entities (patients, cases, customers, tickets) as repositories, open workstreams as `_` sigil tags, sealed milestones as create-once tags, per-workstream folders as the concurrency policy, and late-binding identity as a merge. Plus [docs/multi-tab.md](docs/multi-tab.md) on browser multi-tab semantics.
+
+### Changed
+
+- **Loopback registry refs use plain HTTP**: `artipod run 127.0.0.1:2784/ref` pulls from a local serve without TLS ceremony.
+
 ## [0.7.1] - 2026-09-02
 
 ### Fixed

@@ -1,6 +1,6 @@
 {
   "name": "artipod",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "The artipod CLI — `npx artipod run -it`. Alias package for @artipod/core.",
   "type": "module",
   "bin": {
@@ -10,7 +10,7 @@
     "bin.mjs"
   ],
   "dependencies": {
-    "@artipod/core": "^0.7.1"
+    "@artipod/core": "^0.8.0"
   },
   "engines": {
     "node": ">=20.0.0"
