@@ -22,6 +22,7 @@ import { createArtipodApp } from './app.js';
 import { serveApp } from './node.js';
 import { publishDirectory, materializeRef } from './folder.js';
 import { PublishMap, withinRoots } from './publish-map.js';
+import { ENCRYPTED_REF_MEDIA_TYPE } from '../manager/encrypted-sync.js';
 import { loadOrCreateAuthority, ensurePodKek } from './authority-dir.js';
 import { DEFAULT_KEY_TTL_MS } from './keys-handler.js';
 import { UI_REF } from './ui-ref.js';
@@ -319,6 +320,11 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     relay: { allowedHosts: relayHosts },
     onRefPut,
     isLocked,
+    // Refs advertise their at-rest reality (UIs badge per-artipod): an e2e
+    // envelope, or a manifest stored as ciphertext. Works keyless too — the
+    // alias twin is on disk regardless of who holds the key.
+    isEncrypted: async (r) =>
+      r.mediaType === ENCRYPTED_REF_MEDIA_TYPE || (await store.isBlobEncrypted(r.manifestDigest)),
     keys: broker
       ? { authority: broker.authority, podIds: [broker.podId], capTtlMs: broker.capTtlMs }
       : undefined,

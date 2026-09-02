@@ -119,6 +119,16 @@ export class OciLayoutPodStore implements PodStore {
     return false;
   }
 
+  /** True when the blob sits on disk as ciphertext (alias twin present) — key not required. */
+  async isBlobEncrypted(digest: Digest): Promise<boolean> {
+    try {
+      await this.fs.stat(this.aliasPath(digest));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async getBlob(digest: Digest): Promise<Uint8Array> {
     let raw: Uint8Array;
     try {

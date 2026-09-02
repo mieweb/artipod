@@ -253,8 +253,13 @@ describe('artipod serve', () => {
 
     // /v2 is off in broker mode; unleased blob reads are 401
     expect((await fetch(`${broker.url}/v2/`)).status).toBe(403);
-    const refs = (await (await fetch(`${broker.url}/api/pods/refs`)).json()) as { ref: string; manifestDigest: string }[];
+    const refs = (await (await fetch(`${broker.url}/api/pods/refs`)).json()) as {
+      ref: string;
+      manifestDigest: string;
+      encrypted?: boolean;
+    }[];
     const head = refs.find((r) => r.ref === 'vault:latest')!;
+    expect(head.encrypted).toBe(true); // at-rest ciphertext advertised per ref
     expect((await fetch(`${broker.url}/api/pods/blobs/${head.manifestDigest}`)).status).toBe(401);
 
     // login → lease header → plaintext reads
@@ -308,6 +313,9 @@ describe('artipod serve', () => {
     await src.putRef('blind:1', dManifest, 'application/vnd.oci.image.manifest.v1+json');
     const relay = new HttpPodStore(`${blind.url}/api/pods`);
     await pushEncryptedRef(src, relay, 'blind:1', key);
+    // even a keyless serve advertises the envelope ref as encrypted
+    const blindRefs = (await (await fetch(`${blind.url}/api/pods/refs`)).json()) as { ref: string; encrypted?: boolean }[];
+    expect(blindRefs.find((r) => r.ref === 'blind:1')?.encrypted).toBe(true);
     const { bindContext } = await import('@zenfs/core');
     const ctx = bindContext({ root: '/blind-dst' });
     const dst = new OciStore(ctx.fs as unknown as import('../sandbox/types.js').ZenFsLike);

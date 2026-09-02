@@ -45,6 +45,8 @@ export interface ArtipodAppOptions {
   merge?: PodStoreHandlerOptions['merge'];
   /** Tag immutability (both surfaces): a locked ref rejects head moves with 403. */
   isLocked?: PodStoreHandlerOptions['isLocked'];
+  /** Refs GET decoration: entries whose content is encrypted carry `encrypted: true`. */
+  isEncrypted?: PodStoreHandlerOptions['isEncrypted'];
   /** Ref operations journal (both surfaces): every head move/delete, before→after. */
   onRefOp?: PodStoreHandlerOptions['onRefOp'];
   /** Static UI dir (node-only) served for anything outside /api and /v2. */
@@ -87,6 +89,7 @@ export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
         onRefPut: options.onRefPut,
         merge: options.merge,
         isLocked: options.isLocked,
+        isEncrypted: options.isEncrypted,
         onRefOp: options.onRefOp,
       })
     : null;

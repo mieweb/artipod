@@ -42,6 +42,8 @@ export interface PodStoreHandlerOptions {
   onRefPut?: (ref: string, manifestDigest: Digest) => void | Promise<void>;
   /** Tag immutability: a locked ref rejects every head move with 403 (reads unaffected). */
   isLocked?: (ref: string) => boolean | Promise<boolean>;
+  /** Refs GET decoration: true ⇒ the entry carries `encrypted: true` (at-rest ciphertext or an e2e envelope). */
+  isEncrypted?: (ref: { ref: string; manifestDigest: Digest; mediaType: string }) => boolean | Promise<boolean>;
   /** Fires after every ref mutation — the operations-journal hook (append-only audit). */
   onRefOp?: (op: RefOperation) => void | Promise<void>;
   /**
@@ -55,7 +57,7 @@ export interface PodStoreHandlerOptions {
 }
 
 export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHandler {
-  const { store, auth, onRefPut, isLocked, onRefOp } = options;
+  const { store, auth, onRefPut, isLocked, isEncrypted, onRefOp } = options;
   const mergeOptions: MergeOptions | null = options.merge === false ? null : typeof options.merge === 'object' ? options.merge : {};
   return async (req, path) => {
     const method = req.method.toUpperCase();
@@ -109,8 +111,11 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
     if (kind === 'refs') {
       if (method === 'GET') {
         const name = new URL(req.url).searchParams.get('name');
-        const decorate = async (r: { ref: string }) =>
-          (await isLocked?.(r.ref)) ? { ...r, locked: true } : r;
+        const decorate = async (r: { ref: string; manifestDigest: Digest; mediaType: string }) => ({
+          ...r,
+          ...((await isLocked?.(r.ref)) ? { locked: true } : {}),
+          ...((await isEncrypted?.(r)) ? { encrypted: true } : {}),
+        });
         if (name) {
           const ref = await store.getRef(name);
           return ref ? json(await decorate(ref)) : json({ error: 'not found' }, 404);
