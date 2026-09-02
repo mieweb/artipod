@@ -70,29 +70,82 @@ async function uiFs() {
   return fs;
 }
 
-async function readState(): Promise<UiState> {
-  const fs = await uiFs();
-  try {
-    return JSON.parse((await fs.promises.readFile(STATE_FILE, 'utf8')) as string) as UiState;
-  } catch {
-    // first boot: adopt any legacy localStorage state, then forget it
-    const state: UiState = { workspaces: [] };
+/**
+ * State IO goes through RAW OPFS handles when the app runs on OPFS: each
+ * tab's ZenFS instance caches independently, so zenfs reads could be stale
+ * and the cross-tab lock would serialize nothing. Raw handles always see
+ * the latest bytes. Non-OPFS backends fall back to the (single-tab) zenfs.
+ */
+async function readStateText(): Promise<string | null> {
+  const info = await initFileSystem();
+  if (info?.backend === 'opfs') {
     try {
-      state.workspaces = JSON.parse(localStorage.getItem(LEGACY_REGISTRY_KEY) ?? '[]') as LocalEntry[];
-      state.actor = localStorage.getItem(LEGACY_ACTOR_KEY) ?? undefined;
-      localStorage.removeItem(LEGACY_REGISTRY_KEY);
-      localStorage.removeItem(LEGACY_ACTOR_KEY);
+      const root = await navigator.storage.getDirectory();
+      const dir = await (await root.getDirectoryHandle('artipod-fs')).getDirectoryHandle('.artipod');
+      const file = await (await dir.getFileHandle('ui-state.json')).getFile();
+      return await file.text();
     } catch {
-      // no localStorage — fresh state
+      return null;
     }
-    return state;
   }
+  const fs = await uiFs();
+  return ((await fs.promises.readFile(STATE_FILE, 'utf8').catch(() => null)) as string | null) ?? null;
+}
+
+async function writeStateText(text: string): Promise<void> {
+  const info = await initFileSystem();
+  if (info?.backend === 'opfs') {
+    const root = await navigator.storage.getDirectory();
+    const fsDir = await root.getDirectoryHandle('artipod-fs', { create: true });
+    const dir = await fsDir.getDirectoryHandle('.artipod', { create: true });
+    const handle = await dir.getFileHandle('ui-state.json', { create: true });
+    const w = await handle.createWritable();
+    await w.write(text);
+    await w.close();
+    return;
+  }
+  const fs = await uiFs();
+  await fs.promises.mkdir('/.artipod', { recursive: true }).catch(() => {});
+  await fs.promises.writeFile(STATE_FILE, text);
+}
+
+async function readState(): Promise<UiState> {
+  const text = await readStateText();
+  if (text !== null) {
+    try {
+      return JSON.parse(text) as UiState;
+    } catch {
+      return { workspaces: [] };
+    }
+  }
+  // first boot: adopt any legacy localStorage state, then forget it
+  const state: UiState = { workspaces: [] };
+  try {
+    state.workspaces = JSON.parse(localStorage.getItem(LEGACY_REGISTRY_KEY) ?? '[]') as LocalEntry[];
+    state.actor = localStorage.getItem(LEGACY_ACTOR_KEY) ?? undefined;
+    localStorage.removeItem(LEGACY_REGISTRY_KEY);
+    localStorage.removeItem(LEGACY_ACTOR_KEY);
+  } catch {
+    // no localStorage — fresh state
+  }
+  return state;
 }
 
 async function writeState(state: UiState): Promise<void> {
-  const fs = await uiFs();
-  await fs.promises.mkdir('/.artipod', { recursive: true }).catch(() => {});
-  await fs.promises.writeFile(STATE_FILE, JSON.stringify(state, null, 2));
+  await writeStateText(JSON.stringify(state, null, 2));
+}
+
+/**
+ * ui-state mutations are read-modify-write on one file; two tabs racing
+ * would drop each other's updates. A Web Lock serializes them per origin
+ * (no Web Locks → run unserialized, same as before).
+ */
+async function withStateLock<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await navigator.locks.request('artipod-ui-state', fn);
+  } catch {
+    return fn();
+  }
 }
 
 async function readRegistry(): Promise<LocalEntry[]> {
@@ -101,37 +154,45 @@ async function readRegistry(): Promise<LocalEntry[]> {
 
 /** Stable per-profile LWW identity (Decision D8), minted on first use. */
 async function actorId(): Promise<string> {
-  const state = await readState();
-  if (!state.actor) {
-    state.actor = `browser:${crypto.randomUUID().slice(0, 8)}`;
-    await writeState(state);
-  }
-  return state.actor;
+  return withStateLock(async () => {
+    const state = await readState();
+    if (!state.actor) {
+      state.actor = `browser:${crypto.randomUUID().slice(0, 8)}`;
+      await writeState(state);
+    }
+    return state.actor;
+  });
 }
 
 async function recordWorkspace(id: string, kind: 'pod' | 'blank', mode: OpenMode): Promise<void> {
-  const state = await readState();
-  const prev = state.workspaces.find((e) => e.id === id);
-  state.workspaces = [
-    { ...prev, id, kind, mode, lastOpened: Date.now() },
-    ...state.workspaces.filter((e) => e.id !== id),
-  ].slice(0, 50);
-  await writeState(state);
+  await withStateLock(async () => {
+    const state = await readState();
+    const prev = state.workspaces.find((e) => e.id === id);
+    state.workspaces = [
+      { ...prev, id, kind, mode, lastOpened: Date.now() },
+      ...state.workspaces.filter((e) => e.id !== id),
+    ].slice(0, 50);
+    await writeState(state);
+  });
 }
 
 async function patchRegistry(id: string, patch: Partial<LocalEntry>): Promise<void> {
-  const state = await readState();
-  const hit = state.workspaces.find((e) => e.id === id);
-  if (!hit) return;
-  Object.assign(hit, patch);
-  await writeState(state);
+  await withStateLock(async () => {
+    const state = await readState();
+    const hit = state.workspaces.find((e) => e.id === id);
+    if (!hit) return;
+    Object.assign(hit, patch);
+    await writeState(state);
+  });
 }
 
 async function dropFromRegistry(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  const state = await readState();
-  state.workspaces = state.workspaces.filter((e) => !ids.includes(e.id));
-  await writeState(state);
+  await withStateLock(async () => {
+    const state = await readState();
+    state.workspaces = state.workspaces.filter((e) => !ids.includes(e.id));
+    await writeState(state);
+  });
 }
 
 const wsLockName = (id: string): string => `artipod-ws-${id}`;
