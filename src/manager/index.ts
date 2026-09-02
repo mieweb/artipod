@@ -20,8 +20,8 @@ export type { MergeOptions, MergeResult, ContentMerger } from './merge.js';
 // --- Phase 6.5: encryption custody + authority ------------------------------
 export { Keyring, PodLockedError, makeKeysProcProvider } from './keyring.js';
 export type { KeyringEntryInfo } from './keyring.js';
-export { Authority, DelegatedAuthority, verifyLease, encodeLoginResult, decodeLoginResult } from './authority.js';
-export type { Lease, DelegationCert, OfflineGrant, SignedCrl, LoginResult, WireLoginResult } from './authority.js';
+export { Authority, DelegatedAuthority, verifyLease, encodeLoginResult, decodeLoginResult, unwrapLoginResult } from './authority.js';
+export type { Lease, DelegationCert, OfflineGrant, SignedCrl, LoginResult, WireLoginResult, WireWrappedLoginResult, KeyedLoginResult } from './authority.js';
 export { enrollDevice, HighWaterClock, unlockWithGrant } from './grants.js';
 export type { DeviceKeyPair, UnlockOptions } from './grants.js';
 export { PodLocker, kekName } from './locker.js';

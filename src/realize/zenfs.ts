@@ -188,9 +188,16 @@ export interface ZenFsPodOptions
    * channel in real deployments).
    */
   authority?: {
-    login: () => Promise<import('../manager/authority.js').LoginResult>;
+    login: () => Promise<import('../manager/authority.js').LoginResult | import('../manager/authority.js').KeyedLoginResult>;
     /** Encrypt this pod's blobs; reads while locked fail EACCES. */
     encrypt?: boolean;
+    /**
+     * Adopt an already-established session at boot, BEFORE any store I/O
+     * (a basis open must land encrypted): the key enters the keyring under
+     * THIS pod's id with the lease's expiry. Typical source: a broker
+     * `/api/keys/login` unwrapped via `unwrapLoginResult`.
+     */
+    adopt?: { lease: import('../manager/authority.js').Lease; key: CryptoKey };
     lockMode?: import('../manager/locker.js').LockMode;
     /** Signed admin policy enabling the sudo approval flow. */
     policy?: import('../manager/policy.js').AdminPolicy;
@@ -300,6 +307,9 @@ export async function createZenFsPod(
     mode: options.authority?.lockMode,
   });
   if (options.authority?.encrypt) await locker.bind(podId);
+  if (options.authority?.adopt) {
+    await locker.adoptLease(options.authority.adopt.lease, { [podId]: options.authority.adopt.key });
+  }
   const approvals = options.authority?.policy
     ? new ApprovalBroker({ policy: options.authority.policy, keyring, events, audit, prompt: options.authority.prompt })
     : undefined;

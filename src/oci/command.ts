@@ -24,7 +24,7 @@ import type { SnapshotManager } from './snapshot.js';
 import type { PodStore } from '../manager/pod-store.js';
 import { syncRef, storeTransport, materializeImage } from '../manager/sync.js';
 import { pushEncryptedRef, pullEncryptedRef, ENCRYPTED_REF_MEDIA_TYPE } from '../manager/encrypted-sync.js';
-import type { LoginResult } from '../manager/authority.js';
+import type { KeyedLoginResult, LoginResult } from '../manager/authority.js';
 import type { PodLocker } from '../manager/locker.js';
 import type { Keyring } from '../manager/keyring.js';
 import type { Hydrator } from '../manager/hydration.js';
@@ -49,8 +49,8 @@ export interface ArtipodCommandContext {
   publish?: (target?: string) => Promise<string>;
   /** Phase 6.5: login/lock/status against the pod's authority. */
   authority?: {
-    /** App-provided authentication → lease + keys (crosses the wire in real deployments). */
-    login: () => Promise<LoginResult>;
+    /** App-provided authentication → lease + keys (raw, or device-unwrapped CryptoKeys). */
+    login: () => Promise<LoginResult | KeyedLoginResult>;
     locker: PodLocker;
     keyring: Keyring;
   };
@@ -121,7 +121,8 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
       if (group === 'login') {
         if (!authority) return fail('artipod: no authority configured for this pod (set authority in pod options)');
         const result = await authority.login();
-        await authority.locker.adoptLogin(result);
+        if ('cryptoKeys' in result) await authority.locker.adoptLease(result.lease, result.cryptoKeys);
+        else await authority.locker.adoptLogin(result);
         return ok(`lease for ${result.lease.principal}: pods [${result.lease.podIds.join(', ')}] until ${result.lease.expiresAt}\n`);
       }
 

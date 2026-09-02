@@ -270,7 +270,7 @@ describe('artipod serve', () => {
     expect(plain.status).toBe(200);
     // the decrypted layer is a (possibly gzipped) per-file tar
     const { isGzip, gunzip } = await import('../oci/gzip.js');
-    let layerTar = new Uint8Array(await plain.arrayBuffer());
+    let layerTar: Uint8Array = new Uint8Array(await plain.arrayBuffer());
     if (isGzip(layerTar)) layerTar = await gunzip(layerTar);
     expect(new TextDecoder('latin1').decode(layerTar)).toContain('BROKER-SECRET');
 

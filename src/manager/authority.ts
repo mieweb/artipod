@@ -14,6 +14,7 @@ import {
   scopeMatch,
   signJson,
   toBase64,
+  unwrapKeyForDevice,
   verifyJson,
   wrapKeyForDevice,
   type SigningKeyPair,
@@ -92,6 +93,31 @@ export function decodeLoginResult(wire: WireLoginResult): LoginResult {
     lease: wire.lease,
     keys: Object.fromEntries(Object.entries(wire.keys).map(([id, b64]) => [id, fromBase64(b64)])),
   };
+}
+
+/**
+ * The ECDH login wire (serve S5.5 follow-up): KEKs wrapped to a device
+ * public key — raw key bytes never appear in page-visible JS on either end.
+ */
+export interface WireWrappedLoginResult {
+  lease: Lease;
+  /** podId → KEK wrapped to the device key (ephemeral-static ECDH + AES-GCM). */
+  wrappedKeys: Record<string, WrappedKey>;
+}
+
+/** Login with non-extractable keys, adopted via `PodLocker.adoptLease`. */
+export interface KeyedLoginResult {
+  lease: Lease;
+  cryptoKeys: Record<string, CryptoKey>;
+}
+
+/** Unwrap a device-wrapped login: every KEK becomes a NON-EXTRACTABLE key. */
+export async function unwrapLoginResult(wire: WireWrappedLoginResult, devicePrivateKey: CryptoKey): Promise<KeyedLoginResult> {
+  const cryptoKeys: Record<string, CryptoKey> = {};
+  for (const [podId, wrapped] of Object.entries(wire.wrappedKeys)) {
+    cryptoKeys[podId] = await unwrapKeyForDevice(wrapped, devicePrivateKey);
+  }
+  return { lease: wire.lease, cryptoKeys };
 }
 
 const randomId = (): string => {

@@ -8,7 +8,7 @@ import { importBlobKey } from '../oci/cipher.js';
 import type { OciStore } from '../oci/store.js';
 import type { Keyring } from './keyring.js';
 import type { AuditLog } from './audit.js';
-import type { LoginResult } from './authority.js';
+import type { Lease, LoginResult } from './authority.js';
 
 export type LockMode = 'lock' | 'purge';
 
@@ -45,21 +45,28 @@ export class PodLocker {
 
   /** Accept a login result: KEKs into the keyring with the lease's expiry. */
   async adoptLogin(result: LoginResult): Promise<void> {
-    const expiresAt = Date.parse(result.lease.expiresAt);
-    for (const [podId, raw] of Object.entries(result.keys)) {
+    const keys: Record<string, CryptoKey> = {};
+    for (const [podId, raw] of Object.entries(result.keys)) keys[podId] = await importBlobKey(raw);
+    await this.adoptLease(result.lease, keys);
+  }
+
+  /** Same, for already-imported (e.g. device-unwrapped, non-extractable) keys. */
+  async adoptLease(lease: Lease, keys: Record<string, CryptoKey>): Promise<void> {
+    const expiresAt = Date.parse(lease.expiresAt);
+    for (const [podId, key] of Object.entries(keys)) {
       this.options.keyring.put({
         name: kekName(podId),
         kind: 'kek',
-        key: await importBlobKey(raw),
+        key,
         expiresAt,
-        meta: { principal: result.lease.principal, issuer: result.lease.issuer },
+        meta: { principal: lease.principal, issuer: lease.issuer },
       });
     }
     await this.options.audit?.append({
       at: new Date(this.clock()).toISOString(),
       kind: 'login',
-      principal: result.lease.principal,
-      details: { podIds: result.lease.podIds.join(','), expiresAt: result.lease.expiresAt },
+      principal: lease.principal,
+      details: { podIds: lease.podIds.join(','), expiresAt: lease.expiresAt },
     });
     this.armExpiryTimer();
   }

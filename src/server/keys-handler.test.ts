@@ -15,8 +15,8 @@ import { generateBlobKey, isEncryptedBlob } from '../oci/cipher.js';
 import { OciLayoutPodStore } from '../manager/pod-store.js';
 import { HttpPodStore } from '../manager/http-store.js';
 import { pushEncryptedRef, pullEncryptedRef } from '../manager/encrypted-sync.js';
-import { Authority, decodeLoginResult, verifyLease, type Lease, type WireLoginResult } from '../manager/authority.js';
-import { toBase64 } from '../manager/crypto.js';
+import { Authority, decodeLoginResult, unwrapLoginResult, verifyLease, type Lease, type WireLoginResult, type WireWrappedLoginResult } from '../manager/authority.js';
+import { generateDeviceKeyPair, toBase64 } from '../manager/crypto.js';
 import { Keyring, PodLockedError } from '../manager/keyring.js';
 import { PodLocker, kekName } from '../manager/locker.js';
 import { createArtipodApp, type ArtipodApp } from './app.js';
@@ -248,6 +248,48 @@ describe('/api/keys (broker surface)', () => {
 });
 
 describe('browser flow (keyring custody under a fake clock)', () => {
+  it('device-wrapped login (ECDH): raw KEK bytes never cross in the clear', async () => {
+    const authority = await Authority.create('home');
+    const podId = 'wrapped-pod';
+    authority.registerPod(podId);
+    await zfs.promises.mkdir('/wrapped-store', { recursive: true });
+    const serverStore = new OciLayoutPodStore(zfs.promises as unknown as PodFs, '/wrapped-store');
+    await serverStore.init();
+    const app = createArtipodApp({ store: serverStore, keys: { authority, podIds: [podId], capTtlMs: 60_000, enforce: false } });
+
+    const device = await generateDeviceKeyPair();
+    const res = await app(
+      new Request(`${base}/api/keys/login`, {
+        method: 'POST',
+        body: JSON.stringify({ principal: 'user:tab', devicePublicKey: device.publicKeyB64 }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const wire = (await res.json()) as WireWrappedLoginResult & { keys?: unknown };
+    expect(wire.keys).toBeUndefined(); // no raw key material on the wire
+    expect(wire.wrappedKeys[podId]).toMatchObject({ epk: expect.any(String), iv: expect.any(String), ciphertext: expect.any(String) });
+
+    // unwrap → NON-EXTRACTABLE key → adopt → encrypted local store round trip
+    const { lease, cryptoKeys } = await unwrapLoginResult(wire, device.privateKey);
+    expect(cryptoKeys[podId].extractable).toBe(false);
+    expect(lease.principal).toBe('user:tab');
+    const ctx = bindContext({ root: '/wrapped-browser' });
+    const local = new OciStore(ctx.fs as unknown as ZenFsLike);
+    await local.init();
+    const keyring = new Keyring();
+    const locker = new PodLocker({ keyring, stores: new Map([[podId, local]]) });
+    await locker.adoptLease(lease, cryptoKeys);
+    await locker.bind(podId);
+    const digest = await local.putBlob(text('wrapped-at-rest'));
+    expect(decode(await local.getBlob(digest))).toBe('wrapped-at-rest');
+
+    // garbage device key → 400, not a crash
+    const bad = await app(
+      new Request(`${base}/api/keys/login`, { method: 'POST', body: JSON.stringify({ devicePublicKey: 'bm90LWEta2V5' }) }),
+    );
+    expect(bad.status).toBe(400);
+  });
+
   it('login → adoptLogin → encrypted read/write; expiry locks; re-login restores', async () => {
     let now = 5_000_000;
     const clock = () => now;

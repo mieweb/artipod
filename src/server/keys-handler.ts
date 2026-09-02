@@ -10,7 +10,7 @@
  * that path needs none of this file.
  */
 import { encodeLoginResult, verifyLease, type Authority, type Lease } from '../manager/authority.js';
-import { fromBase64 } from '../manager/crypto.js';
+import { fromBase64, wrapKeyForDevice, type WrappedKey } from '../manager/crypto.js';
 import { authorizeAccess, json, type AuthHook, type PathHandler } from './common.js';
 
 /** Signed lease, base64(JSON), presented on lease-gated pod requests. */
@@ -33,13 +33,17 @@ interface LoginBody {
   principal?: string;
   podIds?: string[];
   ttlMs?: number;
+  /** base64 SPKI ECDH key: respond with wrappedKeys instead of raw KEKs. */
+  devicePublicKey?: string;
 }
 
 /**
  * PathHandler for `/api/keys` (segments after that prefix):
  *
  *   GET  <base>/            → { authority, publicKey, podIds, capTtlMs }  (metadata only, never keys)
- *   POST <base>/login {principal?, podIds?, ttlMs?} → WireLoginResult
+ *   POST <base>/login {principal?, podIds?, ttlMs?, devicePublicKey?} → WireLoginResult,
+ *        or WireWrappedLoginResult when a devicePublicKey is given — the KEKs
+ *        cross the wire ECDH-wrapped and unwrap to non-extractable keys
  */
 export function createKeysHandler(options: KeysHandlerOptions): PathHandler {
   const { authority, podIds, auth } = options;
@@ -87,6 +91,17 @@ export function createKeysHandler(options: KeysHandlerOptions): PathHandler {
         ttlMs,
         permissions,
       });
+      if (body.devicePublicKey) {
+        const wrappedKeys: Record<string, WrappedKey> = {};
+        try {
+          for (const [podId, raw] of Object.entries(result.keys)) {
+            wrappedKeys[podId] = await wrapKeyForDevice(raw, body.devicePublicKey);
+          }
+        } catch {
+          return json({ error: 'devicePublicKey is not a valid base64 SPKI P-256 ECDH key' }, 400);
+        }
+        return json({ lease: result.lease, wrappedKeys }, 200);
+      }
       return json(encodeLoginResult(result), 200);
     }
 

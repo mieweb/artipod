@@ -188,9 +188,15 @@ Two ways to serve encrypted content — pick per trust model:
   pod with a matching permission; ref **reads** stay open (pointers are the
   same metadata a blind host serves). Missing/expired → `401` + re-login
   hint; wrong scope/permission → `403`.
-- Browser side: `decodeLoginResult` → `PodLocker.adoptLogin` → the KEK sits
-  in the tab's **memory-only keyring** and the local store encrypts at rest
-  with it.
+- Browser side: the demo logs in **device-wrapped by default** — the tab
+  holds a non-extractable ECDH device keypair (persisted via structured
+  clone in IndexedDB), sends `devicePublicKey`, and the KEK arrives
+  ECDH-wrapped (`unwrapLoginResult` → a **non-extractable** AES key: raw key
+  bytes never exist in page-visible JS on either end). `PodLocker.adoptLease`
+  puts it in the tab's **memory-only keyring**, and both the pod's local
+  store **and its working tree** (overlay uppers via `encryptedMount` from
+  `@artipod/core/sandbox`) encrypt at rest with it. Without a device key,
+  `decodeLoginResult` + `adoptLogin` handle the raw-base64 wire.
 
 **What the TTL means (V10 — no overpromising).** Client keyrings hold
 non-extractable keys in memory only: closing the tab loses the key

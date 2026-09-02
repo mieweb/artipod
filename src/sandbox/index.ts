@@ -34,6 +34,7 @@ export { ZenFsAdapter } from './zenfs-adapter.js';
 export { SUDO_DENIED_MESSAGE } from './sudo-command.js';
 // App-facing sandbox infrastructure: storage backends, git ops + auth.
 export * from './storage.js';
+export { encryptedMount, type EncryptedFsOptions } from './encrypted-fs.js';
 export { createGitOps, getAuthor, setAuthor, setCorsProxy, getCorsProxy } from './git.js';
 export type { GitOps, GitStatusResult, StatusEntry } from './git.js';
 export {
