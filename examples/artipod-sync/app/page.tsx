@@ -895,6 +895,11 @@ function Workspace({ route }: { route: Route }) {
           }
           deletions.clear();
           await patchRegistry(route.id, { hasChanges: false });
+        } else {
+          // the blank workspace IS the ref now — retire the anonymous copy so
+          // the catalog shows one home: on the server, open to collaborate
+          await fs.promises.rm(blankRoot, { recursive: true }).catch(() => {});
+          await dropFromRegistry([route.id]);
         }
         setTimeout(() => {
           window.location.href = workspaceUrl(target, 'rw');
