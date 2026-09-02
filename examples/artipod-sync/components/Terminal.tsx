@@ -27,7 +27,7 @@ const DIM = '\x1b[2m';
 const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
 
-const REPO_URL = 'https://github.com/horner/artipod-sync';
+const REPO_URL = 'https://github.com/mieweb/artipod';
 
 // export-static.mjs injects the full dev version ("0.7.1+10 (ee5c01b, 2026-09-02)");
 // plain `next dev`/`next build` fall back to the package version.
