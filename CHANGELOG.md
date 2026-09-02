@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-02
+
+### Added
+
+- **`artipod import <dir> <name:tag>`**: snapshot a host folder into the store as an image ref without booting a pod — per-file layers with CAS dedup, so re-importing an unchanged tree is a no-op and only changed files cost bytes. `artipod run -it <name:tag>` materializes it at `/` like any other volume ref.
+- **`artipod run --base <dir>[:<podpath>]`** (repeatable): import a folder at boot and materialize it into the pod (default `/`). Folders stack in order — later `--base` wins on conflicts, the stack sits on top of REF when one is given — and committing inside the shell freezes the merged result as a layer.
+- **`artipod run -v <dir>:<podpath>[:ro|:cow]`** (repeatable): docker-style LIVE host mount. Default rw writes back to the real folder; `:cow` keeps writes in RAM so the host is never touched; `:ro` marks the mount read-only for the tool layer and keeps it out of commit roots. The target is mandatory and `/` is refused.
+
+### Changed
+
+- **Releases publish both packages via npm trusted publishing**: the GitHub Release workflow now publishes `@artipod/core` and then the `artipod` CLI alias with OIDC (no token secret), skipping versions already on the registry so re-created releases are safe.
+
 ## [0.6.0] - 2026-09-01
 
 ### Added
