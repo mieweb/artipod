@@ -216,15 +216,12 @@ export default function Home() {
 
   return (
     <main className="flex h-[var(--app-height)] flex-col bg-black text-white overflow-hidden pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-      {/* Navigation Bar */}
+      {/* Navigation Bar — tool chrome only; Home stays a simple page */}
+      {activeView !== 'home' && (
       <div className="flex items-center bg-[#2d2d2d] border-b border-gray-700 px-2">
         <button
           onClick={() => setActiveView('home')}
-          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-            activeView === 'home'
-              ? 'bg-[#1e1e1e] text-white border-t-2 border-blue-500'
-              : 'text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]'
-          }`}
+          className="flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors text-gray-400 hover:text-gray-200 hover:bg-[#3d3d3d]"
           aria-label="Home"
         >
           <HomeIcon size={16} />
@@ -290,6 +287,7 @@ export default function Home() {
           Storage{fsInfo ? ` (${fsInfo.backend})` : ''}
         </button>
       </div>
+      )}
 
       {fsInfo && !fsInfo.isPrimaryTab && (
         <div role="alert" className="bg-yellow-900 text-yellow-100 text-sm px-4 py-2">
@@ -377,6 +375,12 @@ export default function Home() {
                       Ask the agent
                     </button>{' '}
                     — it uses the same pod and terminal
+                  </li>
+                  <li>
+                    <button onClick={() => setActiveView('settings')} className="text-blue-400 hover:underline">
+                      Storage settings
+                    </button>
+                    {fsInfo ? ` — ${fsInfo.backend}` : ''}
                   </li>
                   <li>
                     <a
