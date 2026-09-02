@@ -86,6 +86,17 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
   const initialCwd = opts.cwd ?? DEFAULT_CWD;
   if (opts.proc) registerBuiltinProviders();
 
+  const commands = [
+    // git shares the sandbox's zfs — shell view and git view stay coherent
+    makeGitCommand(createGitOps(() => opts.zfs)),
+    makeEditCommand(opts.onEdit, opts.events),
+    makeNotesCommand(),
+    makeSudoCommand(opts.events, opts.sudo),
+    ...makeStorageCommands(() => opts.zfs),
+    ...(opts.proc ? makeModuleCommands() : []),
+    ...(opts.extraCommands ?? []),
+  ];
+
   const bash = new Bash({
     fs: adapter,
     cwd: initialCwd,
@@ -99,16 +110,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     },
     executionLimits: opts.executionLimits,
     executionLimitProfile: opts.executionLimitProfile,
-    customCommands: [
-      // git shares the sandbox's zfs — shell view and git view stay coherent
-      makeGitCommand(createGitOps(() => opts.zfs)),
-      makeEditCommand(opts.onEdit, opts.events),
-      makeNotesCommand(),
-      makeSudoCommand(opts.events, opts.sudo),
-      ...makeStorageCommands(() => opts.zfs),
-      ...(opts.proc ? makeModuleCommands() : []),
-      ...(opts.extraCommands ?? []),
-    ],
+    customCommands: commands,
   });
 
   let cwd = initialCwd;
@@ -187,6 +189,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       return { candidates, replaceStart };
     },
 
+    customCommands: commands.map((c) => c.name),
     fs: adapter,
     zfs: opts.zfs,
   };

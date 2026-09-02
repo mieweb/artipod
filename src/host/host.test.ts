@@ -47,6 +47,23 @@ describe('TerminalSession', () => {
     session.dispose();
   });
 
+  it('help shows the version line when configured', async () => {
+    const io = new FakeIO();
+    const session = new TerminalSession({ sandbox, io, version: '9.9.9' });
+    for (const ch of 'help') await session.handleData(ch);
+    await session.handleData('\r');
+    expect(io.out).toContain('@artipod/core 9.9.9');
+    expect(io.out).toContain('shell builtins'); // the builtin list still follows
+    expect(io.out).toContain('artipod extras:');
+    expect(io.out).toContain('git'); // custom commands surfaced — just-bash help omits them
+    // other commands stay untouched
+    io.out = '';
+    for (const ch of 'echo helpless') await session.handleData(ch);
+    await session.handleData('\r');
+    expect(io.out).not.toContain('@artipod/core 9.9.9');
+    session.dispose();
+  });
+
   it('recalls history with arrow keys and completes with Tab', async () => {
     const io = new FakeIO();
     const session = new TerminalSession({ sandbox, io });

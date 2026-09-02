@@ -40,6 +40,12 @@ export interface Sandbox {
   getEnv(): Readonly<Record<string, string>>;
   /** Tab-completion for an input line (commands, aliases, paths). */
   complete(line: string): Promise<CompletionResult>;
+  /**
+   * Names of the registered custom commands (git, edit, notes, …). The
+   * just-bash `help` builtin lists only builtins, so hosts surface these
+   * separately (TerminalSession appends them to `help`).
+   */
+  customCommands: string[];
   fs: import('./zenfs-adapter.js').ZenFsAdapter;
   /** The raw node-like fs backing the sandbox (same store as `fs`). */
   zfs: ZenFsLike;

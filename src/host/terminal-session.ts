@@ -20,6 +20,11 @@ export interface TerminalSessionOptions {
   events?: PodEvents;
   /** Lines written once on attach (app-owned banner). */
   banner?: string[];
+  /**
+   * Shown by `help` above the builtin list (just-bash's help builtin cannot
+   * be shadowed, so the line discipline prepends it). E.g. "0.7.1".
+   */
+  version?: string;
   /** Secondary tabs: refuse to run commands, explain why. */
   readOnly?: boolean;
 }
@@ -187,6 +192,13 @@ export class TerminalSession {
         this.busy = true;
         this.abortController = new AbortController();
         try {
+          if (this.opts.version && /^help(\s|$)/.test(cmd.trim())) {
+            io.write(`${DIM}artipod @artipod/core ${this.opts.version}${RESET}\r\n`);
+          }
+          if (/^help$/.test(cmd.trim()) && sandbox.customCommands.length > 0) {
+            // just-bash's help lists builtins only — surface the extras here
+            io.write(`${DIM}artipod extras: ${[...sandbox.customCommands].sort().join(', ')} (details: notes)${RESET}\r\n\r\n`);
+          }
           const result = await sandbox.exec(cmd, { signal: this.abortController.signal });
           if (result.stdout) io.write(toCrLf(result.stdout));
           if (result.stderr) io.write(`${RED}${toCrLf(result.stderr)}${RESET}`);

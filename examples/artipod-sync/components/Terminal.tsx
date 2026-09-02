@@ -86,6 +86,7 @@ export default function Terminal({ sandbox, events, readOnly }: TerminalProps) {
       readOnly,
       io: { write: (text) => term.write(text) },
       banner: BANNER,
+      version: corePkg.version,
     });
     const data = term.onData((d) => void session.handleData(d));
 

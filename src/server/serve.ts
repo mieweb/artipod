@@ -96,6 +96,30 @@ function openBrowser(url: string): void {
  * UI_DIGEST is null) → headless landing. Never an error.
  */
 async function resolveUiDir(store: OciLayoutPodStore): Promise<{ dir: string; source: string } | null> {
+  const resolved = await resolveUiDirInner(store);
+  if (resolved) await warnOnVersionSkew(resolved.dir);
+  return resolved;
+}
+
+/** ui-buildinfo.json is baked by export-static.mjs — a UI bundling an older core than the serve is stale. */
+async function warnOnVersionSkew(uiDir: string): Promise<void> {
+  try {
+    const { readFile } = await import('node:fs/promises');
+    const info = JSON.parse(await readFile(join(uiDir, 'ui-buildinfo.json'), 'utf8')) as { coreVersion?: string };
+    const own = JSON.parse(
+      await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
+    ) as { version?: string };
+    if (info.coreVersion && own.version && info.coreVersion !== own.version) {
+      stdout.write(
+        `warning: the UI bundles @artipod/core ${info.coreVersion} but this serve is ${own.version} — rebuild it: cd examples/artipod-sync && npm run export:static && artipod import out artipod-ui:latest\n`,
+      );
+    }
+  } catch {
+    // pre-buildinfo UI or no package.json beside dist — nothing to compare
+  }
+}
+
+async function resolveUiDirInner(store: OciLayoutPodStore): Promise<{ dir: string; source: string } | null> {
   if (env.ARTIPOD_UI_DIR) {
     const dir = resolve(env.ARTIPOD_UI_DIR);
     try {

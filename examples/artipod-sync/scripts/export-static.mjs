@@ -36,6 +36,16 @@ try {
   const install = spawnSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: root, stdio: 'inherit' });
   if (install.status !== 0) process.exit(install.status ?? 1);
 
+  // Belt AND suspenders: the copy must be byte-for-byte the checkout's version.
+  const rootVersion = JSON.parse(await readFile(join(root, '../../package.json'), 'utf8')).version;
+  const copiedVersion = JSON.parse(
+    await readFile(join(root, 'node_modules/@artipod/core/package.json'), 'utf8'),
+  ).version;
+  if (copiedVersion !== rootVersion) {
+    console.error(`stale core copy: node_modules has ${copiedVersion}, the checkout is ${rootVersion} — refusing to export`);
+    process.exit(1);
+  }
+
   await rm(join(root, '.next'), { recursive: true, force: true });
   await rm(join(root, 'out'), { recursive: true, force: true });
   code = spawnSync('npx', ['next', 'build'], {
@@ -63,4 +73,28 @@ if (!found) {
   console.error('export failed the struct-minify assertion: no chunk carries the ZenFS marker — SkipStructChunkMinify did not apply');
   process.exit(1);
 }
-console.log('static export ready in out/ (struct-minify assertion passed)');
+
+// Version assertion: the bundled banner must carry the checkout's core
+// version — a stale bundle can never ship silently again. Minifiers split
+// the template into .concat("0.7.1") pieces, so match both fragments.
+const version = JSON.parse(await readFile(join(root, 'node_modules/@artipod/core/package.json'), 'utf8')).version;
+let versionBaked = false;
+for (const chunk of chunks) {
+  const source = await readFile(join(root, 'out/_next/static/chunks', chunk), 'utf8');
+  if (source.includes('@artipod/core ') && source.includes(`"${version}"`)) {
+    versionBaked = true;
+    break;
+  }
+}
+if (!versionBaked) {
+  console.error(`export failed the version assertion: no chunk carries "@artipod/core ${version}" — the bundle does not match the checkout`);
+  process.exit(1);
+}
+
+// Provenance marker: serve reads this at boot and warns on version skew.
+const { writeFile } = await import('node:fs/promises');
+await writeFile(
+  join(root, 'out/ui-buildinfo.json'),
+  `${JSON.stringify({ coreVersion: version, builtAt: new Date().toISOString() })}\n`,
+);
+console.log(`static export ready in out/ (struct-minify + version ${version} assertions passed)`);
