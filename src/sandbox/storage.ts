@@ -255,7 +255,13 @@ async function adoptExistingData(backend: StorageBackend): Promise<void> {
   if (backend === 'memory') return;
   const { fs, mounts } = await import('@zenfs/core');
   if (mounts.has(LEGACY_MOUNT) || (await fs.promises.readdir('/')).length) return;
-  const sources = backend === 'opfs' ? [IDB_STORE, LEGACY_IDB_STORE] : [LEGACY_IDB_STORE];
+  let sources = backend === 'opfs' ? [IDB_STORE, LEGACY_IDB_STORE] : [LEGACY_IDB_STORE];
+  // indexedDB.open CREATES a store when absent — probe existence first so an
+  // OPFS boot leaves no phantom IndexedDB databases behind.
+  if (typeof indexedDB !== 'undefined' && indexedDB.databases) {
+    const existing = new Set((await indexedDB.databases()).map((d) => d.name));
+    sources = sources.filter((s) => existing.has(s));
+  }
   for (const store of sources) {
     if (await adoptFromIdbStore(store)) return;
   }

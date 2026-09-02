@@ -49,36 +49,89 @@ interface LocalEntry {
   hasChanges?: boolean;
 }
 
-const REGISTRY_KEY = 'artipod-workspaces';
+/**
+ * UI state (workspace registry + LWW actor id) lives IN the filesystem
+ * (/.artipod/ui-state.json), not localStorage — on OPFS there is exactly one
+ * home for artipod data, and wiping the fs wipes this too. A one-time
+ * migration adopts the old localStorage keys, then deletes them.
+ */
+const STATE_FILE = '/.artipod/ui-state.json';
+const LEGACY_REGISTRY_KEY = 'artipod-workspaces';
+const LEGACY_ACTOR_KEY = 'artipod-actor';
 
-function readRegistry(): LocalEntry[] {
+interface UiState {
+  actor?: string;
+  workspaces: LocalEntry[];
+}
+
+async function uiFs() {
+  await initFileSystem();
+  const { fs } = await import('@/lib/filesystem');
+  return fs;
+}
+
+async function readState(): Promise<UiState> {
+  const fs = await uiFs();
   try {
-    return JSON.parse(localStorage.getItem(REGISTRY_KEY) ?? '[]') as LocalEntry[];
+    return JSON.parse((await fs.promises.readFile(STATE_FILE, 'utf8')) as string) as UiState;
   } catch {
-    return [];
+    // first boot: adopt any legacy localStorage state, then forget it
+    const state: UiState = { workspaces: [] };
+    try {
+      state.workspaces = JSON.parse(localStorage.getItem(LEGACY_REGISTRY_KEY) ?? '[]') as LocalEntry[];
+      state.actor = localStorage.getItem(LEGACY_ACTOR_KEY) ?? undefined;
+      localStorage.removeItem(LEGACY_REGISTRY_KEY);
+      localStorage.removeItem(LEGACY_ACTOR_KEY);
+    } catch {
+      // no localStorage — fresh state
+    }
+    return state;
   }
 }
 
-function recordWorkspace(id: string, kind: 'pod' | 'blank', mode: OpenMode): void {
-  const prev = readRegistry().find((e) => e.id === id);
-  const rest = readRegistry().filter((e) => e.id !== id);
-  localStorage.setItem(
-    REGISTRY_KEY,
-    JSON.stringify([{ ...prev, id, kind, mode, lastOpened: Date.now() }, ...rest].slice(0, 50)),
-  );
+async function writeState(state: UiState): Promise<void> {
+  const fs = await uiFs();
+  await fs.promises.mkdir('/.artipod', { recursive: true }).catch(() => {});
+  await fs.promises.writeFile(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-function patchRegistry(id: string, patch: Partial<LocalEntry>): void {
-  const entries = readRegistry();
-  const hit = entries.find((e) => e.id === id);
+async function readRegistry(): Promise<LocalEntry[]> {
+  return (await readState()).workspaces;
+}
+
+/** Stable per-profile LWW identity (Decision D8), minted on first use. */
+async function actorId(): Promise<string> {
+  const state = await readState();
+  if (!state.actor) {
+    state.actor = `browser:${crypto.randomUUID().slice(0, 8)}`;
+    await writeState(state);
+  }
+  return state.actor;
+}
+
+async function recordWorkspace(id: string, kind: 'pod' | 'blank', mode: OpenMode): Promise<void> {
+  const state = await readState();
+  const prev = state.workspaces.find((e) => e.id === id);
+  state.workspaces = [
+    { ...prev, id, kind, mode, lastOpened: Date.now() },
+    ...state.workspaces.filter((e) => e.id !== id),
+  ].slice(0, 50);
+  await writeState(state);
+}
+
+async function patchRegistry(id: string, patch: Partial<LocalEntry>): Promise<void> {
+  const state = await readState();
+  const hit = state.workspaces.find((e) => e.id === id);
   if (!hit) return;
   Object.assign(hit, patch);
-  localStorage.setItem(REGISTRY_KEY, JSON.stringify(entries));
+  await writeState(state);
 }
 
-function dropFromRegistry(ids: string[]): void {
+async function dropFromRegistry(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  localStorage.setItem(REGISTRY_KEY, JSON.stringify(readRegistry().filter((e) => !ids.includes(e.id))));
+  const state = await readState();
+  state.workspaces = state.workspaces.filter((e) => !ids.includes(e.id));
+  await writeState(state);
 }
 
 const wsLockName = (id: string): string => `artipod-ws-${id}`;
@@ -132,7 +185,7 @@ function Catalog() {
 
   // Rescan "on this machine" — runs at load and after every console command.
   const refreshLocal = useCallback(async () => {
-    const registry = readRegistry();
+    const registry = await readRegistry();
     const onDisk: string[] = [];
     const swept: string[] = [];
     let changed = new Set(registry.filter((e) => e.hasChanges).map((e) => e.id));
@@ -150,7 +203,7 @@ function Catalog() {
           onDisk.push(id);
         }
       }
-      dropFromRegistry(swept);
+      await dropFromRegistry(swept);
       // On OPFS the physical cow uppers (.artipod/uppers/<enc>) are REAL dirs
       // the catalog can read — the filesystem is the source of truth, and the
       // registry is just a cache (rm -rf / must empty the screen). On the
@@ -163,7 +216,7 @@ function Catalog() {
           if (entries.length > 0) changed.add(decodeURIComponent(name));
         }
         for (const e of registry) {
-          if (e.hasChanges && !changed.has(e.id)) patchRegistry(e.id, { hasChanges: false });
+          if (e.hasChanges && !changed.has(e.id)) await patchRegistry(e.id, { hasChanges: false });
         }
       }
     } catch {
@@ -230,7 +283,8 @@ function Catalog() {
                 });
               }
             }
-            localStorage.removeItem(REGISTRY_KEY);
+            localStorage.removeItem(LEGACY_REGISTRY_KEY);
+            localStorage.removeItem(LEGACY_ACTOR_KEY);
           } finally {
             setTimeout(() => window.location.reload(), 500);
           }
@@ -555,7 +609,6 @@ function Workspace({ route }: { route: Route }) {
   const events = eventsRef.current;
 
   useEffect(() => {
-    recordWorkspace(route.id, route.isRef ? 'pod' : 'blank', route.mode);
     // Hold a lifetime lock so the catalog's sweeper knows this tab is alive.
     try {
       void navigator.locks.request(wsLockName(route.id), { mode: 'shared' }, () => new Promise(() => {}));
@@ -565,6 +618,8 @@ function Workspace({ route }: { route: Route }) {
     let cancelled = false;
     (async () => {
       const info = await initFileSystem();
+      await recordWorkspace(route.id, route.isRef ? 'pod' : 'blank', route.mode);
+      const actor = await actorId();
       // just-bash + the pod layer load lazily so they stay out of the first-load bundle
       const [{ createZenFsPod }, { ArtipodRegistryProxyTransport }, { HttpPodStore }, { fs }] = await Promise.all([
         import('@artipod/core'),
@@ -621,16 +676,7 @@ function Workspace({ route }: { route: Route }) {
           // push/pull/clone talk to this deployment's manager store
           sync: {
             remote: new HttpPodStore('/api/pods'),
-            // stable per-profile LWW identity (Decision D8)
-            actor: (() => {
-              const key = 'artipod-actor';
-              let actor = localStorage.getItem(key);
-              if (!actor) {
-                actor = `browser:${crypto.randomUUID().slice(0, 8)}`;
-                localStorage.setItem(key, actor);
-              }
-              return actor;
-            })(),
+            actor,
             ...(route.isRef
               ? { basis: { ref: route.id, upperConfig: cowUpper }, autoPush: route.mode === 'rw' }
               : {}),
@@ -661,10 +707,10 @@ function Workspace({ route }: { route: Route }) {
       const probe = () => {
         if (probeTimer) clearTimeout(probeTimer);
         probeTimer = setTimeout(() => {
-          void (async () => {
-            const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
-            patchRegistry(route.id, { hasChanges: entries.length > 0 });
-          })();
+            void (async () => {
+              const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
+              await patchRegistry(route.id, { hasChanges: entries.length > 0 });
+            })();
         }, 500);
       };
       events.on('fs:changed', probe);
