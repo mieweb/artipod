@@ -1,0 +1,36 @@
+{
+  "name": "artipod",
+  "version": "0.4.0",
+  "description": "The artipod CLI — `npx artipod run -it`. Alias package for @artipod/core.",
+  "type": "module",
+  "bin": {
+    "artipod": "bin.mjs"
+  },
+  "files": [
+    "bin.mjs"
+  ],
+  "dependencies": {
+    "@artipod/core": "^0.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mieweb/artipod.git",
+    "directory": "packages/artipod"
+  },
+  "homepage": "https://github.com/mieweb/artipod#readme",
+  "bugs": {
+    "url": "https://github.com/mieweb/artipod/issues"
+  },
+  "keywords": [
+    "ai",
+    "sandbox",
+    "cli",
+    "pod",
+    "oci"
+  ],
+  "author": "Medical Informatics Engineering, LLC",
+  "license": "MIT"
+}

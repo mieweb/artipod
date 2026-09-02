@@ -29,12 +29,12 @@ Three consumer surfaces, one layer:
 ### The CLI: a pod in your terminal (✅)
 
 ```sh
-npx @artipod/core run -it              # fresh pod → artipod-bash, kept under ~/.artipod/pods
-npx @artipod/core run -it alpine:3.22  # a registry image, cloned in writable
-npm install -g @artipod/core           # permanent `artipod` on PATH
-artipod pods                           # past runs — the `docker ps -a` of pods
-artipod run -it 500edf8b               # resume a kept pod by id prefix
-artipod run -it field/notes:1          # a ref you pushed earlier
+npx artipod run -it              # fresh pod → artipod-bash, kept under ~/.artipod/pods
+npx artipod run -it alpine:3.22  # a registry image, cloned in writable
+npm install -g artipod           # permanent `artipod` on PATH (alias for @artipod/core)
+artipod pods                     # past runs — the `docker ps -a` of pods
+artipod run -it 500edf8b         # resume a kept pod by id prefix
+artipod run -it field/notes:1    # a ref you pushed earlier
 ```
 
 (`npx github:mieweb/artipod` also works — it compiles from source on first run and caches.)
