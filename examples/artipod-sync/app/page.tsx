@@ -279,6 +279,58 @@ function Catalog() {
         }
       }
       await dropFromRegistry(swept);
+      // Published-blank reconciliation: content addressing means "is this
+      // already on the server?" is a pure comparison — a blank whose file set
+      // (path + mtime, round-tripped in the layer annotations) matches a
+      // server ref's manifest IS that ref. Retire the anonymous copy.
+      try {
+        const serverList = (await (await fetch('/api/pods/refs')).json()) as { ref: string; manifestDigest: string }[];
+        const manifests = await Promise.all(
+          serverList.map(async ({ manifestDigest }) => {
+            const m = (await (await fetch(`/api/pods/blobs/${manifestDigest}`)).json()) as {
+              layers?: { annotations?: Record<string, string> }[];
+            };
+            const files = new Map<string, number>();
+            for (const l of m.layers ?? []) {
+              const p = l.annotations?.['org.artipod.path'];
+              const t = l.annotations?.['org.artipod.mtime'];
+              // the mtime annotation is raw epoch millis (ISO tolerated just in case)
+              if (p && !p.startsWith('/.wh')) files.set(p, Number(t) || Date.parse(t ?? '') || 0);
+            }
+            return files;
+          }),
+        );
+        const live = await liveWorkspaceIds();
+        for (const id of [...onDisk]) {
+          if (id.includes(':') || live.has(id)) continue; // refs and open tabs are not candidates
+          const walk = async (dir: string, rel: string, out: Map<string, number>): Promise<void> => {
+            for (const name of (await fs.promises.readdir(dir).catch(() => [])) as string[]) {
+              const full = `${dir}/${name}`;
+              const stat = await fs.promises.stat(full).catch(() => null);
+              if (!stat) continue;
+              if (stat.isDirectory()) await walk(full, `${rel}/${name}`, out);
+              else out.set(`${rel}/${name}`, Number(stat.mtimeMs));
+            }
+          };
+          const local = new Map<string, number>();
+          await walk(`/work/${id}`, '', local);
+          if (local.size === 0) continue;
+          // tar mtimes are second-granular — compare with 2s tolerance
+          const matches = manifests.some(
+            (files) =>
+              files.size === local.size &&
+              Array.from(local.entries()).every(([p, t]) => files.has(p) && Math.abs((files.get(p) ?? 0) - t) < 2000),
+          );
+          if (matches) {
+            await fs.promises.rm(`/work/${id}`, { recursive: true }).catch(() => {});
+            swept.push(id);
+            onDisk.splice(onDisk.indexOf(id), 1);
+          }
+        }
+        await dropFromRegistry(swept);
+      } catch {
+        // offline or no server — reconciliation is best-effort
+      }
       // On OPFS the physical cow uppers (.artipod/uppers/<enc>) are REAL dirs
       // the catalog can read — the filesystem is the source of truth, and the
       // registry is just a cache (rm -rf / must empty the screen). On the
@@ -887,7 +939,9 @@ function Workspace({ route }: { route: Route }) {
           await store.putRef(target, manifestDigest, MANIFEST_TYPE);
           upperAt = blankRoot;
         }
-        const result = await pushOverlay({ store, zfs: pod.zfs, ref: target, upperAt, deletions, actor, remote });
+        // permanent: the upper is retired below — replaceable overlay layers
+        // would be STRIPPED by the next (even empty) push from this actor
+        const result = await pushOverlay({ store, zfs: pod.zfs, ref: target, upperAt, deletions, actor, remote, permanent: true });
         if (route.isRef) {
           // the changes live under the new name now — the fork is clean again
           for (const name of (await fs.promises.readdir(upperAt).catch(() => [])) as string[]) {
