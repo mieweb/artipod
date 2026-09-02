@@ -283,6 +283,8 @@ function Catalog() {
   const [rootSandbox, setRootSandbox] = useState<Sandbox | null>(null);
   const [termOpen, setTermOpen] = useState(false);
   const [termHeight, setTermHeight] = useState(300);
+  // repos whose older tags are expanded in the server list
+  const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
   // inline publish editor for a local row (native prompt is suppressed in driven browsers)
   const [pub, setPub] = useState<{ id: string; mode: OpenMode; value: string } | null>(null);
 
@@ -558,9 +560,9 @@ function Catalog() {
             nothing published — <code>artipod serve --publish &lt;dir&gt;</code>
           </p>
         ) : (
-          <div className="space-y-3 mb-6">
-            {/* the dossier view: one entity (repository) per group, its tags expanded
-                beneath — open drafts first, then milestones newest-first */}
+          <ul className="space-y-2 mb-6">
+            {/* one row per repository: unique tag = a plain row; multiple tags =
+                the latest (drafts first, then newest milestone) + an expander */}
             {Array.from(
               serverRefs.reduce((groups, r) => {
                 const i = r.ref.lastIndexOf(':');
@@ -570,61 +572,89 @@ function Catalog() {
               }, new Map<string, typeof serverRefs>()),
             )
               .sort(([a], [b]) => a.localeCompare(b))
-              .map(([name, refs]) => (
-                <div key={name}>
-                  <div className="font-mono text-sm text-gray-300 mb-1">{name}</div>
-                  <ul className="space-y-1 pl-3 border-l border-gray-700">
-                    {refs
-                      .slice()
-                      .sort((a, b) => {
-                        const ta = a.ref.slice(a.ref.lastIndexOf(':') + 1);
-                        const tb = b.ref.slice(b.ref.lastIndexOf(':') + 1);
-                        const oa = ta.startsWith('_') ? 0 : 1;
-                        const ob = tb.startsWith('_') ? 0 : 1;
-                        return oa - ob || tb.localeCompare(ta); // drafts first, then newest milestone
-                      })
-                      .map(({ ref, manifestDigest, locked }) => {
-                        const tag = ref.slice(ref.lastIndexOf(':') + 1);
-                        const opened = localById.get(ref);
-                        const isCowFork = cowForks.some((e) => e.id === ref);
-                        return row(
-                          ref,
-                          <>
-                            {manifestDigest && (
-                              // the tag is a mutable pointer — the digest shows WHERE it points, so movement is visible
-                              <span className="font-mono text-gray-500" title={manifestDigest}>
-                                @{manifestDigest.replace(/^sha256:/, '').slice(0, 8)}
-                              </span>
-                            )}
-                            {locked && (
-                              <span className="rounded bg-amber-900/60 px-1.5 py-0.5" title="tag is locked — the head cannot move; fork with cow and publish under a new name">
-                                locked
-                              </span>
-                            )}
-                            {isCowFork && (
-                              <span
-                                className="rounded bg-emerald-900/60 px-1.5 py-0.5"
-                                title="this machine holds a diverged fork of this ref — see it under 'On this machine'"
-                              >
-                                forked
-                              </span>
-                            )}
-                            {modeLinks(ref, locked)}
-                            {!isCowFork && changedRefs.has(ref) ? (
-                              <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
-                            ) : (
-                              !isCowFork && opened && <span className="rounded bg-gray-700 px-1.5 py-0.5">synced</span>
-                            )}
-                          </>,
-                          opened?.lastOpened && !isCowFork ? new Date(opened.lastOpened).toLocaleDateString() : '',
-                          locked ? (opened?.mode === 'ro' ? 'ro' : 'cow') : opened?.mode === 'cow' || opened?.mode === 'ro' ? opened.mode : 'rw',
-                          `:${tag}`,
-                        );
-                      })}
-                  </ul>
-                </div>
-              ))}
-          </div>
+              .map(([name, refs]) => {
+                const sorted = refs.slice().sort((a, b) => {
+                  const ta = a.ref.slice(a.ref.lastIndexOf(':') + 1);
+                  const tb = b.ref.slice(b.ref.lastIndexOf(':') + 1);
+                  const oa = ta.startsWith('_') ? 0 : 1;
+                  const ob = tb.startsWith('_') ? 0 : 1;
+                  return oa - ob || tb.localeCompare(ta); // drafts first, then newest milestone
+                });
+                const renderRef = ({ ref, manifestDigest, locked }: (typeof serverRefs)[number], label?: string, extra?: React.ReactNode) => {
+                  const opened = localById.get(ref);
+                  const isCowFork = cowForks.some((e) => e.id === ref);
+                  return row(
+                    ref,
+                    <>
+                      {manifestDigest && (
+                        // the tag is a mutable pointer — the digest shows WHERE it points, so movement is visible
+                        <span className="font-mono text-gray-500" title={manifestDigest}>
+                          @{manifestDigest.replace(/^sha256:/, '').slice(0, 8)}
+                        </span>
+                      )}
+                      {locked && (
+                        <span className="rounded bg-amber-900/60 px-1.5 py-0.5" title="tag is locked — the head cannot move; fork with cow and publish under a new name">
+                          locked
+                        </span>
+                      )}
+                      {isCowFork && (
+                        <span
+                          className="rounded bg-emerald-900/60 px-1.5 py-0.5"
+                          title="this machine holds a diverged fork of this ref — see it under 'On this machine'"
+                        >
+                          forked
+                        </span>
+                      )}
+                      {modeLinks(ref, locked)}
+                      {!isCowFork && changedRefs.has(ref) ? (
+                        <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
+                      ) : (
+                        !isCowFork && opened && <span className="rounded bg-gray-700 px-1.5 py-0.5">synced</span>
+                      )}
+                      {extra}
+                    </>,
+                    opened?.lastOpened && !isCowFork ? new Date(opened.lastOpened).toLocaleDateString() : '',
+                    locked ? (opened?.mode === 'ro' ? 'ro' : 'cow') : opened?.mode === 'cow' || opened?.mode === 'ro' ? opened.mode : 'rw',
+                    label,
+                  );
+                };
+                const [latest, ...older] = sorted;
+                const isOpen = expandedRepos.has(name);
+                return (
+                  <li key={name} className="space-y-1">
+                    <ul className="space-y-1">
+                      {renderRef(
+                        latest,
+                        undefined,
+                        older.length > 0 ? (
+                          <button
+                            onClick={(ev) => {
+                              ev.preventDefault();
+                              ev.stopPropagation();
+                              setExpandedRepos((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(name)) next.delete(name);
+                                else next.add(name);
+                                return next;
+                              });
+                            }}
+                            className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white hover:border-gray-400"
+                            title={`${older.length} older tag${older.length === 1 ? '' : 's'} in ${name}`}
+                          >
+                            {isOpen ? '▾' : '▸'} +{older.length}
+                          </button>
+                        ) : undefined,
+                      )}
+                      {isOpen && (
+                        <ul className="space-y-1 pl-4 border-l border-gray-700 ml-2">
+                          {older.map((r) => renderRef(r, `:${r.ref.slice(r.ref.lastIndexOf(':') + 1)}`))}
+                        </ul>
+                      )}
+                    </ul>
+                  </li>
+                );
+              })}
+          </ul>
         )}
 
         <h2 className="text-sm font-semibold text-gray-300 mb-2 flex items-center gap-2">
