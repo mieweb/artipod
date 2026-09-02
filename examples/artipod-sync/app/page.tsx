@@ -81,6 +81,8 @@ interface LocalEntry {
   mode?: OpenMode;
   /** Maintained by the workspace: the overlay upper holds unpushed writes. */
   hasChanges?: boolean;
+  /** Maintained by the workspace (rw): the last auto-push FAILED — local is ahead of the server. */
+  unsynced?: boolean;
   /** Recorded at open: this workspace's local bytes are ciphertext at rest. */
   encrypted?: boolean;
 }
@@ -668,7 +670,14 @@ function Catalog() {
                         </span>
                       )}
                       {modeLinks(ref, locked)}
-                      {!isCowFork && changedRefs.has(ref) ? (
+                      {!isCowFork && opened?.unsynced ? (
+                        <span
+                          className="rounded bg-amber-900/60 px-1.5 py-0.5"
+                          title="the last push failed (offline or locked) — local changes sit in this machine's upper and retry on the next edit"
+                        >
+                          out of sync
+                        </span>
+                      ) : !isCowFork && changedRefs.has(ref) ? (
                         <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
                       ) : (
                         !isCowFork && opened && <span className="rounded bg-gray-700 px-1.5 py-0.5">synced</span>
@@ -1283,6 +1292,12 @@ function Workspace({ route }: { route: Route }) {
       // per-artipod catalog badge: ref workspaces under a broker keep their
       // upper + store ciphertext; blank /work trees stay plaintext
       await patchRegistry(route.id, { encrypted: !!brokerKey && route.isRef });
+      // The catalog's synced/out-of-sync verdict rides push OUTCOMES, not
+      // trust in autoPush — a failed push (offline, released lease) marks
+      // the entry unsynced until a later push lands.
+      events.on('sync:push', (e) => {
+        void patchRegistry(route.id, { unsynced: !e.ok });
+      });
       // Lease renewals re-key the pod's keyring (else it locks mid-session at
       // the old expiry); a released/expired lease LOCKS it — encrypted reads
       // fail with EACCES until login. Page-lifetime subscription.
