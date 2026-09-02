@@ -72,7 +72,13 @@ function landingPage(storeDir: string, refs: { ref: string }[], url: string): Re
 <p>store: <code>${escapeHtml(storeDir)}</code></p>
 <p>native sync surface: <code>${escapeHtml(url)}/api/pods</code> · registry pull: <code>docker pull ${escapeHtml(url.replace(/^https?:\/\//, ''))}/&lt;name&gt;:&lt;tag&gt;</code></p>
 ${refs.length > 0 ? `<h2>refs</h2><ul>${rows}</ul>` : '<p>no refs yet — <code>artipod serve --publish &lt;dir&gt;</code> or push one.</p>'}
-<p>this is the headless landing — the full UI ships in serve plan S2.</p>
+<h2>get the full UI</h2>
+<p>this is the headless landing — no <code>artipod-ui:latest</code> in the store yet. The full
+terminal/editor UI (press <kbd>ctrl+\`</kbd> there to toggle the terminal) is one import away:</p>
+<pre>cd examples/artipod-sync &amp;&amp; npm run export:static   # build the static UI → out/
+artipod import out artipod-ui:latest                 # into this store
+# restart artipod serve — the UI is served at / from then on</pre>
+<p>or point <code>ARTIPOD_UI_DIR</code> at any static build (dev loop), or hide this page with <code>--no-ui</code>.</p>
 </body></html>`;
   return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
 }

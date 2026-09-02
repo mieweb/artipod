@@ -169,6 +169,18 @@ export default function Home() {
     setActiveView('terminal');
   };
 
+  // ctrl+` toggles the terminal (the VS Code muscle memory)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && (e.code === 'Backquote' || e.key === '`')) {
+        e.preventDefault();
+        setActiveView((view) => (view === 'terminal' ? 'editor' : 'terminal'));
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   return (
     <main className="flex h-[var(--app-height)] flex-col bg-black text-white overflow-hidden pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* Navigation Bar */}
