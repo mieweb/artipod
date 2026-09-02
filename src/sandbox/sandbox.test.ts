@@ -41,6 +41,35 @@ describe('sandbox bash semantics over ZenFS', () => {
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr).toMatch(/missing\.txt/);
   });
+
+  it('du/find/cp -r traverse a backend with degenerate 0:0 inodes (OPFS)', async () => {
+    await zfs.promises.mkdir('/repo/deep/deeper', { recursive: true });
+    await zfs.promises.writeFile('/repo/deep/a.txt', 'aaaa');
+    await zfs.promises.writeFile('/repo/deep/deeper/b.txt', 'bb');
+    // mimic WebAccess/OPFS: every stat reports dev:0 ino:0
+    const zeroStat = (real: (p: string, ...rest: unknown[]) => Promise<object>) => async (p: string, ...rest: unknown[]) =>
+      new Proxy(await real(p, ...rest), { get: (t, k) => (k === 'dev' || k === 'ino' ? 0 : Reflect.get(t, k)) });
+    const zeroed = {
+      promises: new Proxy(zfs.promises, {
+        get: (t, k) =>
+          k === 'stat' || k === 'lstat'
+            ? zeroStat((t as unknown as Record<string, (p: string, ...rest: unknown[]) => Promise<object>>)[k as string].bind(t))
+            : Reflect.get(t, k),
+      }),
+    };
+    const sb = createSandbox({ zfs: zeroed as never });
+
+    const du = await sb.exec('cd /repo && du -s deep');
+    expect(du.stderr).toBe('');
+    expect(du.exitCode).toBe(0);
+
+    const found = await sb.exec('find /repo/deep -type f | wc -l');
+    expect(found.stdout.trim()).toBe('2');
+
+    const cp = await sb.exec('cp -r /repo/deep /repo/copy && cat /repo/copy/deeper/b.txt');
+    expect(cp.exitCode).toBe(0);
+    expect(cp.stdout.trim()).toBe('bb');
+  });
 });
 
 describe('session state reconstruction across exec calls', () => {

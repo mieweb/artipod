@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`du`/`find`/`cp -r` in the browser shell**: the OPFS backend stats every node as `dev:0 ino:0`, and the ZenFS adapter advertised that as a stable identity — just-bash's traversal walker then saw every subdirectory as a symlink cycle and reported `cannot access`. The adapter now omits identity for degenerate inodes, letting the walker fall back to realpath-based cycle detection.
+
 ## [0.9.0] - 2026-09-02
 
 ### Added

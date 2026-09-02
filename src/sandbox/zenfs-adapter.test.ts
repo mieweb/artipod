@@ -114,6 +114,32 @@ describe('ZenFsAdapter IFileSystem contract', () => {
     expect(s.identity).toBe(`${s.dev}:${s.ino}`);
   });
 
+  it('omits identity when the backend reports degenerate 0:0 inodes (OPFS)', async () => {
+    // WebAccess/OPFS stats every node as dev:0 ino:0 — a shared "identity"
+    // makes just-bash's walker (du/find/cp -r) see cycles everywhere.
+    await fs.mkdir('/deg/sub', { recursive: true });
+    const zeroed = new ZenFsAdapter({
+      promises: new Proxy(zfs.promises, {
+        get(target, prop: string) {
+          if (prop === 'stat' || prop === 'lstat') {
+            return async (path: string) => {
+              const s = (await (target as unknown as Record<string, (p: string) => Promise<Record<string, unknown>>>)[prop](path)) as unknown as {
+                constructor: unknown;
+              } & Record<string, unknown>;
+              return new Proxy(s, { get: (t, p) => (p === 'dev' || p === 'ino' ? 0 : Reflect.get(t, p)) });
+            };
+          }
+          return Reflect.get(target, prop);
+        },
+      }),
+    } as never);
+    const s = await zeroed.stat('/deg/sub');
+    expect(s.identity).toBeUndefined();
+    expect(s.dev).toBeUndefined();
+    expect(s.ino).toBeUndefined();
+    expect(s.isDirectory).toBe(true);
+  });
+
   it('rm honors force and recursive flags', async () => {
     await expect(fs.rm('/nope')).rejects.toThrow();
     await expect(fs.rm('/nope', { force: true })).resolves.toBeUndefined();

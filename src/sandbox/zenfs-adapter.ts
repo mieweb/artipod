@@ -99,6 +99,11 @@ export class ZenFsAdapter implements IFileSystem {
     dev: number | bigint;
     ino: number | bigint;
   }): FsStat {
+    // Some ZenFS backends (e.g. WebAccess/OPFS) report dev:ino as 0:0 for every
+    // node; advertising that as a stable identity makes just-bash's traversal
+    // walker (du/find/grep -r/cp -r) flag every subdirectory as a symlink cycle.
+    // Omit it and the walker falls back to realpath-based cycle detection.
+    const degenerate = Number(s.dev) === 0 && Number(s.ino) === 0;
     return {
       isFile: s.isFile(),
       isDirectory: s.isDirectory(),
@@ -106,9 +111,7 @@ export class ZenFsAdapter implements IFileSystem {
       mode: s.mode,
       size: s.size,
       mtime: s.mtime,
-      dev: s.dev,
-      ino: s.ino,
-      identity: `${s.dev}:${s.ino}`,
+      ...(degenerate ? {} : { dev: s.dev, ino: s.ino, identity: `${s.dev}:${s.ino}` }),
     };
   }
 
