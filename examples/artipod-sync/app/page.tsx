@@ -11,7 +11,7 @@ import FileTree from '@/components/FileTree';
 import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
 import EncryptionBadge from '@/components/EncryptionBadge';
-import { installKeyBroker, getBrokerKey, getBrokerLease, requireBrokerKey, brokerLogin, onBrokerChange } from '@/lib/keys';
+import { installKeyBroker, getBrokerKey, getBrokerLease, getBrokerState, requireBrokerKey, brokerLogin, onBrokerChange } from '@/lib/keys';
 import { Terminal as LucideTerminal, FolderTree, FileCode, Settings, Bot, Home as HomeIcon, Plus, Server, HardDrive, Layers as LayersIcon, UploadCloud } from 'lucide-react';
 
 // Dynamically import Terminal to avoid SSR issues with xterm.js
@@ -79,6 +79,8 @@ interface LocalEntry {
   mode?: OpenMode;
   /** Maintained by the workspace: the overlay upper holds unpushed writes. */
   hasChanges?: boolean;
+  /** Recorded at open: this workspace's local bytes are ciphertext at rest. */
+  encrypted?: boolean;
 }
 
 /**
@@ -288,7 +290,9 @@ export default function Page() {
 
 /** `/` — every artipod in reach: this server's, this machine's, or a new blank one. */
 function Catalog() {
-  const [serverRefs, setServerRefs] = useState<{ ref: string; manifestDigest?: string; locked?: boolean; pulledAt?: string }[] | null>(null);
+  const [serverRefs, setServerRefs] = useState<
+    { ref: string; manifestDigest?: string; locked?: boolean; pulledAt?: string; encrypted?: boolean; mediaType?: string }[] | null
+  >(null);
   const [local, setLocal] = useState<LocalEntry[]>([]);
   // refs with actual local changes: a non-empty overlay upper (/.artipod/upper/<ref>)
   const [changedRefs, setChangedRefs] = useState<Set<string>>(new Set());
@@ -417,7 +421,9 @@ function Catalog() {
     (async () => {
       try {
         const res = await fetch('/api/pods/refs');
-        const all = res.ok ? ((await res.json()) as { ref: string; manifestDigest?: string; locked?: boolean; pulledAt?: string }[]) : [];
+        const all = res.ok
+          ? ((await res.json()) as { ref: string; manifestDigest?: string; locked?: boolean; pulledAt?: string; encrypted?: boolean; mediaType?: string }[])
+          : [];
         // the UI artifact is infrastructure (npm bundles it) — not content to browse
         setServerRefs(all.filter((r) => !r.ref.startsWith('artipod-ui:')));
       } catch {
@@ -508,6 +514,29 @@ function Catalog() {
     ...cowForks,
     ...local.filter((e) => !serverRefs?.some((r) => r.ref === e.id) && !cowForks.includes(e)),
   ];
+
+  // Per-artipod encryption chips: shown once ANY encryption is in play — a
+  // broker serve, an encrypted server ref, or an encrypted local workspace.
+  const encryptionInPlay =
+    getBrokerState().status !== 'none' || (serverRefs ?? []).some((r) => r.encrypted) || local.some((e) => e.encrypted);
+  const E2E_MEDIA_TYPE = 'application/vnd.artipod.encrypted-ref.v1+json';
+  const cryptoChip = (state: 'e2e' | 'encrypted' | 'plaintext') =>
+    !encryptionInPlay ? null : state === 'plaintext' ? (
+      <span className="rounded bg-gray-800 px-1.5 py-0.5 text-gray-500" title="stored unencrypted — content written before --encrypt (or a blank scratch tree); republish to encrypt">
+        plaintext
+      </span>
+    ) : (
+      <span
+        className="rounded bg-emerald-900/60 px-1.5 py-0.5"
+        title={
+          state === 'e2e'
+            ? 'end-to-end encrypted envelope — the server never sees plaintext; keys move out-of-band'
+            : 'ciphertext at rest — readable only through a key lease'
+        }
+      >
+        🔒 {state === 'e2e' ? 'e2e' : 'encrypted'}
+      </span>
+    );
 
   const row = (id: string, badge: React.ReactNode, note: string, mode: OpenMode = 'rw', label?: string) => (
     <li key={`${id}:${mode}`}>
@@ -609,7 +638,7 @@ function Catalog() {
                   const ob = tb.startsWith('_') ? 0 : 1;
                   return oa - ob || tb.localeCompare(ta); // drafts first, then newest milestone
                 });
-                const renderRef = ({ ref, manifestDigest, locked }: (typeof serverRefs)[number], label?: string, extra?: React.ReactNode) => {
+                const renderRef = ({ ref, manifestDigest, locked, encrypted, mediaType }: (typeof serverRefs)[number], label?: string, extra?: React.ReactNode) => {
                   const opened = localById.get(ref);
                   const isCowFork = cowForks.some((e) => e.id === ref);
                   return row(
@@ -621,6 +650,7 @@ function Catalog() {
                           @{manifestDigest.replace(/^sha256:/, '').slice(0, 8)}
                         </span>
                       )}
+                      {cryptoChip(mediaType === E2E_MEDIA_TYPE ? 'e2e' : encrypted ? 'encrypted' : 'plaintext')}
                       {locked && (
                         <span className="rounded bg-amber-900/60 px-1.5 py-0.5" title="tag is locked — the head cannot move; fork with cow and publish under a new name">
                           locked
@@ -703,6 +733,7 @@ function Catalog() {
               return row(
                 e.id,
                 <>
+                  {cryptoChip(e.encrypted ? 'encrypted' : 'plaintext')}
                   <button
                     onClick={(ev) => {
                       ev.preventDefault();
@@ -1246,6 +1277,9 @@ function Workspace({ route }: { route: Route }) {
       );
       sandboxRef.current = pod.createSandbox({ confineTo: pod.basis ? pod.basis.at : blankRoot });
       podRef.current = pod;
+      // per-artipod catalog badge: ref workspaces under a broker keep their
+      // upper + store ciphertext; blank /work trees stay plaintext
+      await patchRegistry(route.id, { encrypted: !!brokerKey && route.isRef });
       // Lease renewals re-key the pod's keyring (else it locks mid-session at
       // the old expiry). Page-lifetime subscription, like the events wiring.
       onBrokerChange(() => {
