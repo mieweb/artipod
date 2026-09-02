@@ -41,6 +41,17 @@ interface Route {
 const workspaceUrl = (id: string, mode: OpenMode = 'rw'): string =>
   `/?artipod=${encodeURIComponent(id)}${mode === 'rw' ? '' : `&mode=${mode}`}`;
 
+/** `_`-prefixed tags are open drafts; everything else seals on first push (serve default). */
+const isOpenRef = (ref: string): boolean => ref.slice(ref.lastIndexOf(':') + 1).startsWith('_');
+const setOpenTag = (ref: string, open: boolean): string => {
+  const i = ref.lastIndexOf(':');
+  if (i === -1) return ref;
+  const tag = ref.slice(i + 1).replace(/^_+/, '');
+  return `${ref.slice(0, i)}:${open ? '_' : ''}${tag}`;
+};
+const OPEN_DRAFT_TIP =
+  'Checked: the tag starts with _ — an open draft anyone can keep editing (collaborative; can be renamed away later). Unchecked: the tag SEALS on publish — an immutable milestone that can never move or be deleted.';
+
 /** Workspaces this browser has opened before (the "on this machine" list). */
 interface LocalEntry {
   id: string;
@@ -612,6 +623,14 @@ function Catalog() {
               }}
               className="flex-1 px-2 py-1 rounded border border-gray-600 bg-transparent text-sm font-mono text-gray-200"
             />
+            <label className="flex items-center gap-1.5 text-xs text-gray-300 shrink-0 cursor-pointer" title={OPEN_DRAFT_TIP}>
+              <input
+                type="checkbox"
+                checked={isOpenRef(pub.value)}
+                onChange={(e) => setPub({ ...pub, value: setOpenTag(pub.value, e.target.checked) })}
+              />
+              open draft
+            </label>
             <button
               onClick={() => {
                 if (pub.value.trim())
@@ -661,23 +680,29 @@ type ViewMode = 'tree' | 'editor' | 'settings' | 'agent' | 'layers';
 /** New workspace: blank, or named-and-published in a single step (?publish= intent). */
 function NewWorkspace() {
   const [name, setName] = useState('');
+  const [openDraft, setOpenDraft] = useState(true);
   const go = () => {
     const id = crypto.randomUUID().slice(0, 8);
     const target = name.trim();
     if (!target) return void (window.location.href = workspaceUrl(id));
-    // no tag = open tag _1 (tags without _ seal on first push — name lifecycle)
-    const ref = target.includes(':') ? target : `${target}:_1`;
+    const ref = setOpenTag(target.includes(':') ? target : `${target}:1`, openDraft);
     window.location.href = `${workspaceUrl(id)}&publish=${encodeURIComponent(ref)}`;
   };
   return (
-    <div className="flex gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && go()}
-        placeholder="name:_tag (optional — publishes right away; _ keeps it open)"
-        className="flex-1 px-3 py-2 rounded border border-gray-600 bg-transparent text-sm text-gray-200 placeholder-gray-500 font-mono"
+        placeholder="name (optional — publishes right away)"
+        className="flex-1 min-w-0 px-3 py-2 rounded border border-gray-600 bg-transparent text-sm text-gray-200 placeholder-gray-500 font-mono"
       />
+      {name.trim() && (
+        <label className="flex items-center gap-1.5 text-xs text-gray-300 shrink-0 cursor-pointer" title={OPEN_DRAFT_TIP}>
+          <input type="checkbox" checked={openDraft} onChange={(e) => setOpenDraft(e.target.checked)} />
+          open draft
+        </label>
+      )}
       <button
         onClick={go}
         className="flex items-center justify-center gap-2 px-3 py-2 rounded border border-gray-600 text-gray-300 hover:bg-[#333] text-sm shrink-0"
@@ -1218,6 +1243,14 @@ function Workspace({ route }: { route: Route }) {
             }}
             className="flex-1 min-w-0 px-2 py-1 rounded border border-gray-600 bg-transparent text-sm font-mono text-gray-200"
           />
+          <label className="flex items-center gap-1.5 text-xs text-gray-300 shrink-0 cursor-pointer" title={OPEN_DRAFT_TIP}>
+            <input
+              type="checkbox"
+              checked={isOpenRef(publishValue)}
+              onChange={(e) => setPublishValue(setOpenTag(publishValue, e.target.checked))}
+            />
+            open draft
+          </label>
           <button
             onClick={submitPublish}
             disabled={publishing || !publishValue.trim()}
