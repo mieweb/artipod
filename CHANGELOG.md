@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`artipod prune` spares tagged pods** (docker dangling-image semantics): only pods without a committed tag are pruned; `-a`/`--all` removes tagged ones too. `artipod pods` grew a TAGS column, and exiting an interactive session now prints how to get back (`artipod run -it <id>`) and, for untagged pods, that prune would remove them.
+
 ## [0.5.0] - 2026-09-01
 
 ### Changed
 
-- **`dockerode` is now an optional peer** (was a hard dependency): `npx artipod` and plain installs no longer pull the docker client (~100 packages and npm's `uuid@10` deprecation warning) — `npm install dockerode` to use the `/docker` execution backend. Using it without the peer now fails with an error that says exactly that.
+- **`dockerode` is now an optional peer** (was a hard dependency): `npx artipod` and plain installs no longer pull the docker client (46 packages and npm's `uuid@10` deprecation warning) — `npm install dockerode` to use the `/docker` execution backend. Using it without the peer now fails with an error that says exactly that.
 
 ## [0.4.0] - 2026-09-01
 
