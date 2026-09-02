@@ -4,6 +4,7 @@ Design-and-status documentation for `@artipod/core`. Every doc carries a status 
 
 | Doc | Scope | Plan phases |
 |---|---|---|
+| [containers.md](containers.md) | Orientation for Docker/Podman/Kubernetes users: concept map, runtime detection, the pod-term collision | — |
 | [browser.md](browser.md) | ZenFS storage, ingest API, devices, multi-tab | 0–3, 7 |
 | [linux.md](linux.md) | Node/Linux runtime, Docker hardening, stores, deployment | 0–3, 6 |
 | [bash-isolate.md](bash-isolate.md) | just-bash sandbox semantics, sessions, limits, custom commands | 1–3 |

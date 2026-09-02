@@ -22,20 +22,26 @@ Three consumer surfaces, one layer:
 | **Revision control** | OCI snapshots: cheap (reference-based) checkpoints of *everything*, including shell side effects; time-travel, branch, diff, compact |
 | **Synchronization** | push/pull of digest-addressed layers through registries, proxies, or relays; offline-first by construction |
 
+> **Coming from Docker or Podman?** The muscle memory transfers (`artipod run -it alpine:3.22`, `artipod pods`), but the model inverts: in Docker the image is the artifact and the container's writable layer is scratch; here the writable state *is* the artifact — versioned, encrypted, pushable. And a pod is **not a Kubernetes Pod** — it's durable state that execution attaches to, not scheduled compute. Full orientation and concept map: [docs/containers.md](docs/containers.md).
+
 ## Quick starts
 
 ### The CLI: a pod in your terminal (✅)
 
 ```sh
-npx github:mieweb/artipod run -it              # fresh empty pod → artipod-bash
+npx github:mieweb/artipod run -it              # fresh pod → artipod-bash, kept under ~/.artipod/pods
 npx github:mieweb/artipod run -it alpine:3.22  # a registry image, cloned in writable
+artipod pods                                   # past runs — the `docker ps -a` of pods
+artipod run -it 500edf8b                       # resume a kept pod by id prefix
 artipod run -it field/notes:1                  # a ref you pushed earlier (npm i -g @artipod/core)
 ```
 
-Ephemeral by default (docker `run` semantics); `--dir <path>` persists the pod on the real
-filesystem, `--store <path>` (default `~/.artipod/store`) backs `push`/`pull`/`clone` and REF
-lookup, `-c '<cmd>'` runs one line and exits. Inside the shell, `artipod` lists the pod verbs
-(snapshot, commit, push, hydrate, …).
+Pods are kept on the real filesystem by default, so `exit` loses nothing. `--rm` makes the pod
+ephemeral (RAM only — add `--disk` to back it by a deleted-on-exit temp dir when changes may not
+fit in memory), `artipod rm <pod>` / `artipod prune` clean up kept pods, `--dir <path>` keeps a
+pod at a path of your choosing, `--store <path>` (default `~/.artipod/store`) backs
+`push`/`pull`/`clone` and REF lookup, `-c '<cmd>'` runs one line and exits. Inside the shell,
+`artipod` lists the pod verbs (snapshot, commit, push, hydrate, …).
 
 ### Browser pod with a shell (✅ `@artipod/core/sandbox`)
 
@@ -121,6 +127,7 @@ Built for real disconnection profiles: a 24-hour offline clinic visit, a light-m
 
 | Doc | Contents |
 |---|---|
+| [docs/containers.md](docs/containers.md) | Orientation for Docker/Podman/Kubernetes users: concept map, where each runtime fits, the pod-term collision |
 | [docs/browser.md](docs/browser.md) | Browser implementation: ZenFS backends, OPFS/IndexedDB, ingest API, devices |
 | [docs/linux.md](docs/linux.md) | Linux/server implementation: realizers, Docker hardening, stores, deployment |
 | [docs/bash-isolate.md](docs/bash-isolate.md) | The bash isolate in browser and server: semantics, sessions, limits |
