@@ -5,22 +5,26 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process, { env, stdout } from 'node:process';
 import { spawn } from 'node:child_process';
 import { digestHex } from '../oci/digest.js';
+import { importBlobKey } from '../oci/cipher.js';
 import { OciLayoutPodStore } from '../manager/pod-store.js';
 import { PodSessionHost } from '../manager/session-host.js';
+import type { Authority } from '../manager/authority.js';
 import { nodePodFs } from '../nodePodFs.js';
 import { bearerAuth, staticTokenAuth } from './common.js';
 import { createArtipodApp } from './app.js';
 import { serveApp } from './node.js';
 import { publishDirectory, materializeRef } from './folder.js';
 import { PublishMap, withinRoots } from './publish-map.js';
-import { UI_REF, UI_DIGEST, UI_REMOTE_REF } from './ui-ref.js';
+import { loadOrCreateAuthority, ensurePodKek } from './authority-dir.js';
+import { DEFAULT_KEY_TTL_MS } from './keys-handler.js';
+import { UI_REF } from './ui-ref.js';
 
 export interface ServeCliOptions {
   port: number;
@@ -44,6 +48,12 @@ export interface ServeCliOptions {
   open: boolean;
   /** false = --no-ui (headless landing). */
   ui: boolean;
+  /** Broker mode (S5.5): encrypt the store at rest + serve /api/keys. */
+  encrypt?: boolean;
+  /** Lease TTL cap for /api/keys logins: <n>(ms|s|m|h|d). Default 1h (V10). */
+  keyTtl?: string;
+  /** Authority home (signing key + raw pod KEKs, 0700). Default ~/.artipod/authority. */
+  authority?: string;
 }
 
 export const DEFAULT_SERVE_PORT = 2784; // "ARTI" on a keypad (V7)
@@ -60,6 +70,31 @@ function envList(name: string): string[] {
 }
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
+export const KEY_TTL_RE = /^(\d+)(ms|s|m|h|d)?$/;
+const TTL_UNIT_MS: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+/** '1h' / '30m' / '90s' / bare seconds → ms; null on nonsense. */
+export function parseKeyTtl(spec: string): number | null {
+  const match = KEY_TTL_RE.exec(spec.trim());
+  if (!match) return null;
+  const ms = Number(match[1]) * TTL_UNIT_MS[match[2] ?? 's'];
+  return ms > 0 ? ms : null;
+}
+
+/** The served store's stable pod identity (lease scope): <store>/store-id.json. */
+async function loadOrCreateStoreId(storeDir: string): Promise<string> {
+  const file = join(storeDir, 'store-id.json');
+  try {
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as { podId?: string };
+    if (parsed.podId) return parsed.podId;
+  } catch {
+    // first --encrypt on this store
+  }
+  const podId = randomBytes(8).toString('hex');
+  await writeFile(file, `${JSON.stringify({ podId }, null, 2)}\n`);
+  return podId;
+}
 
 /** Locked tags (tag immutability): <store>/locks.json, applied via --lock/--unlock. */
 async function loadLocks(storeDir: string, lock: string[], unlock: string[]): Promise<Set<string>> {
@@ -116,8 +151,8 @@ function openBrowser(url: string): void {
 /**
  * UI resolution, LOCAL-FIRST (S2): ARTIPOD_UI_DIR (a local build) →
  * ARTIPOD_UI_REF/UI_REF in the local store (materialized once into
- * ~/.artipod/ui/<digest>) → remote fetch of the digest pin (dormant while
- * UI_DIGEST is null) → headless landing. Never an error.
+ * ~/.artipod/ui/<digest>) → bundled dist-ui in the npm package →
+ * headless landing. Never an error.
  */
 async function resolveUiDir(store: OciLayoutPodStore): Promise<{ dir: string; source: string } | null> {
   const resolved = await resolveUiDirInner(store);
@@ -178,11 +213,6 @@ async function resolveUiDirInner(store: OciLayoutPodStore): Promise<{ dir: strin
     }
     return { dir, source: `${ref} (store)` };
   }
-  if (UI_DIGEST) {
-    // Remote fetch of the pinned artifact (release step publishes
-    // UI_REMOTE_REF and bumps UI_DIGEST). Not reachable until a pin exists.
-    stdout.write(`note: UI artifact ${UI_REMOTE_REF}@${UI_DIGEST} not in the local store — remote fetch not implemented yet, serving headless\n`);
-  }
   // Bundled UI: the npm package ships the static build at <pkg>/dist-ui, so
   // `npx artipod serve` is batteries-included offline. A store ref or
   // ARTIPOD_UI_DIR (above) always wins — they are deliberate overrides.
@@ -200,6 +230,24 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   const storeDir = resolve(opts.store);
   const store = new OciLayoutPodStore(nodePodFs(), storeDir);
   await store.init();
+
+  // --encrypt (S5.5, V9 broker): load-or-create the authority + this store's
+  // KEK BEFORE anything writes blobs, so the first --publish already lands
+  // as ciphertext. The serve holds the key — it can decrypt what it brokers.
+  let broker: { authority: Authority; podId: string; capTtlMs: number; dir: string; created: boolean } | null = null;
+  if (opts.encrypt) {
+    const capTtlMs = opts.keyTtl ? parseKeyTtl(opts.keyTtl) : DEFAULT_KEY_TTL_MS;
+    if (capTtlMs === null) {
+      stdout.write(`artipod serve: invalid --key-ttl '${opts.keyTtl}' — want <n>(ms|s|m|h|d), e.g. 1h\n`);
+      process.exit(2);
+    }
+    const dir = resolve(opts.authority ?? join(homedir(), '.artipod/authority'));
+    const { authority, created } = await loadOrCreateAuthority(dir, `serve:${hostname()}`);
+    const podId = await loadOrCreateStoreId(storeDir);
+    const { kek } = await ensurePodKek(dir, authority, podId);
+    store.enableEncryption(await importBlobKey(kek));
+    broker = { authority, podId, capTtlMs, dir, created };
+  }
 
   const surfaces = { web: opts.only !== 'registry', registry: opts.only !== 'web' };
   const relayHosts = opts.ociAllow.length > 0 ? opts.ociAllow : envList('ARTIPOD_OCI_ALLOWED_HOSTS');
@@ -271,6 +319,9 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     relay: { allowedHosts: relayHosts },
     onRefPut,
     isLocked,
+    keys: broker
+      ? { authority: broker.authority, podIds: [broker.podId], capTtlMs: broker.capTtlMs }
+      : undefined,
     // The operations journal: every ref move/delete, append-only JSONL beside
     // the store. The parents DAG keeps the DATA recoverable; this keeps the
     // STORY — who moved what, when, from where to where.
@@ -312,6 +363,13 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   if (locks.size > 0) stdout.write(`  locked:   ${[...locks].sort().join(', ')} (tags cannot move — --unlock <ref> to release)\n`);
   if (sealRe) stdout.write(`  sealed:   tags matching /${sealRaw}/ are create-once (immutable after first push; _-tags stay open — --no-seal to disable)\n`);
   if (uiInfo) stdout.write(`  ui:       ${uiInfo.source} — ${tildify(uiInfo.dir)}\n`);
+  if (broker) {
+    stdout.write(`  keys:     broker ON — store encrypted at rest; THE SERVE MACHINE CAN DECRYPT WHAT IT BROKERS\n`);
+    stdout.write(
+      `            authority ${tildify(broker.dir)}${broker.created ? ' (created)' : ''} · pod ${broker.podId} · lease cap ${opts.keyTtl ?? '1h'}\n`,
+    );
+    stdout.write(`            login: POST ${url}/api/keys/login → lease + KEK · /v2 is off while encrypted\n`);
+  }
   if (relayHosts.length > 0) stdout.write(`  relay:    ${relayHosts.join(', ')}\n`);
   if (token || readToken) {
     if (token) {

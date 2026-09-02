@@ -52,6 +52,9 @@ artipod serve --only registry          # registry surface only
 | `--cors <origin>` | deny | Repeatable exact-match origin allowlist for `/api/pods`, `/api/oci` (and later `/v2`). The shipped UI is same-origin and needs none of this. |
 | `--oci-allow <host>` | deny | Repeatable upstream allowlist for the registry relay (env `ARTIPOD_OCI_ALLOWED_HOSTS`) |
 | `--no-exec` | exec on | Disable the exec surface. Exec auth: env `EXEC_API_TOKEN`, falling back to the serve token. |
+| `--encrypt` | off | Broker mode: the store writes chunked-AEAD ciphertext at rest and `/api/keys` issues key leases. See [Encrypted pods and key leases](#encrypted-pods-and-key-leases-s55). |
+| `--key-ttl <dur>` | `1h` | Lease TTL cap for `/api/keys` logins — `<n>(ms\|s\|m\|h\|d)`. Issued TTL = min(requested, cap). |
+| `--authority <dir>` | `~/.artipod/authority` | Key authority home: signing key + raw pod KEKs, dir `0700`, files `0600`. Created on first `--encrypt`. **Guard its backups.** |
 | `--open` | — | Open the printed URL in a browser |
 
 ## The UI (S2, local-first)
@@ -151,6 +154,58 @@ rw affordance up front — the shipped demo shows a `locked` badge and offers
 only cow/ro. Locking composes with the digest display: a locked
 `me/play:1 @a460ab57` is a name that provably cannot change out from under
 you. Embedders pass their own policy: `createArtipodApp({ isLocked })`.
+
+## Encrypted pods and key leases (S5.5)
+
+Two ways to serve encrypted content — pick per trust model:
+
+| | **blind host** (default — zero flags) | **broker** (`--encrypt`) |
+|---|---|---|
+| what the server holds | opaque ciphertext blobs + an encrypted envelope ref | ciphertext at rest **plus the KEK** |
+| can the server read the data? | **no — ever** | **yes** — stated honestly: a broker can decrypt what it brokers (write-back materializes plaintext anyway) |
+| how keys move | out-of-band (you distribute them) | `POST /api/keys/login` → signed lease + KEK |
+| client sync | `pushEncryptedRef` / `pullEncryptedRef` (ciphertext digests only) | ordinary sync with an `X-Artipod-Lease` header; wire is plaintext (put TLS in front off-localhost) |
+| `/v2` (docker) | works for the ciphertext blobs it can address | **off (403)** — the distribution API cannot carry leases, and serving decrypted blobs to any token holder would bypass them |
+| code needed | none — an encrypted ref is just blobs + a ref to this server | `--encrypt` |
+
+**Broker mode** (`artipod serve --publish <dir> --encrypt`):
+
+- First boot creates the authority (`~/.artipod/authority`, `0700`): an ECDSA
+  signing key (`authority.json`) and one KEK per served store (`keks.json`),
+  keyed by the store's `store-id.json`. **Serve makes the key if one is not
+  there** — no ceremony.
+- Every blob written after `--encrypt` (including the boot `--publish`
+  snapshot) lands as chunked-AEAD ciphertext with a `.alias` digest twin
+  ([encryption.md](encryption.md#at-rest-format)). Blobs already on disk stay
+  as they were — use a fresh store for full coverage.
+- `POST /api/keys/login` (JSON: `{principal?, podIds?, ttlMs?}`) returns a
+  signed lease + base64 KEKs. It authenticates through the S5 token hook: an
+  **ro token gets a read-only lease**; no token needed on an open localhost
+  serve. `GET /api/keys` returns metadata only (never key material); without
+  `--encrypt` the route 404s.
+- Gated requests carry `X-Artipod-Lease: <base64 lease JSON>`. Blob
+  reads/writes and ref **writes** require a live lease covering the store's
+  pod with a matching permission; ref **reads** stay open (pointers are the
+  same metadata a blind host serves). Missing/expired → `401` + re-login
+  hint; wrong scope/permission → `403`.
+- Browser side: `decodeLoginResult` → `PodLocker.adoptLogin` → the KEK sits
+  in the tab's **memory-only keyring** and the local store encrypts at rest
+  with it.
+
+**What the TTL means (V10 — no overpromising).** Client keyrings hold
+non-extractable keys in memory only: closing the tab loses the key
+immediately, and at expiry the keyring evicts it (`PodLockedError`;
+re-login restores — no data rewrite). Enforcement is **layered**:
+cooperative client eviction, plus the server's hard powers — refusing lease
+re-issue and refusing further ciphertext after expiry. The TTL bounds an
+open session; it is **not** revocation of an already-leaked key. That is
+rotation/rewrap, a documented future ([encryption.md](encryption.md)).
+
+A keyless serve of the *same* store stays useful as a blind host: refs list
+fine, ciphertext-addressed blobs sync byte-exact, and plaintext-addressed
+reads answer `423 Locked` instead of leaking. Binding a key-issuing serve to
+anything but localhost is ask-first territory — the authority dir holds raw
+KEK material.
 
 ## Embedding
 

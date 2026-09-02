@@ -35,7 +35,16 @@ export {
   type DistributionHandlerOptions,
 } from './distribution-handler.js';
 export { createStaticHandler } from './static.js';
-export { UI_REF, UI_REMOTE_REF, UI_DIGEST } from './ui-ref.js';
+export { UI_REF } from './ui-ref.js';
+export {
+  createKeysHandler,
+  requireLease,
+  LEASE_HEADER,
+  DEFAULT_KEY_TTL_MS,
+  type KeysHandlerOptions,
+  type LeaseGateOptions,
+} from './keys-handler.js';
+export { loadOrCreateAuthority, ensurePodKek, type LoadedAuthority } from './authority-dir.js';
 export { createPodStoreHandler, type PodStoreHandlerOptions } from './pod-store-handler.js';
 export {
   DEFAULT_ALLOWED_HOSTS,

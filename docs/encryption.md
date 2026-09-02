@@ -36,6 +36,7 @@ The manager (browser tab or server process) holds a session **keyring**: unwrapp
 
 - **Leased keys are memory-only.** WebCrypto `extractable: false` keys keep raw bits out of JS entirely; we deliberately do **not** persist leased KEKs to IndexedDB (persistence is what would defeat the TTL). Tab close = locked. Login = restored.
 - **The server specifies N** (lease TTL). Client enforcement is cooperative (timer, `visibilitychange` auto-lock, explicit `artipod lock`); the server's *hard* power is refusing re-issue after expiry without re-auth.
+- **The login path has a shipped HTTP face**: `artipod serve --encrypt` runs the authority and issues leases at `/api/keys/login` — broker vs blind-host trade-offs in [serve.md](serve.md#encrypted-pods-and-key-leases-s55).
 - **Two lock modes**, policy-chosen: `lock` (default — ciphertext remains; instant restore on login; offline-friendly) and `purge` (kiosk mode — blobs deleted at expiry; restore = re-sync).
 - After lock, reads on encrypted mounts fail `EACCES` with a "pod locked — login to restore" hint; the console and UI surface it.
 

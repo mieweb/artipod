@@ -52,6 +52,19 @@ const SERVE_FLAGS = `  --port <n>         listen port (default 2784; 0 = OS-assi
   --oci-allow <host> allow an upstream registry host for the relay (repeatable;
                      env ARTIPOD_OCI_ALLOWED_HOSTS; default deny)
   --no-exec          disable the exec-session surface
+  --encrypt          broker mode (key authority): store blobs as chunked-AEAD
+                     ciphertext at rest and serve key leases at /api/keys — a
+                     signing key + this store's KEK are created on first use.
+                     Honest caveat: THE SERVE MACHINE CAN DECRYPT WHAT IT
+                     BROKERS, and /v2 is off while encrypted (docker cannot
+                     carry leases). Keyless serves of encrypted refs stay
+                     blind hosts — ciphertext syncs, keys move out-of-band
+  --key-ttl <dur>    lease TTL cap for /api/keys logins, <n>(ms|s|m|h|d)
+                     (default 1h) — bounds an open session: client keyrings
+                     evaporate the key at expiry and re-login restores; it is
+                     NOT revocation of an already-leaked key
+  --authority <dir>  key authority home (signing key + raw pod KEKs, 0700;
+                     default ~/.artipod/authority) — guard its backups
   --no-ui            headless landing only (skip UI resolution); the UI resolves
                      local-first: ARTIPOD_UI_DIR (a static build), then the
                      ARTIPOD_UI_REF ref in the store (default artipod-ui:latest)
@@ -276,6 +289,14 @@ function parseArgs(
           exit(2);
         }
       } else if (a === '--no-seal') serve.noSeal = true;
+      else if (a === '--encrypt') serve.encrypt = true;
+      else if (a === '--key-ttl') {
+        serve.keyTtl = rest[++i];
+        if (!serve.keyTtl || !/^\d+(ms|s|m|h|d)?$/.test(serve.keyTtl.trim())) {
+          stdout.write(`artipod serve: invalid --key-ttl '${serve.keyTtl}' — want <n>(ms|s|m|h|d), e.g. 1h\n`);
+          exit(2);
+        }
+      } else if (a === '--authority') serve.authority = rest[++i];
       else if (a === '--no-exec') serve.exec = false;
       else if (a === '--no-ui') serve.ui = false;
       else if (a === '--open') serve.open = true;

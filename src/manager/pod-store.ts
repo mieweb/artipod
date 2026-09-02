@@ -14,8 +14,10 @@
 
 import type { PodFs } from '../podfs.js';
 import { sha256, verifyDigest, digestHex, type Digest } from '../oci/digest.js';
+import { decryptBlob, encryptBlob } from '../oci/cipher.js';
 import type { StoredRef } from '../oci/store.js';
 import { OciStore } from '../oci/store.js';
+import { PodLockedError } from './keyring.js';
 
 export interface PodStore {
   hasBlob(digest: Digest): Promise<boolean>;
@@ -54,6 +56,8 @@ const MEDIA_TYPE_ANNOTATION = 'org.artipod.refMediaType';
  * standard tooling.
  */
 export class OciLayoutPodStore implements PodStore {
+  private keySource: (() => CryptoKey) | null = null;
+
   constructor(
     private readonly fs: PodFs,
     private readonly dir: string,
@@ -61,6 +65,28 @@ export class OciLayoutPodStore implements PodStore {
 
   private blobPath(digest: Digest): string {
     return `${this.dir}/blobs/sha256/${digestHex(digest)}`;
+  }
+
+  /** plaintext digest → ciphertext digest aliases (encrypted stores). */
+  private aliasPath(digest: Digest): string {
+    return `${this.blobPath(digest)}.alias`;
+  }
+
+  /**
+   * At-rest encryption opt-in (serve `--encrypt`): subsequent putBlob writes
+   * store chunked-AEAD ciphertext addressed by ciphertext digest, with the
+   * plaintext digest resolvable via the alias map — the same scheme as
+   * OciStore. Blobs already on disk stay as they are. Pass a provider to
+   * put a keyring in custody; a keyless reopen serves ciphertext-addressed
+   * blobs untouched (blind host) and refuses plaintext addressing.
+   */
+  enableEncryption(key: CryptoKey | (() => CryptoKey)): void {
+    this.keySource = typeof key === 'function' ? key : () => key;
+  }
+
+  /** True when this store writes ciphertext (regardless of lock state). */
+  get encrypted(): boolean {
+    return this.keySource !== null;
   }
 
   async init(): Promise<void> {
@@ -82,25 +108,46 @@ export class OciLayoutPodStore implements PodStore {
   }
 
   async hasBlob(digest: Digest): Promise<boolean> {
-    try {
-      await this.fs.stat(this.blobPath(digest));
-      return true;
-    } catch {
-      return false;
+    for (const path of [this.blobPath(digest), this.aliasPath(digest)]) {
+      try {
+        await this.fs.stat(path);
+        return true;
+      } catch {
+        // keep looking
+      }
     }
+    return false;
   }
 
   async getBlob(digest: Digest): Promise<Uint8Array> {
-    const raw = await this.fs.readFile(this.blobPath(digest));
-    const bytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
-    await verifyDigest(bytes, digest);
-    return bytes;
+    let raw: Uint8Array;
+    try {
+      const read = await this.fs.readFile(this.blobPath(digest));
+      raw = new Uint8Array(read.buffer, read.byteOffset, read.byteLength);
+    } catch {
+      // Plaintext-addressed read of an encrypted blob: follow the alias.
+      // (Ciphertext-addressed reads take the branch above and return the
+      // stored bytes exactly — that is what blind sync moves.)
+      const cipherDigest = (await this.fs.readFile(this.aliasPath(digest), 'utf8')) as Digest;
+      const cipherRead = await this.fs.readFile(this.blobPath(cipherDigest));
+      const cipherRaw = new Uint8Array(cipherRead.buffer, cipherRead.byteOffset, cipherRead.byteLength);
+      await verifyDigest(cipherRaw, cipherDigest, 'ciphertext blob');
+      if (!this.keySource) throw new PodLockedError(`blob ${digest} is encrypted and this store holds no key`);
+      return decryptBlob(cipherRaw, this.keySource(), digest);
+    }
+    await verifyDigest(raw, digest);
+    return raw;
   }
 
   async putBlob(bytes: Uint8Array, expected?: Digest): Promise<Digest> {
     if (expected) await verifyDigest(bytes, expected);
     const digest = expected ?? (await sha256(bytes));
-    if (!(await this.hasBlob(digest))) {
+    if (await this.hasBlob(digest)) return digest;
+    if (this.keySource) {
+      const encrypted = await encryptBlob(bytes, this.keySource());
+      await this.fs.writeFile(this.blobPath(encrypted.ciphertextDigest), encrypted.bytes);
+      await this.fs.writeFile(this.aliasPath(digest), encrypted.ciphertextDigest);
+    } else {
       await this.fs.writeFile(this.blobPath(digest), bytes);
     }
     return digest;

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`artipod serve --encrypt` — key broker + encryption at rest** (serve plan S5.5): the served store writes chunked-AEAD ciphertext (`.alias` digest twins), and `/api/keys/login` issues signed key leases (TTL cap `--key-ttl`, default 1h) from an on-disk authority (`--authority`, default `~/.artipod/authority`, `0700`) that is **created automatically on first use** — signing key and per-store KEK included. Blob reads/writes and ref writes then require an `X-Artipod-Lease` header (ref reads stay open); `/v2` is off while encrypted (it cannot carry leases). Browsers adopt the leased KEK into the memory-only keyring (`decodeLoginResult` → `PodLocker.adoptLogin`) and encrypt their local stores at rest; expiry locks (`PodLockedError`), re-login restores. A keyless serve of encrypted refs remains a **blind host**: ciphertext syncs byte-exact, plaintext-addressed reads answer `423 Locked`, and the server can never read the data. Stated honestly: a broker CAN decrypt what it brokers. See `docs/serve.md`.
+- `createArtipodApp({ keys })` for embedders: mounts `/api/keys` over any `Authority` and (default on) lease-gates the pods surface; `createKeysHandler`/`requireLease`/`loadOrCreateAuthority`/`ensurePodKek` exported from `@artipod/core/server`; `encodeLoginResult`/`decodeLoginResult` from `@artipod/core/manager`; `OciLayoutPodStore.enableEncryption` for at-rest ciphertext on directory stores.
+
 ## [0.9.1] - 2026-09-02
 
 ### Fixed

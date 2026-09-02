@@ -18,7 +18,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): serve pha
 ### Ask-first list (owner sign-off required)
 
 - Publishing any `@artipod/core` release that first exposes `createArtipodApp` / the `serve` verb, and the paired `artipod` shim republish.
-- The home of the UI artifact (proposed: `ghcr.io/mieweb/artipod-ui`, public anonymous pull) and every push of it — it's a release artifact whose digest gets pinned into the CLI (V6).
+- ~~The home of the UI artifact (proposed: `ghcr.io/mieweb/artipod-ui`, public anonymous pull) and every push of it~~ — **dropped 2026-09-02** (V6 re-amendment: the UI ships bundled in the npm package; no remote artifact exists).
 - Anything touching the deployed artipod-sync service (`deploy/artipod-sync.service`, prod env) — the S2 demo refactor onto `createArtipodApp` redeploys it.
 - Enabling `docker push` (S4) on any non-localhost deployment — write surface on a real network needs the owner to bless the token story first.
 - Binding a **key-issuing** serve (S5.5, `--authority`) to non-localhost — the authority dir holds raw KEK material; the owner blesses its custody (permissions, backup, host) before it faces a network.
@@ -29,11 +29,11 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): serve pha
 |---|---|---|---|
 | S0 — node adapter + `createArtipodApp` + `serve` verb | main | **done** (2026-09-02) | |
 | S1 — `--publish` folder delight + auto-token + landing | main | **done** (2026-09-02) | |
-| S2 — ship the sync demo UI (static export → OCI artifact, pulled on first serve) | main | **in progress** — local paths done; ghcr artifact + pin + demo refactor remain | |
+| S2 — ship the sync demo UI (static export, bundled in the npm package) | main | **done** (2026-09-02) — npm bundling superseded the ghcr artifact; demo catch-all refactor + CI both-modes job moved to the e2e close | |
 | S3 — OCI distribution read (`/v2/` pull) | main | **done** (2026-09-02) | |
 | S4 — OCI distribution write (push + conformance) | main | **done** (2026-09-02) | |
 | S5 — static token auth across all surfaces | main | **done** (2026-09-02) | |
-| S5.5 — key leases + encrypted publish (`/api/keys`) | `serve-s5.5-keys` | todo | |
+| S5.5 — key leases + encrypted publish (`/api/keys`) | main | **done** (2026-09-02) | |
 | S6 — pull-through cache + `artipod replicate` | `serve-s6-replicate` | todo | |
 | S7 — OIDC / RBAC / mirroring / TLS | — | future — documented only (§5) | |
 
@@ -73,7 +73,7 @@ Success = a scripted e2e that replays the sync-demo north-star paragraph (`sync-
 | V3 | Auth v1 = **anonymous (localhost) + static ro/rw tokens** only, accepted as both `Bearer` and `Basic` (any username, token as password — so `docker login` works). OIDC is a *designed-not-built* identity hook (§5); LDAP/AD and SAML are **never native** — the documented recipe is an IdP bridge (Dex/Keycloak) in front of the OIDC hook. |
 | V4 | `artipod serve` ships the **full sync demo UI** as a Next.js static export served at `/` (same-origin with the API — the shipped UI needs no CORS). Delivery mechanism is V6 (pulled OCI artifact, not bundled). |
 | V5 | Replication v1 = **pull-through cache** mode + one-shot **`artipod replicate <src> <dst>`** (reuses `src/manager/sync.ts` anti-entropy). Continuous mirroring is future (§5). |
-| V6 | Packaging: **no new npm package** (upholds layer-plan Decision #2 / sync-demo D2), and **the UI is not bundled in any npm package** *(amended 2026-09-02 — owner-answered; supersedes the original shim-bundle wording)*. The static UI ships as a **digest-pinned OCI artifact** (proposed `ghcr.io/mieweb/artipod-ui@sha256:…`, digest pinned in the core release): the first `artipod serve` that wants a UI pulls it into `~/.artipod/store`, digest-verifies, materializes, and serves it from there forever after — dogfooding artipod's own distribution in the most visible place possible. Rationale: the UI (~4–5 MB measured) is ~2× the entire core dist (2.3 MB); bundling it would tax every `npx artipod run` user. Offline / `--no-ui` / `--only registry` / bare `@artipod/core` fall back headless (S1 landing). `@artipod/core` stays zero-prod-dep; `@artipod/core/server` stays bring-your-own-auth; any future server-only deps still ride the `artipod` shim. |
+| V6 | Packaging: **no new npm package** (upholds layer-plan Decision #2 / sync-demo D2). *(Re-amended 2026-09-02, owner-ratified — supersedes both earlier wordings:)* **the UI ships bundled in `@artipod/core` itself** as `dist-ui/` (in the package `files`, built by `npm run build:ui` / the publish workflow). The measured export is far smaller than feared (~1.3 MB imported; whole package 1.7 MB gz / 5.8 MB unpacked), so npm bundling beats the ghcr OCI artifact on simplicity and offline-completeness — the **digest-pinned remote artifact, ghcr push, and first-serve remote fetch are DROPPED**. Resolution order: `ARTIPOD_UI_DIR` → `artipod-ui:latest` in the store (a deliberate override, materialized to `~/.artipod/ui/<digest>`) → bundled `dist-ui` → headless landing. `--no-ui` / `--only registry` stay headless; `@artipod/core/server` stays bring-your-own-auth. |
 | V7 | Default port **2784** ("ARTI" on a keypad), default host **127.0.0.1**. Non-localhost bind with no token configured → auto-generate a token and print it (Jupyter-style); localhost stays open by default. |
 | V8 | Ref-write semantics split: the native `/api/pods/refs` surface keeps **LWW `mergeHeads`** on divergence (sync-demo D8/D9); `/v2/<name>/manifests/<tag>` PUT is **last-write-wins overwrite** (distribution-spec behavior — registries don't merge). A tag updated via `/v2/` is still a plain ref, so history stays reachable through `org.artipod.parents` where the pusher recorded them. Documented loudly in `docs/serve.md`. |
 | V9 | *(ratified 2026-09-02)* **`artipod serve` acts as the key authority (broker)** for encrypted pods it owns: a `/api/keys` surface wraps the existing Phase-6.5 `Authority` — authenticated login → signed lease + KEKs, client adopts into its keyring. **Stated honestly in `docs/serve.md`: broker mode means the serve machine can decrypt what it brokers** (it holds raw KEK material; write-back materializes plaintext anyway). Pure E2E remains available: a keyless serve is a **blind host** — encrypted refs sync as opaque ciphertext with keys distributed out-of-band, and that path needs no new code. |
@@ -225,17 +225,17 @@ Worklog:
 
 ### S2 — ship the sync demo UI *(parallel-ok with S3)*
 
-- [x] `scripts/export-static.mjs` in the demo: stash `app/api/`, `output: 'export'` build, restore; CI job proves both build modes stay green *(CI job still todo)*
-- [ ] Demo refactor: five route files → one catch-all on `createArtipodApp` (env-var policy preserved); deployed service redeploy is **ask-first**
+- [x] `scripts/export-static.mjs` in the demo: stash `app/api/`, `output: 'export'` build, restore *(the publish workflow builds the export on every release; a PR-CI both-modes job moved to the e2e close)*
+- [x] ~~Demo refactor: five route files → one catch-all on `createArtipodApp`~~ — still open, **moved to the e2e close** (redeploy ask-first)
 - [x] `src/server/static.ts` (traversal-safe, SPA fallback); `ui` option in `createArtipodApp`; `ARTIPOD_UI_DIR`/`ARTIPOD_UI_REF` + `--no-ui` in the CLI
-- [ ] UI-artifact publish script (export → `publishDirectory` → push to `ghcr.io/mieweb/artipod-ui`) + pinned digest constant in `src/server/ui-ref.ts`; artifact home + first push are **ask-first** *(home approved 2026-09-02; push deferred until local testing done)*
-- [ ] First-serve pull path: store-miss → fetch + digest-verify + materialize to `~/.artipod/ui/<digest>/`; cached-hit path; offline miss → warn + headless landing (test all three) *(local store-hit + materialize + headless done; REMOTE fetch dormant behind `UI_DIGEST = null`)*
-- [ ] **Done when**: on a machine with only the 4-file shim installed, `artipod serve --publish <dir>` fetches the UI once, then opens the full terminal/editor UI at `/` (second boot: no fetch), syncing against the local store — the north-star sentence, minus registry
+- [x] ~~UI-artifact publish script (ghcr push) + pinned digest constant~~ — **dropped 2026-09-02** (V6 re-amendment): the UI ships bundled as `dist-ui/` in the npm package; `ui-ref.ts` keeps only the local-store `UI_REF`
+- [x] ~~First-serve remote pull path~~ — **superseded**: local store-hit + materialize + headless shipped; the remote fetch was dropped with the ghcr artifact; the bundled `dist-ui` fallback is the batteries-included path
+- [x] **Done when** *(rewritten with V6's re-amendment)*: on a machine with only the shim installed, `artipod serve --publish <dir>` opens the full terminal/editor UI at `/` with **zero network fetches** (bundled dist-ui), syncing against the local store — met by the 0.9.0 release
 
 Worklog:
 
 - 2026-09-02: S2 local-first slice done (owner directive: local testing must not fetch from ghcr when a local build exists). Resolution order in `resolveUiDir` (serve.ts): `--no-ui` → `ARTIPOD_UI_DIR` (index.html sanity-checked) → `ARTIPOD_UI_REF`/`artipod-ui:latest` in the store (materialized once to `~/.artipod/ui/<digest>`, mkdir before materializeRef — it realpaths the target) → remote pin (dormant: `UI_DIGEST=null` in ui-ref.ts) → headless landing. `src/server/static.ts`: traversal-safe, Next-export spellings (`page.html`, `dir/index.html`), SPA fallback only for extensionless paths. Demo: conditional `output:'export'` under `STATIC_EXPORT=1`, `scripts/export-static.mjs` (stash app/api, build, restore, struct-minify marker assertion) — verified: export builds (152 kB first-load), `artipod import out artipod-ui:latest` (51 layers, 1.3 MB), serve resolves from store, index+chunks+API all 200. Tests: static.test.ts (5), serve.test.ts UI-dir + store-ref paths. Gate: 490 tests green.
-- Remaining for S2 close: ghcr publish script + digest pin + remote fetch implementation (ask-first push), demo catch-all refactor onto createArtipodApp (redeploy ask-first), CI both-modes job.
+- 2026-09-02 (later): **S2 closed via npm bundling** — owner ratified the V6 re-amendment: `npm run build:ui` exports the demo into `dist-ui/` (gitignored, in the package `files`), the publish workflow builds it before `npm publish`, `resolveUiDir` grew the bundled-dist-ui fallback, and a `ui-buildinfo.json` version-skew warning covers stale UI builds. Shipped in **0.9.0**. `UI_REMOTE_REF`/`UI_DIGEST` and the dormant remote-fetch branch removed from `ui-ref.ts`/`serve.ts` when the plan was reconciled. Demo catch-all refactor + PR-CI both-modes job moved to the e2e close.
 
 ### S3 — distribution read (`/v2/` pull) *(parallel-ok with S2)*
 
@@ -279,15 +279,19 @@ Worklog:
 
 ### S5.5 — key leases + encrypted publish
 
-- [ ] Blind-host regression test first: keyless serve round-trips an encrypted ref (push ciphertext from an encrypted client store, pull on a second client, decrypt with out-of-band key) — proves the zero-code path before adding the broker
-- [ ] `src/server/keys-handler.ts`: `POST /api/keys/login` (S5 auth → `Authority.login`, TTL = min(requested, cap, 1h)), `GET /api/keys` (metadata only); wired into `createArtipodApp` behind an `authority` option
-- [ ] Lease-scope enforcement in the pods handler (podId ∈ lease.podIds, permissions vs method) for encrypted refs; expired → 401 + re-login hint
-- [ ] CLI: `--encrypt`, `--key-ttl`, `--authority <dir>` (default `~/.artipod/authority`, 0700, created on first `--encrypt`); `/api/keys` 404 when no authority
-- [ ] Browser flow: login → `adoptLogin` → read/write encrypted pod; expiry mid-session → `PodLockedError` → re-login restores (test with fake clock)
-- [ ] `docs/serve.md`: blind-host vs broker table, the V10 layered-enforcement paragraph (no overpromising), `docs/encryption.md` cross-links
-- [ ] **Done when**: `artipod serve --publish <dir> --encrypt --key-ttl 1h` serves a pod whose blobs are ciphertext at rest; a client can login, read, write; the same store served by a *keyless* second instance still syncs the ref as a blind host
+- [x] Blind-host regression test first: keyless serve round-trips an encrypted ref (push ciphertext from an encrypted client store, pull on a second client, decrypt with out-of-band key) — proves the zero-code path before adding the broker
+- [x] `src/server/keys-handler.ts`: `POST /api/keys/login` (S5 auth → `Authority.login`, TTL = min(requested, cap, 1h)), `GET /api/keys` (metadata only); wired into `createArtipodApp` behind a `keys` option *(spelled `keys`, not `authority` — it carries podIds/cap/enforce alongside the Authority)*
+- [x] Lease-scope enforcement in the pods handler (podId ∈ lease.podIds, permissions vs method) for encrypted refs; expired → 401 + re-login hint *(as a `requireLease` wrapper around the pods surface; ref READS stay lease-free — pointers are the same metadata a blind host serves)*
+- [x] CLI: `--encrypt`, `--key-ttl`, `--authority <dir>` (default `~/.artipod/authority`, 0700, created on first `--encrypt`); `/api/keys` 404 when no authority
+- [x] Browser flow: login → `adoptLogin` → read/write encrypted pod; expiry mid-session → `PodLockedError` → re-login restores (test with fake clock)
+- [x] `docs/serve.md`: blind-host vs broker table, the V10 layered-enforcement paragraph (no overpromising), `docs/encryption.md` cross-links
+- [x] **Done when**: `artipod serve --publish <dir> --encrypt --key-ttl 1h` serves a pod whose blobs are ciphertext at rest; a client can login, read, write; the same store served by a *keyless* second instance still syncs the ref as a blind host
 
 Worklog:
+
+- 2026-09-02: S5.5 complete. New: `src/server/keys-handler.ts` (`createKeysHandler` + `requireLease` + `LEASE_HEADER`/`DEFAULT_KEY_TTL_MS`), `src/server/authority-dir.ts` (`loadOrCreateAuthority`/`ensurePodKek` — authority.json signing key + keks.json, 0700/0600, all created on first `--encrypt`; the owner directive "serve makes a key if one is not there" is this file). Enablers the plan hadn't costed: `generateSigningKeyPair(extractable)` + `exportSigningKeyPair`/`importSigningKeyPair` in crypto.ts (non-extractable keys cannot survive a restart — a persistent authority needs pkcs8 on disk); `Authority.from`/`podIds`/`hasPod` + `encodeLoginResult`/`decodeLoginResult` wire helpers (base64 KEKs); **`OciLayoutPodStore.enableEncryption`** mirroring OciStore's alias scheme — plaintext-addressed reads decrypt (or throw `PodLockedError` keyless), ciphertext-addressed reads stay byte-exact so blind relaying of foreign ciphertext is untouched; pods handler maps `PodLockedError` → **423 Locked**. serve.ts: broker boot BEFORE `--publish` (first snapshot already lands encrypted), `<store>/store-id.json` pod identity, `parseKeyTtl` (`<n>(ms|s|m|h|d)`), banner prints "broker ON — THE SERVE MACHINE CAN DECRYPT WHAT IT BROKERS".
+- Deviation (rule 6): **`/v2` is OFF (403 + explanation) in broker mode** — the distribution API cannot carry leases, and serving decrypted blobs to any S5 token holder would bypass lease enforcement entirely; documented in serve.md, revisit with S7 identity if a consumer needs it. Ref reads stay open (see checklist note). Existing plaintext blobs in a store that later turns on `--encrypt` stay plaintext (content-addressed no-op) — documented "fresh store for full coverage".
+- Tests: keys-handler.test.ts (blind-host in-process over HttpPodStore→app fetch, keyless 423 + ciphertext-on-disk, /api/keys 404-without-authority, metadata-only GET, TTL clamp, ro-identity → read-only lease, enforcement matrix incl. forged-authority lease + fake-clock expiry with re-login hint, /v2 403; browser keyring flow under a fake clock: adoptLogin → bind → write/read → expiry `PodLockedError` → re-login restores). serve.test.ts broker e2e (spawned CLI): banner, `.alias` on disk + no plaintext in blobs, authority dir 0700/file 0600, 401-without-lease → login → lease-header reads (layer tar gunzipped to find the marker), /v2 403, then a keyless reopen of the SAME store: refs 200, plain digest 423, and a full `pushEncryptedRef`/`pullEncryptedRef` round trip through it as a blind host. Gate: lint/build/tsc/test → 46 files / 510 tests green.
 
 ### S6 — pull-through cache + `artipod replicate`
 
@@ -301,8 +305,10 @@ Worklog:
 ### e2e (closes the plan)
 
 - [ ] Replay the sync-demo north-star e2e against `artipod serve` (not Next dev)
+- [ ] Demo refactor: five route files → one catch-all on `createArtipodApp` (env-var policy preserved); deployed service redeploy is **ask-first** *(moved from S2)*
+- [ ] CI job proving both demo build modes (dev + `STATIC_EXPORT=1` export) stay green *(moved from S2)*
 - [ ] `README.md` + `docs/README.md` sections; `docs/serve.md` final; `docs/on-disk-layout.md` store + `~/.artipod/ui/<digest>` paragraph
-- [ ] Owner publish of core + shim, paired with the UI-artifact push + pin bump (**ask-first**)
+- [ ] Owner publish of core + shim (**ask-first**; the bundled UI rides the same npm publish — no separate artifact step)
 
 ## 5. Future (documented only — do not start without re-planning)
 
@@ -322,8 +328,8 @@ Worklog:
 | `docker` refuses HTTP registries | S3/S4 | Document `insecure-registries` for localhost testing; TLS story is §5 (proxy) |
 | Upload sessions in memory lose pushes on restart | S4 | Spec-permitted (client retries); note in docs; TTL + temp-dir cleanup on boot |
 | `--publish` write-back and `/v2/` push mutate the same refs with different semantics | S4 | V8 is the rule; `docs/serve.md` table; test covering a `/v2/` push onto a published ref |
-| First `serve` has no network → no UI | S2 | Warn + headless landing (never an error); `ARTIPOD_UI_DIR` serves a local build; UI cached forever after one fetch |
-| Pinned UI digest drifts from the published artifact (release-step skew) | S2 | Release checklist pairs "push UI artifact" with "bump `ui-ref.ts` pin" in one PR; CI job pulls the pinned digest and asserts it resolves |
+| First `serve` has no network → no UI | S2 | Moot since the V6 re-amendment: the UI ships bundled in the npm package (offline-complete); `ARTIPOD_UI_DIR` still serves any local build |
+| ~~Pinned UI digest drifts from the published artifact~~ | S2 | Superseded — no remote artifact/pin exists (V6 re-amendment); the analogous skew (UI bundling an older core) is caught by the `ui-buildinfo.json` version-skew warning |
 | `--key-ttl` read as hard revocation — it isn't | S5.5 | V10 layered-enforcement paragraph in `docs/serve.md`; rotation/rewrap is the §5 answer; never market the TTL as revoking leaked keys |
 | Authority dir (raw KEKs) leaks via backup/snapshot of `~/.artipod` | S5.5 | 0700, separate `--authority` location documented, ask-first before any non-localhost key-issuing bind |
 | Broker mode surprises users who assumed E2E | S5.5 | Blind-host vs broker table up front in `docs/serve.md`; startup banner prints "key broker: ON (server can decrypt brokered pods)" |

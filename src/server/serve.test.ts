@@ -221,4 +221,102 @@ describe('artipod serve', () => {
     child.kill('SIGTERM');
     await exited;
   }, 60_000);
+
+  it('--encrypt: ciphertext at rest, /api/keys login, lease-gated reads, /v2 off; keyless reopen is a blind host', async () => {
+    const scratchRoot = await mkdtemp(join(tmpdir(), 'apod-enc-'));
+    scratch.push(scratchRoot);
+    const served = join(scratchRoot, 'vault');
+    const authDir = join(scratchRoot, 'authority');
+    const storeDir = join(scratchRoot, 'store');
+    await mkdir(served);
+    await mkdir(storeDir);
+    await writeFile(join(served, 'secret.md'), 'BROKER-SECRET payload\n');
+
+    const broker = await startServe(['--publish', served, '--encrypt', '--authority', authDir, '--key-ttl', '5m'], {
+      storeDir,
+    });
+    // the banner flushes after the listening line startServe resolves on
+    await expect.poll(() => broker.output(), { timeout: 5_000 }).toContain('broker ON');
+
+    // at rest: alias files exist, and no blob carries the plaintext
+    const { readdir } = await import('node:fs/promises');
+    const blobDir = join(storeDir, 'blobs/sha256');
+    const files = await readdir(blobDir);
+    expect(files.some((f) => f.endsWith('.alias'))).toBe(true);
+    for (const f of files.filter((n) => !n.endsWith('.alias'))) {
+      expect((await readFile(join(blobDir, f), 'latin1')).includes('BROKER-SECRET')).toBe(false);
+    }
+    // authority material is private
+    const { stat: statFile } = await import('node:fs/promises');
+    expect(((await statFile(authDir)).mode & 0o777)).toBe(0o700);
+    expect(((await statFile(join(authDir, 'authority.json'))).mode & 0o777)).toBe(0o600);
+
+    // /v2 is off in broker mode; unleased blob reads are 401
+    expect((await fetch(`${broker.url}/v2/`)).status).toBe(403);
+    const refs = (await (await fetch(`${broker.url}/api/pods/refs`)).json()) as { ref: string; manifestDigest: string }[];
+    const head = refs.find((r) => r.ref === 'vault:latest')!;
+    expect((await fetch(`${broker.url}/api/pods/blobs/${head.manifestDigest}`)).status).toBe(401);
+
+    // login → lease header → plaintext reads
+    const login = await fetch(`${broker.url}/api/keys/login`, { method: 'POST', body: JSON.stringify({ principal: 'user:e2e' }) });
+    expect(login.status).toBe(200);
+    const { lease } = (await login.json()) as { lease: object };
+    const leaseHeader = { 'x-artipod-lease': Buffer.from(JSON.stringify(lease)).toString('base64') };
+    const manifest = (await (
+      await fetch(`${broker.url}/api/pods/blobs/${head.manifestDigest}`, { headers: leaseHeader })
+    ).json()) as { layers: { digest: string; annotations?: Record<string, string> }[] };
+    const layer = manifest.layers.find((l) => l.annotations?.['org.artipod.path']?.includes('secret.md')) ?? manifest.layers[0];
+    const plain = await fetch(`${broker.url}/api/pods/blobs/${layer.digest}`, { headers: leaseHeader });
+    expect(plain.status).toBe(200);
+    // the decrypted layer is a (possibly gzipped) per-file tar
+    const { isGzip, gunzip } = await import('../oci/gzip.js');
+    let layerTar = new Uint8Array(await plain.arrayBuffer());
+    if (isGzip(layerTar)) layerTar = await gunzip(layerTar);
+    expect(new TextDecoder('latin1').decode(layerTar)).toContain('BROKER-SECRET');
+
+    broker.child.kill('SIGTERM');
+    await broker.exited;
+
+    // keyless reopen of the SAME store: refs visible, plaintext digests 423,
+    // and encrypted-envelope refs sync straight through (blind host)
+    const blind = await startServe(['--no-seal'], { storeDir });
+    expect((await fetch(`${blind.url}/api/pods/refs`)).ok).toBe(true);
+    expect((await fetch(`${blind.url}/api/pods/blobs/${head.manifestDigest}`)).status).toBe(423);
+
+    const { configure, InMemory, fs: zfs } = await import('@zenfs/core');
+    const { OciStore } = await import('../oci/store.js');
+    const { generateBlobKey } = await import('../oci/cipher.js');
+    const { HttpPodStore } = await import('../manager/http-store.js');
+    const { pushEncryptedRef, pullEncryptedRef } = await import('../manager/encrypted-sync.js');
+    await configure({ mounts: { '/': InMemory } });
+    const key = await generateBlobKey();
+    const src = new OciStore(zfs);
+    await src.init();
+    await src.enableEncryption(key);
+    const layerBytes = new TextEncoder().encode('blind-hosted ciphertext');
+    const dLayer = await src.putBlob(layerBytes);
+    const config = new TextEncoder().encode(JSON.stringify({ diff_ids: [dLayer] }));
+    const dConfig = await src.putBlob(config);
+    const manifestBytes = new TextEncoder().encode(
+      JSON.stringify({
+        schemaVersion: 2,
+        config: { mediaType: 'application/vnd.artipod.volume.v1+json', digest: dConfig, size: config.length },
+        layers: [{ mediaType: 'application/vnd.artipod.volume.layer.v1.chunked+encrypted', digest: dLayer, size: layerBytes.length }],
+      }),
+    );
+    const dManifest = await src.putBlob(manifestBytes);
+    await src.putRef('blind:1', dManifest, 'application/vnd.oci.image.manifest.v1+json');
+    const relay = new HttpPodStore(`${blind.url}/api/pods`);
+    await pushEncryptedRef(src, relay, 'blind:1', key);
+    const { bindContext } = await import('@zenfs/core');
+    const ctx = bindContext({ root: '/blind-dst' });
+    const dst = new OciStore(ctx.fs as unknown as import('../sandbox/types.js').ZenFsLike);
+    await dst.init();
+    await dst.enableEncryption(key);
+    await pullEncryptedRef(relay, dst, 'blind:1', key);
+    expect(new TextDecoder().decode(await dst.getBlob(dLayer))).toBe('blind-hosted ciphertext');
+
+    blind.child.kill('SIGTERM');
+    await blind.exited;
+  }, 60_000);
 });

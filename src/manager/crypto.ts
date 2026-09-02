@@ -37,10 +37,38 @@ export interface SigningKeyPair {
   publicKeyB64: string;
 }
 
-export async function generateSigningKeyPair(): Promise<SigningKeyPair> {
-  const pair = (await subtle().generateKey(SIGN_ALG, false, ['sign', 'verify'])) as CryptoKeyPair;
+/** `extractable` opts into pkcs8 export — only for authorities that must
+ * survive restarts from disk (serve `--authority`); sessions stay false. */
+export async function generateSigningKeyPair(extractable = false): Promise<SigningKeyPair> {
+  const pair = (await subtle().generateKey(SIGN_ALG, extractable, ['sign', 'verify'])) as CryptoKeyPair;
   const spki = new Uint8Array(await subtle().exportKey('spki', pair.publicKey));
   return { privateKey: pair.privateKey, publicKey: pair.publicKey, publicKeyB64: toBase64(spki) };
+}
+
+export interface ExportedSigningKeyPair {
+  /** base64 SPKI (same bytes as publicKeyB64). */
+  publicKeySpki: string;
+  /** base64 pkcs8 — RAW SIGNING MATERIAL; store 0600 and guard backups. */
+  privateKeyPkcs8: string;
+}
+
+/** Requires a keypair generated with `extractable: true`. */
+export async function exportSigningKeyPair(pair: SigningKeyPair): Promise<ExportedSigningKeyPair> {
+  const pkcs8 = new Uint8Array(await subtle().exportKey('pkcs8', pair.privateKey));
+  return { publicKeySpki: pair.publicKeyB64, privateKeyPkcs8: toBase64(pkcs8) };
+}
+
+/** Re-imports non-extractable — the disk copy stays the only export. */
+export async function importSigningKeyPair(exported: ExportedSigningKeyPair): Promise<SigningKeyPair> {
+  const privateKey = await subtle().importKey(
+    'pkcs8',
+    fromBase64(exported.privateKeyPkcs8) as unknown as ArrayBuffer,
+    SIGN_ALG,
+    false,
+    ['sign'],
+  );
+  const publicKey = await importVerifyKey(exported.publicKeySpki);
+  return { privateKey, publicKey, publicKeyB64: exported.publicKeySpki };
 }
 
 export async function importVerifyKey(publicKeyB64: string): Promise<CryptoKey> {

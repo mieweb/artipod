@@ -15,6 +15,7 @@
 import type { Digest } from '../oci/digest.js';
 import type { PodStore } from '../manager/pod-store.js';
 import { isAncestor, mergeHeads, type MergeOptions } from '../manager/merge.js';
+import { PodLockedError } from '../manager/keyring.js';
 import { authorizeAccess, json, type AuthHook, type PathHandler } from './common.js';
 
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
@@ -70,7 +71,10 @@ export function createPodStoreHandler(options: PodStoreHandlerOptions): PathHand
         let bytes: Uint8Array;
         try {
           bytes = await store.getBlob(digest as Digest);
-        } catch {
+        } catch (e) {
+          // 423 Locked: the blob exists as ciphertext but this serve holds no
+          // key (blind host) — sync the ciphertext digests, or use the broker.
+          if (e instanceof PodLockedError) return json({ error: e.message }, 423);
           return json({ error: 'not found' }, 404);
         }
         // Byte-offset resume (plan 6.6): open-ended suffix ranges only; any

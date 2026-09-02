@@ -9,9 +9,11 @@
  */
 import {
   canonicalJson,
+  fromBase64,
   generateSigningKeyPair,
   scopeMatch,
   signJson,
+  toBase64,
   verifyJson,
   wrapKeyForDevice,
   type SigningKeyPair,
@@ -72,6 +74,26 @@ export interface LoginResult {
   keys: Record<string, Uint8Array>;
 }
 
+/** LoginResult as JSON carries it (serve `/api/keys/login`): keys in base64. */
+export interface WireLoginResult {
+  lease: Lease;
+  keys: Record<string, string>;
+}
+
+export function encodeLoginResult(result: LoginResult): WireLoginResult {
+  return {
+    lease: result.lease,
+    keys: Object.fromEntries(Object.entries(result.keys).map(([id, raw]) => [id, toBase64(raw)])),
+  };
+}
+
+export function decodeLoginResult(wire: WireLoginResult): LoginResult {
+  return {
+    lease: wire.lease,
+    keys: Object.fromEntries(Object.entries(wire.keys).map(([id, b64]) => [id, fromBase64(b64)])),
+  };
+}
+
 const randomId = (): string => {
   const buf = new Uint8Array(8);
   globalThis.crypto.getRandomValues(buf);
@@ -91,8 +113,22 @@ export class Authority {
     return new Authority(name, await generateSigningKeyPair(), clock);
   }
 
+  /** Rehydrate from persisted keys (serve `--authority <dir>`). */
+  static from(name: string, keys: SigningKeyPair, clock: () => number = Date.now): Authority {
+    return new Authority(name, keys, clock);
+  }
+
   get publicKey(): string {
     return this.keys.publicKeyB64;
+  }
+
+  /** Pods this authority holds KEKs for. */
+  get podIds(): string[] {
+    return [...this.podKeks.keys()];
+  }
+
+  hasPod(podId: string): boolean {
+    return this.podKeks.has(podId);
   }
 
   /** Custodial registration; generates a KEK when none is given. */
