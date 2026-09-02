@@ -120,6 +120,14 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
   const diffIds = [...baseDiffIds];
   let overlayLayers = 0;
 
+  const upperFiles = await walkUpper(zfs, upperAt);
+  // A COMPLETELY empty overlay says nothing — never let it strip previous
+  // pushes (a fresh session's in-memory upper starts empty; deleting
+  // everything on purpose flows through deletions/whiteouts instead).
+  if (upperFiles.length === 0 && deletions.size === 0) {
+    return { changed: false, manifestDigest: head.manifestDigest, overlayLayers: 0 };
+  }
+
   const putLayer = async (built: Awaited<ReturnType<typeof buildFileLayer>>) => {
     if (!(await store.hasBlob(built.layerDigest))) await store.putBlob(built.compressed, built.layerDigest);
     await store.putUncompressed(built.diffId, built.tar);
@@ -130,7 +138,7 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
     overlayLayers += 1;
   };
 
-  for (const file of await walkUpper(zfs, upperAt)) {
+  for (const file of upperFiles) {
     await putLayer(
       await buildFileLayer(
         [{ path: file.podPath, type: 'file', content: file.content, mode: file.mode, mtimeMs: file.mtimeMs }],

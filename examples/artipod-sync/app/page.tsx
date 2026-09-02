@@ -337,10 +337,14 @@ function Catalog() {
       // IndexedDB fallback the uppers are invisible here, so trust the flags.
       if (info?.backend === 'opfs') {
         changed = new Set<string>();
+        const modeById = new Map(registry.map((e) => [e.id, e.mode]));
         const uppers = (await fs.promises.readdir('/.artipod/uppers').catch(() => [])) as string[];
         for (const name of uppers) {
           const entries = (await fs.promises.readdir(`/.artipod/uppers/${name}`).catch(() => [])) as string[];
-          if (entries.length > 0) changed.add(decodeURIComponent(name));
+          const id = decodeURIComponent(name);
+          // rw uppers persist too now, but autoPush keeps them synced — only
+          // cow uppers represent unpushed divergence
+          if (entries.length > 0 && modeById.get(id) !== 'rw') changed.add(id);
         }
         for (const e of registry) {
           if (e.hasChanges && !changed.has(e.id)) await patchRegistry(e.id, { hasChanges: false });
@@ -857,15 +861,13 @@ function Workspace({ route }: { route: Route }) {
       ]);
       if (cancelled) return;
       setFsInfo(info);
-      // cow forks must survive the tab: give the overlay upper its own
-      // persistent store ON THE SAME BACKEND as the app fs — an OPFS subdir
-      // when the app runs on OPFS, IndexedDB otherwise. Physically under
-      // .artipod/uppers (plural — the mount point /.artipod/upper/<enc> is a
-      // real dir on the root fs, so backing it by itself would recurse) so
-      // nothing leaks into the shell's / listing.
+      // Writable workspaces (rw AND cow) get a persistent upper keyed by ref
+      // — one local working state per ref; the mode only chooses whether it
+      // auto-pushes. An in-memory rw upper would start every session empty,
+      // and its first push would strip the previous session's overlay layers.
       const { mountConfigForSpec } = await import('@artipod/core/sandbox');
       const cowUpper =
-        route.mode === 'cow'
+        route.isRef && route.mode !== 'ro'
           ? await mountConfigForSpec(
               info?.backend === 'opfs'
                 ? { type: 'opfs', dir: `.artipod/uppers/${encodeURIComponent(route.id)}` }

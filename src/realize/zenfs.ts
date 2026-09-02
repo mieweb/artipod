@@ -342,7 +342,14 @@ export async function createZenFsPod(
     const { ref } = options.sync.basis;
     const at = options.sync.basis.at ?? `/open/${ref.replace(/[^a-zA-Z0-9._-]+/g, '_')}`;
     try {
-      if (!(await hydrator.stateFor(ref))) await hydrator.pullIndex(ref);
+      // Same rule as the `artipod open` verb: refresh when the remote head
+      // moved — a stale local index would open yesterday's (possibly empty)
+      // tree while the server already holds newer layers.
+      const state = await hydrator.stateFor(ref);
+      const remoteHead = options.sync.remote ? await options.sync.remote.getRef(ref).catch(() => null) : null;
+      if (!state || (remoteHead && remoteHead.manifestDigest !== state.manifestDigest)) {
+        await hydrator.pullIndex(ref);
+      }
       await hydrator.openOverlay(ref, at, { upperConfig: options.sync.basis.upperConfig });
       basis = { ref, at };
       if (!options.cwd) defaultCwd = at;
