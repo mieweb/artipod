@@ -154,8 +154,10 @@ history.
    `DELETE /api/pods/refs?name=<ref>` (204), refused with 403 for sealed
    tags, so closing a workstream retires its sigil tag. Pointer removal
    only: blobs stay, and the DAG keeps the history.
-3. Demo affordances 🔮 — entity rows grouping sealed milestones + open
-   workstreams; "new workstream from: last sealed ▾ / pending draft".
+3. Demo affordances — entity rows grouping sealed milestones + open
+   workstreams ✅ (the catalog's "On this server" is the dossier view:
+   drafts first, milestones newest-first, forks shown under their pending
+   `_` name); "new workstream from: last sealed ▾ / pending draft" 🔮.
 
 Everything else — seeding from any head, publish/publish-as, merge-on-push,
 create-once enforcement, digest audit trail — ships today.
