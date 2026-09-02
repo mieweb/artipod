@@ -78,7 +78,6 @@ function Catalog() {
   const [local, setLocal] = useState<LocalEntry[]>([]);
 
   useEffect(() => {
-    setLocal(readRegistry());
     (async () => {
       try {
         const res = await fetch('/api/pods/refs');
@@ -86,6 +85,24 @@ function Catalog() {
       } catch {
         setServerRefs([]);
       }
+    })();
+    // "On this machine" = the filesystem's /work dirs (source of truth),
+    // enriched with the localStorage registry (lastOpened, opened pod refs).
+    (async () => {
+      const registry = readRegistry();
+      let onDisk: string[] = [];
+      try {
+        await initFileSystem();
+        const { fs } = await import('@/lib/filesystem');
+        onDisk = (await fs.promises.readdir('/work')) as string[];
+      } catch {
+        // no /work yet (or init failed) — registry alone
+      }
+      const byId = new Map<string, LocalEntry>(registry.map((e) => [e.id, e]));
+      for (const id of onDisk) {
+        if (!byId.has(id)) byId.set(id, { id, kind: 'blank', lastOpened: 0 });
+      }
+      setLocal(Array.from(byId.values()).sort((a, b) => b.lastOpened - a.lastOpened));
     })();
   }, []);
 
@@ -149,7 +166,7 @@ function Catalog() {
               row(
                 e.id,
                 <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">{e.kind === 'blank' ? 'blank' : 'local'}</span>,
-                new Date(e.lastOpened).toLocaleDateString(),
+                e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
               ),
             )}
           </ul>
