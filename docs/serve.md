@@ -194,9 +194,11 @@ Two ways to serve encrypted content — pick per trust model:
   ECDH-wrapped (`unwrapLoginResult` → a **non-extractable** AES key: raw key
   bytes never exist in page-visible JS on either end). `PodLocker.adoptLease`
   puts it in the tab's **memory-only keyring**, and both the pod's local
-  store **and its working tree** (overlay uppers via `encryptedMount` from
-  `@artipod/core/sandbox`) encrypt at rest with it. Without a device key,
-  `decodeLoginResult` + `adoptLogin` handle the raw-base64 wire.
+  store **and its working tree** encrypt at rest with it — workspace uppers
+  are opaque encrypted block stores (`encryptedStoreMount` from
+  `@artipod/core/sandbox`): the backing medium shows numbered ciphertext
+  blocks under a hashed dir name, no filenames, no tree shape. Without a
+  device key, `decodeLoginResult` + `adoptLogin` handle the raw-base64 wire.
 
 **What the TTL means (V10 — no overpromising).** Client keyrings hold
 non-extractable keys in memory only: closing the tab loses the key
