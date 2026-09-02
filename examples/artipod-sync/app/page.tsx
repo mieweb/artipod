@@ -275,7 +275,7 @@ export default function Page() {
 
 /** `/` — every artipod in reach: this server's, this machine's, or a new blank one. */
 function Catalog() {
-  const [serverRefs, setServerRefs] = useState<{ ref: string; manifestDigest?: string; locked?: boolean }[] | null>(null);
+  const [serverRefs, setServerRefs] = useState<{ ref: string; manifestDigest?: string; locked?: boolean; pulledAt?: string }[] | null>(null);
   const [local, setLocal] = useState<LocalEntry[]>([]);
   // refs with actual local changes: a non-empty overlay upper (/.artipod/upper/<ref>)
   const [changedRefs, setChangedRefs] = useState<Set<string>>(new Set());
@@ -397,7 +397,7 @@ function Catalog() {
     (async () => {
       try {
         const res = await fetch('/api/pods/refs');
-        setServerRefs(res.ok ? ((await res.json()) as { ref: string; manifestDigest?: string; locked?: boolean }[]) : []);
+        setServerRefs(res.ok ? ((await res.json()) as { ref: string; manifestDigest?: string; locked?: boolean; pulledAt?: string }[]) : []);
       } catch {
         setServerRefs([]);
       }
@@ -571,7 +571,11 @@ function Catalog() {
                 return groups;
               }, new Map<string, typeof serverRefs>()),
             )
-              .sort(([a], [b]) => a.localeCompare(b))
+              .sort(([, refsA], [, refsB]) => {
+                // most recently pushed repo on top
+                const t = (rs: typeof refsA) => Math.max(...rs.map((r) => Date.parse(r.pulledAt ?? '') || 0));
+                return t(refsB) - t(refsA);
+              })
               .map(([name, refs]) => {
                 const sorted = refs.slice().sort((a, b) => {
                   const ta = a.ref.slice(a.ref.lastIndexOf(':') + 1);
