@@ -238,7 +238,12 @@ export interface ZenFsPod {
    */
   agentLoopOptions(opts?: { autoSnapshot?: boolean }): Pick<ToolCallingLoopOptions, 'beforeToolTurn'>;
   /** just-bash session over the realized fs, pod commands + /proc registered. */
-  createSandbox(): Sandbox;
+  /**
+   * A shell over the pod. `confineTo` roots the shell at that path (other
+   * workspaces and pod internals become unreachable — shell-level, not a
+   * security boundary); cwd becomes '/' and /proc is off inside it.
+   */
+  createSandbox(opts?: { confineTo?: string }): Sandbox;
   /** VS Code-schema file tools resolved over the pod's mount table. */
   createFileTools(): ToolHandler[];
   /** Agent tool map (bash + file tools) for a sandbox of this pod. */
@@ -253,6 +258,8 @@ export async function createZenFsPod(
   const m = validateManifest(manifest);
   const events = options.events ?? new PodEvents();
   const proc = options.proc ?? true;
+  // captured for the sync createSandbox (bindContext-based confinement)
+  const zen = await import('@zenfs/core');
 
   let zfs: ZenFsLike;
   let mountTable: RealizedZenFsMount[];
@@ -422,13 +429,24 @@ export async function createZenFsPod(
           await snapshots.create({ origin: 'agent-turn', skipIfClean: true });
         },
       };
-    },    createSandbox() {
+    },    createSandbox(sandboxOpts?: { confineTo?: string }) {
+      // Shell-level confinement (same bindContext the session host uses for
+      // chroots): the shell sees confineTo as '/', so other workspaces and
+      // pod internals are out of reach. Courtesy isolation, not security —
+      // the artipod verbs still operate on the whole pod.
+      const confineTo = sandboxOpts?.confineTo;
+      const shellZfs = confineTo
+        ? ((zen as unknown as { bindContext: (o: { root: string }) => { fs: unknown } }).bindContext({ root: confineTo })
+            .fs as typeof zfs)
+        : zfs;
       const sandbox: Sandbox = createSandbox({
-        zfs,
+        zfs: shellZfs,
         events,
-        proc,
-        cwd: defaultCwd,
-        onEdit: options.onEdit,
+        proc: confineTo ? false : proc,
+        cwd: confineTo ? '/' : defaultCwd,
+        onEdit: options.onEdit && confineTo
+          ? (path) => options.onEdit!(`${confineTo}${path.startsWith('/') ? '' : '/'}${path}`)
+          : options.onEdit,
         sudo: approvals
           ? {
               broker: approvals,

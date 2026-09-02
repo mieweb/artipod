@@ -125,6 +125,10 @@ function Catalog() {
   const [local, setLocal] = useState<LocalEntry[]>([]);
   // refs with actual local changes: a non-empty overlay upper (/.artipod/upper/<ref>)
   const [changedRefs, setChangedRefs] = useState<Set<string>>(new Set());
+  // root console: the WHOLE browser fs (all of /work, /proc, pod internals)
+  const [rootSandbox, setRootSandbox] = useState<Sandbox | null>(null);
+  const [termOpen, setTermOpen] = useState(false);
+  const [termHeight, setTermHeight] = useState(300);
 
   useEffect(() => {
     (async () => {
@@ -171,7 +175,28 @@ function Catalog() {
         if (!byId.has(id)) byId.set(id, { id, kind: 'blank', lastOpened: 0 });
       }
       setLocal(Array.from(byId.values()).sort((a, b) => b.lastOpened - a.lastOpened));
+      // the catalog's console is a root shell over the raw fs — /proc, every
+      // /work workspace, and the pod internals are all inspectable here
+      try {
+        const { fs } = await import('@/lib/filesystem');
+        const { createSandbox } = await import('@artipod/core/sandbox');
+        setRootSandbox(createSandbox({ zfs: fs, cwd: '/', proc: true }));
+      } catch {
+        // fs init failed — no console
+      }
     })();
+  }, []);
+
+  // ctrl+` opens the root console here too
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && (e.code === 'Backquote' || e.key === '`')) {
+        e.preventDefault();
+        setTermOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const localById = new Map(local.map((e) => [e.id, e]));
@@ -217,8 +242,27 @@ function Catalog() {
     </span>
   );
 
+  // Drag the console divider to resize.
+  const onDividerPointerDown = useCallback((down: React.PointerEvent) => {
+    down.preventDefault();
+    const startY = down.clientY;
+    setTermHeight((startHeight) => {
+      const move = (e: PointerEvent) => {
+        setTermHeight(Math.min(Math.max(startHeight + (startY - e.clientY), 120), window.innerHeight * 0.8));
+      };
+      const up = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      return startHeight;
+    });
+  }, []);
+
   return (
-    <main className="h-[var(--app-height)] overflow-auto bg-black text-white">
+    <main className="flex h-[var(--app-height)] flex-col bg-black text-white overflow-hidden">
+      <div className="flex-1 overflow-auto">
       <div className="mx-auto max-w-lg p-6">
         <h1 className="text-2xl font-bold mb-1">artipod</h1>
         <p className="text-gray-400 text-sm mb-6">
@@ -284,6 +328,29 @@ function Catalog() {
         >
           <Plus size={14} /> New blank workspace
         </a>
+
+        <button
+          onClick={() => setTermOpen((o) => !o)}
+          disabled={!rootSandbox}
+          className="mt-4 flex items-center justify-center gap-2 w-full px-3 py-2 rounded border border-gray-700 text-gray-400 hover:bg-[#222] text-sm disabled:opacity-40"
+          title="Root console over the whole browser filesystem"
+        >
+          <LucideTerminal size={14} /> Root console — inspect /proc, /work, everything{' '}
+          <kbd className="px-1 rounded bg-[#333] border border-gray-600 text-[10px] font-mono">ctrl+`</kbd>
+        </button>
+      </div>
+      </div>
+
+      {/* Root console: the unconfined shell — workspaces get a confined one */}
+      <div className="shrink-0 border-t border-gray-700 bg-[#1e1e1e] overflow-hidden" style={{ height: termOpen ? termHeight : 0 }}>
+        <div
+          onPointerDown={onDividerPointerDown}
+          className="h-1.5 cursor-row-resize bg-[#2d2d2d] hover:bg-blue-500 transition-colors"
+          title="Drag to resize"
+        />
+        <div style={{ height: termOpen ? termHeight - 6 : 0 }}>
+          {rootSandbox && <Terminal sandbox={rootSandbox} />}
+        </div>
       </div>
     </main>
   );
@@ -504,7 +571,7 @@ function Workspace({ route }: { route: Route }) {
           },
         },
       );
-      sandboxRef.current = pod.createSandbox();
+      sandboxRef.current = pod.createSandbox({ confineTo: pod.basis ? pod.basis.at : blankRoot });
       podRef.current = pod;
       // demo/debug escape hatch (see docs/console.md's future replacement)
       (window as unknown as { __artipod?: unknown }).__artipod = pod;
