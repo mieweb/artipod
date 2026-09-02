@@ -144,7 +144,7 @@ function Catalog() {
     })();
   }, []);
 
-  const openedIds = new Set(local.map((e) => e.id));
+  const localById = new Map(local.map((e) => [e.id, e]));
   const localOnly = local.filter((e) => !serverRefs?.includes(e.id));
 
   const row = (id: string, badge: React.ReactNode, note: string) => (
@@ -183,13 +183,18 @@ function Catalog() {
           </p>
         ) : (
           <ul className="space-y-2 mb-6">
-            {serverRefs.map((ref) =>
-              row(
+            {serverRefs.map((ref) => {
+              const opened = localById.get(ref);
+              return row(
                 ref,
-                <span className="rounded bg-blue-900/60 px-1.5 py-0.5">server</span>,
-                openedIds.has(ref) ? 'opened before' : '',
-              ),
-            )}
+                <>
+                  {/* opening a pod lays a writable overlay in this browser's FS — say so */}
+                  {opened && <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local layer</span>}
+                  <span className="rounded bg-blue-900/60 px-1.5 py-0.5">server</span>
+                </>,
+                opened?.lastOpened ? new Date(opened.lastOpened).toLocaleDateString() : '',
+              );
+            })}
           </ul>
         )}
 
