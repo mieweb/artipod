@@ -102,6 +102,9 @@ flags for serve:
   --oci-allow <host> allow an upstream registry host for the relay (repeatable;
                      env ARTIPOD_OCI_ALLOWED_HOSTS; default deny)
   --no-exec          disable the exec-session surface
+  --no-ui            headless landing only (skip UI resolution); the UI resolves
+                     local-first: ARTIPOD_UI_DIR (a static build), then the
+                     ARTIPOD_UI_REF ref in the store (default artipod-ui:latest)
   --open             open the printed URL in a browser
 
 inside the shell, run \`artipod\` for the pod verbs (snapshot, commit, push, …).
@@ -207,6 +210,7 @@ function parseArgs(
       exec: true,
       publish: [],
       open: false,
+      ui: true,
     };
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
@@ -231,6 +235,7 @@ function parseArgs(
       else if (a === '--token') serve.token = rest[++i];
       else if (a === '--read-token') serve.readToken = rest[++i];
       else if (a === '--no-exec') serve.exec = false;
+      else if (a === '--no-ui') serve.ui = false;
       else if (a === '--open') serve.open = true;
       else {
         stdout.write(`artipod serve: unknown argument '${a}'\n\n${HELP}`);

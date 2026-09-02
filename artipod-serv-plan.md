@@ -29,7 +29,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): serve pha
 |---|---|---|---|
 | S0 — node adapter + `createArtipodApp` + `serve` verb | main | **done** (2026-09-02) | |
 | S1 — `--publish` folder delight + auto-token + landing | main | **done** (2026-09-02) | |
-| S2 — ship the sync demo UI (static export → OCI artifact, pulled on first serve) | `serve-s2-ui` | todo | |
+| S2 — ship the sync demo UI (static export → OCI artifact, pulled on first serve) | main | **in progress** — local paths done; ghcr artifact + pin + demo refactor remain | |
 | S3 — OCI distribution read (`/v2/` pull) | main | **done** (2026-09-02) | |
 | S4 — OCI distribution write (push + conformance) | main | **done** (2026-09-02) | |
 | S5 — static token auth across all surfaces | main | **done** (2026-09-02) | |
@@ -225,14 +225,17 @@ Worklog:
 
 ### S2 — ship the sync demo UI *(parallel-ok with S3)*
 
-- [ ] `scripts/export-static.mjs` in the demo: stash `app/api/`, `output: 'export'` build, restore; CI job proves both build modes stay green
+- [x] `scripts/export-static.mjs` in the demo: stash `app/api/`, `output: 'export'` build, restore; CI job proves both build modes stay green *(CI job still todo)*
 - [ ] Demo refactor: five route files → one catch-all on `createArtipodApp` (env-var policy preserved); deployed service redeploy is **ask-first**
-- [ ] `src/server/static.ts` (traversal-safe, SPA fallback); `ui` option in `createArtipodApp`; `ARTIPOD_UI_DIR`/`ARTIPOD_UI_REF` + `--no-ui` in the CLI
-- [ ] UI-artifact publish script (export → `publishDirectory` → push to `ghcr.io/mieweb/artipod-ui`) + pinned digest constant in `src/server/ui-ref.ts`; artifact home + first push are **ask-first**
-- [ ] First-serve pull path: store-miss → fetch + digest-verify + materialize to `~/.artipod/ui/<digest>/`; cached-hit path; offline miss → warn + headless landing (test all three)
+- [x] `src/server/static.ts` (traversal-safe, SPA fallback); `ui` option in `createArtipodApp`; `ARTIPOD_UI_DIR`/`ARTIPOD_UI_REF` + `--no-ui` in the CLI
+- [ ] UI-artifact publish script (export → `publishDirectory` → push to `ghcr.io/mieweb/artipod-ui`) + pinned digest constant in `src/server/ui-ref.ts`; artifact home + first push are **ask-first** *(home approved 2026-09-02; push deferred until local testing done)*
+- [ ] First-serve pull path: store-miss → fetch + digest-verify + materialize to `~/.artipod/ui/<digest>/`; cached-hit path; offline miss → warn + headless landing (test all three) *(local store-hit + materialize + headless done; REMOTE fetch dormant behind `UI_DIGEST = null`)*
 - [ ] **Done when**: on a machine with only the 4-file shim installed, `artipod serve --publish <dir>` fetches the UI once, then opens the full terminal/editor UI at `/` (second boot: no fetch), syncing against the local store — the north-star sentence, minus registry
 
 Worklog:
+
+- 2026-09-02: S2 local-first slice done (owner directive: local testing must not fetch from ghcr when a local build exists). Resolution order in `resolveUiDir` (serve.ts): `--no-ui` → `ARTIPOD_UI_DIR` (index.html sanity-checked) → `ARTIPOD_UI_REF`/`artipod-ui:latest` in the store (materialized once to `~/.artipod/ui/<digest>`, mkdir before materializeRef — it realpaths the target) → remote pin (dormant: `UI_DIGEST=null` in ui-ref.ts) → headless landing. `src/server/static.ts`: traversal-safe, Next-export spellings (`page.html`, `dir/index.html`), SPA fallback only for extensionless paths. Demo: conditional `output:'export'` under `STATIC_EXPORT=1`, `scripts/export-static.mjs` (stash app/api, build, restore, struct-minify marker assertion) — verified: export builds (152 kB first-load), `artipod import out artipod-ui:latest` (51 layers, 1.3 MB), serve resolves from store, index+chunks+API all 200. Tests: static.test.ts (5), serve.test.ts UI-dir + store-ref paths. Gate: 490 tests green.
+- Remaining for S2 close: ghcr publish script + digest pin + remote fetch implementation (ask-first push), demo catch-all refactor onto createArtipodApp (redeploy ask-first), CI both-modes job.
 
 ### S3 — distribution read (`/v2/` pull) *(parallel-ok with S2)*
 

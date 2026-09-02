@@ -22,6 +22,7 @@ import { createGitProxyHandler } from './git-proxy.js';
 import { createExecSessionHandler, type ExecSessionHandlerOptions } from './exec-handler.js';
 import { createDistributionHandler } from './distribution-handler.js';
 import { withCors } from './cors.js';
+import { createStaticHandler } from './static.js';
 
 export interface ArtipodAppOptions {
   /** The one stateful thing. */
@@ -40,9 +41,11 @@ export interface ArtipodAppOptions {
   exec?: ExecSessionHandlerOptions | false;
   onRefPut?: PodStoreHandlerOptions['onRefPut'];
   merge?: PodStoreHandlerOptions['merge'];
+  /** Static UI dir (node-only) served for anything outside /api and /v2. */
+  ui?: { dir: string } | false;
   /**
-   * Handles anything outside /api and /v2 — the static UI (S2) or the
-   * headless landing page (S1). Absent = 404 JSON.
+   * Handles anything outside /api and /v2 when no `ui` dir is configured —
+   * the headless landing page (S1). Absent = 404 JSON.
    */
   fallback?: (req: Request) => Response | Promise<Response>;
 }
@@ -74,6 +77,7 @@ export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
   const dist: PathHandler | null = registry
     ? withCors(createDistributionHandler({ store: options.store, auth: options.auth }), cors)
     : null;
+  const ui = options.ui ? createStaticHandler(options.ui.dir) : null;
 
   return async (req) => {
     const url = new URL(req.url);
@@ -103,7 +107,10 @@ export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
       if (second === 'exec' && exec && rest.length === 0) return exec(req);
       return json({ error: 'not found' }, 404);
     }
-    if (first !== 'v2' && options.fallback) return options.fallback(req);
+    if (first !== 'v2') {
+      if (ui) return ui(req);
+      if (options.fallback) return options.fallback(req);
+    }
     return json({ error: 'not found' }, 404);
   };
 }

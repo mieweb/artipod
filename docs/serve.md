@@ -12,7 +12,8 @@ That prints one URL. The server hosts:
 - an **OCI registry relay** at `/api/oci/<host>/…` (GET-only, allowlisted upstreams),
 - a **git smart-HTTP proxy** at `/api/git/<host>/…`,
 - **exec sessions** at `/api/exec` (opt-out with `--no-exec`),
-- a landing page at `/` (the full sync-demo UI arrives in serve plan S2),
+- a landing page at `/` — or the **full sync-demo UI** when one resolves
+  (see "The UI" below),
 - the **OCI Distribution API** at `/v2/` — pull *and* push: `docker pull`,
   `docker push`, upload sessions (chunked + monolithic), cross-repo mount,
   the referrers API (in-memory index), tags/list + `_catalog`.
@@ -50,6 +51,27 @@ artipod serve --only registry          # registry surface only
 | `--oci-allow <host>` | deny | Repeatable upstream allowlist for the registry relay (env `ARTIPOD_OCI_ALLOWED_HOSTS`) |
 | `--no-exec` | exec on | Disable the exec surface. Exec auth: env `EXEC_API_TOKEN`, falling back to the serve token. |
 | `--open` | — | Open the printed URL in a browser |
+
+## The UI (S2, local-first)
+
+`/` serves the sync-demo UI when one resolves; resolution never touches the
+network if you have a local copy:
+
+1. `--no-ui` → headless landing, no resolution.
+2. `ARTIPOD_UI_DIR=<dir>` → serve that static build directly (dev loop).
+3. The `artipod-ui:latest` ref in the store (`ARTIPOD_UI_REF` overrides) →
+   materialized once to `~/.artipod/ui/<digest>/` and served from there.
+4. The digest-pinned remote artifact (`ghcr.io/mieweb/artipod-ui`) — only as
+   a cold-start fallback, and dormant until a release pins a digest.
+5. Nothing found → the headless landing. Never an error.
+
+Build it locally:
+
+```bash
+cd examples/artipod-sync && npm run export:static   # → out/
+artipod import out artipod-ui:latest                # into ~/.artipod/store
+artipod serve                                       # full UI at /
+```
 
 ## Tokens (V7/S5)
 

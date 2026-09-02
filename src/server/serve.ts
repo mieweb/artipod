@@ -5,10 +5,12 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { mkdir, stat } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import process, { env, stdout } from 'node:process';
 import { spawn } from 'node:child_process';
+import { digestHex } from '../oci/digest.js';
 import { OciLayoutPodStore } from '../manager/pod-store.js';
 import { PodSessionHost } from '../manager/session-host.js';
 import { nodePodFs } from '../nodePodFs.js';
@@ -17,6 +19,7 @@ import { createArtipodApp } from './app.js';
 import { serveApp } from './node.js';
 import { publishDirectory, materializeRef } from './folder.js';
 import { PublishMap, withinRoots } from './publish-map.js';
+import { UI_REF, UI_DIGEST, UI_REMOTE_REF } from './ui-ref.js';
 
 export interface ServeCliOptions {
   port: number;
@@ -31,6 +34,8 @@ export interface ServeCliOptions {
   token?: string;
   readToken?: string;
   open: boolean;
+  /** false = --no-ui (headless landing). */
+  ui: boolean;
 }
 
 export const DEFAULT_SERVE_PORT = 2784; // "ARTI" on a keypad (V7)
@@ -76,6 +81,42 @@ function openBrowser(url: string): void {
   const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
   const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
   spawn(cmd, args, { stdio: 'ignore', detached: true }).unref();
+}
+
+/**
+ * UI resolution, LOCAL-FIRST (S2): ARTIPOD_UI_DIR (a local build) →
+ * ARTIPOD_UI_REF/UI_REF in the local store (materialized once into
+ * ~/.artipod/ui/<digest>) → remote fetch of the digest pin (dormant while
+ * UI_DIGEST is null) → headless landing. Never an error.
+ */
+async function resolveUiDir(store: OciLayoutPodStore): Promise<{ dir: string; source: string } | null> {
+  if (env.ARTIPOD_UI_DIR) {
+    const dir = resolve(env.ARTIPOD_UI_DIR);
+    try {
+      await stat(join(dir, 'index.html'));
+      return { dir, source: 'ARTIPOD_UI_DIR' };
+    } catch {
+      stdout.write(`warning: ARTIPOD_UI_DIR=${dir} has no index.html — ignoring\n`);
+    }
+  }
+  const ref = env.ARTIPOD_UI_REF ?? UI_REF;
+  const stored = await store.getRef(ref);
+  if (stored) {
+    const dir = resolve(homedir(), '.artipod/ui', digestHex(stored.manifestDigest));
+    try {
+      await stat(join(dir, 'index.html')); // cached materialization
+    } catch {
+      await mkdir(dir, { recursive: true }); // materializeRef realpaths the target
+      await materializeRef(store, ref, dir);
+    }
+    return { dir, source: `${ref} (store)` };
+  }
+  if (UI_DIGEST) {
+    // Remote fetch of the pinned artifact (release step publishes
+    // UI_REMOTE_REF and bumps UI_DIGEST). Not reachable until a pin exists.
+    stdout.write(`note: UI artifact ${UI_REMOTE_REF}@${UI_DIGEST} not in the local store — remote fetch not implemented yet, serving headless\n`);
+  }
+  return null;
 }
 
 export async function runServe(opts: ServeCliOptions): Promise<void> {
@@ -125,6 +166,8 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
         }
       : undefined;
 
+  const uiInfo = opts.ui && surfaces.web ? await resolveUiDir(store) : null;
+
   const app = createArtipodApp({
     store,
     surfaces,
@@ -145,6 +188,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
             ...(env.EXEC_API_TOKEN ? { auth: bearerAuth(() => env.EXEC_API_TOKEN) } : {}),
           }
         : false,
+    ui: uiInfo ? { dir: uiInfo.dir } : false,
     fallback: surfaces.web
       ? async (req) => landingPage(storeDir, await store.listRefs(), new URL(req.url).origin)
       : undefined,
@@ -162,6 +206,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
       .join(', ')}\n`,
   );
   for (const line of published) stdout.write(`  publish:  ${line}\n`);
+  if (uiInfo) stdout.write(`  ui:       ${uiInfo.source} — ${tildify(uiInfo.dir)}\n`);
   if (relayHosts.length > 0) stdout.write(`  relay:    ${relayHosts.join(', ')}\n`);
   if (token || readToken) {
     if (token) {

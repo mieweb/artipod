@@ -34,6 +34,8 @@ export {
   splitRepoPath,
   type DistributionHandlerOptions,
 } from './distribution-handler.js';
+export { createStaticHandler } from './static.js';
+export { UI_REF, UI_REMOTE_REF, UI_DIGEST } from './ui-ref.js';
 export { createPodStoreHandler, type PodStoreHandlerOptions } from './pod-store-handler.js';
 export {
   DEFAULT_ALLOWED_HOSTS,

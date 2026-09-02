@@ -20,11 +20,13 @@ afterAll(async () => {
 
 async function startServe(
   args: string[] = [],
+  opts: { env?: Record<string, string>; storeDir?: string } = {},
 ): Promise<{ url: string; child: ChildProcess; exited: Promise<number | null>; output: () => string }> {
-  const storeDir = await mkdtemp(join(tmpdir(), 'apod-serve-store-'));
+  const storeDir = opts.storeDir ?? (await mkdtemp(join(tmpdir(), 'apod-serve-store-')));
   scratch.push(storeDir);
   const child = spawn('node', [CLI, 'serve', '--port', '0', '--store', storeDir, ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ...opts.env },
   });
   children.push(child);
   const exited = new Promise<number | null>((r) => child.once('exit', r));
@@ -149,6 +151,39 @@ describe('artipod serve', () => {
     expect(denied.status).toBe(401);
     const allowed = await fetch(`${url}/api/pods/refs`, { headers: { authorization: `Bearer ${token}` } });
     expect(allowed.status).toBe(200);
+    child.kill('SIGTERM');
+    await exited;
+  }, 60_000);
+
+  it('ARTIPOD_UI_DIR serves a local UI build at / (S2 local-first)', async () => {
+    const uiDir = await mkdtemp(join(tmpdir(), 'apod-ui-'));
+    scratch.push(uiDir);
+    await writeFile(join(uiDir, 'index.html'), '<html>LOCAL UI BUILD</html>');
+    const { url, child, exited } = await startServe([], { env: { ARTIPOD_UI_DIR: uiDir } });
+    expect(await (await fetch(url)).text()).toContain('LOCAL UI BUILD');
+    // API still routes past the UI
+    expect((await fetch(`${url}/api/pods/refs`)).status).toBe(200);
+    child.kill('SIGTERM');
+    await exited;
+  }, 60_000);
+
+  it('an artipod-ui:latest ref in the store materializes and serves (no network)', async () => {
+    const uiDir = await mkdtemp(join(tmpdir(), 'apod-ui-src-'));
+    const storeDir = await mkdtemp(join(tmpdir(), 'apod-ui-store-'));
+    const uiHome = await mkdtemp(join(tmpdir(), 'apod-ui-home-'));
+    scratch.push(uiDir, storeDir, uiHome);
+    await writeFile(join(uiDir, 'index.html'), '<html>STORE UI</html>');
+    // import the "built" UI into the store, exactly like a local release build would
+    await new Promise<void>((res, rej) => {
+      const imp = spawn('node', [CLI, 'import', uiDir, 'artipod-ui:latest', '--store', storeDir], {
+        stdio: 'ignore',
+      });
+      imp.once('exit', (code) => (code === 0 ? res() : rej(new Error(`import exited ${code}`))));
+    });
+    // HOME points at a scratch dir so ~/.artipod/ui stays untouched
+    const { url, child, exited, output } = await startServe([], { storeDir, env: { HOME: uiHome } });
+    expect(await (await fetch(url)).text()).toContain('STORE UI');
+    expect(output()).toContain('artipod-ui:latest (store)');
     child.kill('SIGTERM');
     await exited;
   }, 60_000);

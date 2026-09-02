@@ -36,6 +36,10 @@ class SkipStructChunkMinifyPlugin {
 }
 
 const nextConfig = {
+    // Static export mode (serve plan S2): scripts/export-static.mjs stashes
+    // app/api aside and builds with STATIC_EXPORT=1 — `artipod serve` IS the
+    // API in that deployment. SkipStructChunkMinify applies in both modes.
+    ...(process.env.STATIC_EXPORT ? { output: 'export' } : {}),
     // Server routes load these natively (ESM) — webpack's server bundle
     // breaks ZenFS class construction ("ed is not a constructor").
     // NOTE: this matcher only works because .npmrc sets install-links=true:
