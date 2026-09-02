@@ -245,7 +245,7 @@ export default function Page() {
 
 /** `/` — every artipod in reach: this server's, this machine's, or a new blank one. */
 function Catalog() {
-  const [serverRefs, setServerRefs] = useState<{ ref: string; manifestDigest?: string }[] | null>(null);
+  const [serverRefs, setServerRefs] = useState<{ ref: string; manifestDigest?: string; locked?: boolean }[] | null>(null);
   const [local, setLocal] = useState<LocalEntry[]>([]);
   // refs with actual local changes: a non-empty overlay upper (/.artipod/upper/<ref>)
   const [changedRefs, setChangedRefs] = useState<Set<string>>(new Set());
@@ -307,7 +307,7 @@ function Catalog() {
     (async () => {
       try {
         const res = await fetch('/api/pods/refs');
-        setServerRefs(res.ok ? ((await res.json()) as { ref: string; manifestDigest?: string }[]) : []);
+        setServerRefs(res.ok ? ((await res.json()) as { ref: string; manifestDigest?: string; locked?: boolean }[]) : []);
       } catch {
         setServerRefs([]);
       }
@@ -414,10 +414,10 @@ function Catalog() {
     </li>
   );
 
-  /** rw / cow / ro choices per server pod — how the overlay behaves. */
-  const modeLinks = (ref: string) => (
+  /** rw / cow / ro choices per server pod — a locked tag cannot take pushes, so rw is gone. */
+  const modeLinks = (ref: string, locked?: boolean) => (
     <span className="flex items-center gap-1 font-mono">
-      {(['rw', 'cow', 'ro'] as const).map((m) => (
+      {(locked ? (['cow', 'ro'] as const) : (['rw', 'cow', 'ro'] as const)).map((m) => (
         // eslint-disable-next-line @next/next/no-html-link-for-pages
         <a
           key={m}
@@ -470,7 +470,7 @@ function Catalog() {
           </p>
         ) : (
           <ul className="space-y-2 mb-6">
-            {serverRefs.map(({ ref, manifestDigest }) => {
+            {serverRefs.map(({ ref, manifestDigest, locked }) => {
               const opened = localById.get(ref);
               const isCowFork = cowForks.some((e) => e.id === ref);
               return row(
@@ -482,7 +482,12 @@ function Catalog() {
                       @{manifestDigest.replace(/^sha256:/, '').slice(0, 8)}
                     </span>
                   )}
-                  {modeLinks(ref)}
+                  {locked && (
+                    <span className="rounded bg-amber-900/60 px-1.5 py-0.5" title="tag is locked — the head cannot move; fork with cow and publish under a new name">
+                      locked
+                    </span>
+                  )}
+                  {modeLinks(ref, locked)}
                   {!isCowFork && changedRefs.has(ref) ? (
                     <span className="rounded bg-emerald-900/60 px-1.5 py-0.5">local changes</span>
                   ) : (
@@ -491,7 +496,7 @@ function Catalog() {
                   <span className="rounded bg-blue-900/60 px-1.5 py-0.5">server</span>
                 </>,
                 opened?.lastOpened && !isCowFork ? new Date(opened.lastOpened).toLocaleDateString() : '',
-                opened?.mode === 'cow' || opened?.mode === 'ro' ? opened.mode : 'rw',
+                locked ? (opened?.mode === 'ro' ? 'ro' : 'cow') : opened?.mode === 'cow' || opened?.mode === 'ro' ? opened.mode : 'rw',
               );
             })}
           </ul>
@@ -729,6 +734,89 @@ function Workspace({ route }: { route: Route }) {
       setAuthPrompt(async (origin) =>
         window.prompt(`Personal access token for ${origin} (stored in memory):`),
       );
+      const remote = new HttpPodStore('/api/pods');
+      // `publish [<name:tag>]` — the workspace's door to the server:
+      //   cow fork,  no arg  → push back: the fork's changes advance its own ref
+      //   any ws,   <ref>    → publish-as: this workspace becomes a NEW server ref
+      //   blank              → <ref> required (an anonymous scratch dir has no name to push to)
+      const { defineCommand } = await import('just-bash/browser');
+      const publishCmd = defineCommand('publish', async (cmdArgs) => {
+        const failCmd = (msg: string) => ({ stdout: '', stderr: `publish: ${msg}\n`, exitCode: 1 });
+        const pod = podRef.current;
+        if (!pod) return failCmd('workspace still opening — try again');
+        if (route.mode === 'ro') return failCmd('read-only workspace');
+        const target = cmdArgs[0];
+        try {
+          const { pushOverlay } = await import('@artipod/core/manager');
+          const { sha256 } = await import('@artipod/core/oci');
+          const store = pod.oci.store;
+          const MANIFEST_TYPE = 'application/vnd.oci.image.manifest.v1+json';
+          const enc = new TextEncoder();
+          if (!target) {
+            if (!route.isRef) return failCmd('a blank workspace needs a name — publish <name:tag>, e.g. publish me/scratch:1');
+            // push back — pushOverlay directly (not pod.pushBasis) so a server
+            // refusal (e.g. a locked tag) surfaces here instead of a console warning
+            const result = await pushOverlay({
+              store,
+              zfs: pod.zfs,
+              ref: route.id,
+              upperAt: `/.artipod/upper/${encodeURIComponent(route.id)}`,
+              deletions: pod.hydrator?.overlayDeletions(route.id) ?? new Map(),
+              actor,
+              remote,
+            });
+            if (!result.pushed) return { stdout: `nothing to push for ${route.id}\n`, stderr: '', exitCode: 0 };
+            await patchRegistry(route.id, { hasChanges: false });
+            return { stdout: `pushed ${route.id}: ${result.overlayLayers} overlay layer(s) → ${result.manifestDigest.slice(0, 19)}…\n`, stderr: '', exitCode: 0 };
+          }
+          if (!target.includes(':')) return failCmd(`include a tag — e.g. publish ${target}:1`);
+          let upperAt: string;
+          let deletions = new Map<string, number>();
+          if (route.isRef) {
+            // publish-as: new ref = basis layers + this fork's upper; the source tag never moves
+            const basisHead = await store.getRef(route.id);
+            if (!basisHead) return failCmd(`no local head for ${route.id}`);
+            await store.putRef(target, basisHead.manifestDigest, MANIFEST_TYPE);
+            upperAt = `/.artipod/upper/${encodeURIComponent(route.id)}`;
+            deletions = pod.hydrator?.overlayDeletions(route.id) ?? deletions;
+          } else {
+            // blank: seed an empty head, then the whole workspace is the overlay
+            const config = enc.encode(JSON.stringify({ artipod: { formatVersion: 1 }, rootfs: { type: 'layers', diff_ids: [] } }));
+            const configDigest = await sha256(config);
+            await store.putBlob(config, configDigest);
+            const manifest = {
+              schemaVersion: 2,
+              mediaType: MANIFEST_TYPE,
+              config: { mediaType: 'application/vnd.oci.image.config.v1+json', digest: configDigest, size: config.length },
+              layers: [],
+            };
+            const manifestBytes = enc.encode(JSON.stringify(manifest));
+            const manifestDigest = await sha256(manifestBytes);
+            await store.putBlob(manifestBytes, manifestDigest);
+            await store.putRef(target, manifestDigest, MANIFEST_TYPE);
+            upperAt = blankRoot;
+          }
+          const result = await pushOverlay({ store, zfs: pod.zfs, ref: target, upperAt, deletions, actor, remote });
+          if (route.isRef) {
+            // the changes live under the new name now — the fork is clean again
+            for (const name of (await fs.promises.readdir(upperAt).catch(() => [])) as string[]) {
+              await fs.promises.rm(`${upperAt}/${name}`, { recursive: true }).catch(() => {});
+            }
+            deletions.clear();
+            await patchRegistry(route.id, { hasChanges: false });
+          }
+          setTimeout(() => {
+            window.location.href = workspaceUrl(target, 'rw');
+          }, 800);
+          return {
+            stdout: `published ${target} (${result.overlayLayers} layer(s) over ${route.isRef ? `${route.id}'s basis` : 'an empty basis'}) — opening it read-write…\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+        } catch (e) {
+          return failCmd((e as Error).message);
+        }
+      });
       // Phase 3: the app's layout is a declarative manifest; initFileSystem
       // already realized the store (backend choice, migration, tab lock), so
       // the pod adopts it. The manifest shows up at /proc/pod/manifest.json.
@@ -752,7 +840,7 @@ function Workspace({ route }: { route: Route }) {
           oci: { transport: new ArtipodRegistryProxyTransport('/api/oci') },
           // push/pull/clone talk to this deployment's manager store
           sync: {
-            remote: new HttpPodStore('/api/pods'),
+            remote,
             actor,
             ...(route.isRef
               ? { basis: { ref: route.id, upperConfig: cowUpper }, autoPush: route.mode === 'rw' }
@@ -768,6 +856,7 @@ function Workspace({ route }: { route: Route }) {
             setEditingFile(path);
             setActiveView('editor');
           },
+          extraCommands: [publishCmd],
         },
       );
       sandboxRef.current = pod.createSandbox({ confineTo: pod.basis ? pod.basis.at : blankRoot });

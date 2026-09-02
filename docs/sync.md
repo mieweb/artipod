@@ -19,6 +19,27 @@ real files ◀── pushed heads ◀── overlay push (debounced) ◀── b
 
 Concurrent edits to **different files** merge losslessly (union). Concurrent edits to the **same file** resolve wholesale: the newer `(mtime, actor)` bytes win everywhere, and the loser remains recoverable from history. That is the right default for opaque files — and the wrong join for files that are *themselves* CRDTs.
 
+## Publishing a workspace (`publish`)
+
+Everything above assumes a ref already exists. The `publish` gesture is how
+local work *gets* a name — three cases, one command (shipped in the demo
+workspace shell; the machinery is `pushOverlay` + a seeded head):
+
+| workspace | command | what happens |
+|---|---|---|
+| blank (`/work/<id>`, no ref, no basis) | `publish me/thing:1` | a head is seeded from an **empty basis**, every file becomes a per-file overlay layer, the ref lands on the server; the workspace reopens under its new name (rw) |
+| cow fork of `me/play:1` | `publish` (no arg) | **push back**: the fork's upper advances `me/play:1` itself via the same LWW path autoPush uses — the fork stops being a fork |
+| cow fork of `me/play:1` | `publish me/mine:1` | **publish-as**: the new head is seeded from the *basis* head, so the new ref shares every basis layer (content-addressed — nothing re-uploads) plus the fork's upper as overlay layers; `me/play:1` never moves. The fork's upper is then emptied — the changes live under the new name, not in two places |
+
+A blank workspace is deliberately *not* auto-pushed: sync is ref-addressed,
+and an anonymous scratch dir has no name to push to (and every "New" click
+mints a fresh id — auto-publishing would spam the catalog). Naming is the
+act of publication.
+
+Publish-as is also the designated exit from a [locked tag](serve.md#locked-tags):
+the server refuses to move the locked head (403), but a cow fork plus
+`publish <new-ref>` branches it under a name you own.
+
 ## Composing with Yjs (YORM)
 
 [mieweb/yorm](https://github.com/mieweb/yorm) keeps a canonical object in a `Y.Doc`, syncs it live over its own websocket runtime, and persists encoded Yjs state. Both layers are join-semilattices; they compose because they operate at different granularities with different tempos:
