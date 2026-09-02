@@ -830,7 +830,8 @@ function LayersView({ route, ready, onPublish, onBack }: { route: Route; ready: 
                 <li key={l.digest + l.path} className="rounded border border-gray-700 bg-[#252526] px-3 py-1.5 flex justify-between gap-3">
                   <span className="font-mono truncate">{l.path}</span>
                   <span className="shrink-0 text-xs text-gray-400">
-                    {l.mtime ? `${new Date(l.mtime).toLocaleString()} · ` : ''}
+                    {/* org.artipod.mtime is raw epoch millis (ISO tolerated) */}
+                    {l.mtime ? `${new Date(Number(l.mtime) || l.mtime).toLocaleString()} · ` : ''}
                     {fmtSize(l.size)} · {l.digest.slice(7, 15)}…
                   </span>
                 </li>
