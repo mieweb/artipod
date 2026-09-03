@@ -89,6 +89,7 @@
     "build": "tsc -p tsconfig.build.json",
     "postbuild": "node scripts/buildinfo.mjs && node scripts/devlink.mjs",
     "build:ui": "cd examples/artipod-sync && npm run export:static && cd ../.. && rm -rf dist-ui && cp -R examples/artipod-sync/out dist-ui",
+    "build:ui:spa": "cd examples/artipod-spa && npm run export:static",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

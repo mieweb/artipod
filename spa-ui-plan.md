@@ -27,7 +27,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 
 | Phase | Branch | Status | PR |
 |---|---|---|---|
-| U0 — scaffold + build pipeline parity | main | todo | |
+| U0 — scaffold + build pipeline parity | main | **done** | |
 | UE — DRY the embed story (dry-example-server-plan E1–E4) | main | todo | |
 | U1 — services + zustand stores (no React) | main | todo | |
 | U2 — catalog on stores + @mieweb/ui | main | todo | |
@@ -242,3 +242,18 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### U0 — scaffold + build pipeline parity (2026-09-03)
+
+Shipped `examples/artipod-spa`: Next 15 with `output: 'export'` unconditional, no `app/api`, dev-only rewrites proxying `/api/*` + `/v2/*` to `ARTIPOD_SERVE_URL` (default 2784); SkipStructChunkMinify + node:-scheme handling carried over; `.npmrc install-links=true`; `scripts/export-static.mjs` (core-copy refresh + stale-version refusal + struct-minify/version assertions + ui-buildinfo.json); vanilla `catalogStore` + vitest round-trip tests (pattern-setter for P4); root `build:ui:spa`; AGENTS.md with the dev loop and landmines.
+
+**Deviations (rule §0):**
+- **`vendor/ui` submodule deferred.** Published `@mieweb/ui` 0.7.3 needs only react/react-dom (all other peers optional) and ships compiled CSS — a `file:`-against-dist submodule would force every clone/CI to build the mieweb/ui monorepo for zero benefit today. §2.5's entry activates the moment the first patch is needed; the AGENTS.md loop is pre-documented.
+- **Tailwind v4, not v3.** @mieweb/ui's `styles.css` is Tailwind v4-compiled; v3's postcss plugin rejects its `@layer` rules (`@layer base is used but no matching @tailwind base`). App uses `@tailwindcss/postcss` v4, CSS-first config, `@custom-variant dark` for the class strategy. This is the §6 "ui + tailwind fight" risk landing on day one — resolved by matching generations.
+- Export script scans chunks **recursively** (app-router page chunks live under `chunks/app/…`; the old app's top-level-only scan would have missed the baked version here).
+
+**Verification (all green):**
+- app `npm install` / `test` (2 tests) / `typecheck` / `lint` — pass.
+- `npm run build:ui:spa` → "static export ready in out/ (struct-minify + version assertions passed — 0.9.1+21 (b80eeb7-dirty, 2026-09-03))".
+- `ARTIPOD_UI_DIR=examples/artipod-spa/out node dist/cli.js serve --port 2785 --encrypt` → browser snapshot shows "core 0.9.1+21 … · zenfs ok" and all three refs (test:_1, lin:_1, doug:_1) with 🔒 encrypted markers — live from the broker store, ref reads leaseless as designed.
+- Dev loop: `ARTIPOD_SERVE_URL=http://127.0.0.1:2785 npm run dev` → `curl localhost:3600/api/pods/refs` returns the store's refs through the proxy (Next's "rewrites will not automatically work with output: export" warning applies to the exported artifact, not `next dev` — verified working).

@@ -1,0 +1,10 @@
+@import 'tailwindcss';
+
+/* class-strategy dark mode (v4): html.dark, matching the old app's default */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Theme goes through --mieweb-* tokens only (plan P5); never generic shadcn vars. */
+body {
+  background: var(--mieweb-background, #0b0e14);
+  color: var(--mieweb-foreground, #e6e6e6);
+}
