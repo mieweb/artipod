@@ -461,13 +461,13 @@ inspection. Each rung is one concept longer than the last.
 
 | Phase | Scope | Status |
 |---|---|---|
-| X0 | Ratify §5 decisions; create `mieweb/artipod-examples` repo, scaffold §3.1 tree + README + DISCLAIMER template | todo |
-| XA | `make-assets.mjs` — deterministic synthetic binaries (§2.2), committed; weight budget signed off | todo |
-| X1 | Author all seven pods' stage trees in MDY (content complete, front matter parses, cross-references + §2.2 sidecars resolve; `.mdyt` stretch decision) | todo |
-| XC | Core dogfood affordances: `example/` alias in `parseImageRef` + `examples` verb + banner hint (§3.5); fix whichever of G1–G5 (§3.2) are real — each with tests | todo |
-| X2 | `build.sh` dogfood sessions → dist-store; verify locally (`artipod run -it example/case --store dist-store`, layer/parents inspection, deterministic-digest rebuild, lazy-hydration beat on the x-ray, digest table into worklog) | todo |
-| X3 | First ghcr push (one pod, verify anon pull + digest match + `artipod run -it example/case` from clean machine) → push remaining six | todo |
-| X4 | `docs/examples.md`, tutorial prompts, catalog affordance decision, README pointers | todo |
+| X0 | Ratify §5 decisions; create `mieweb/artipod-examples` repo, scaffold §3.1 tree + README + DISCLAIMER template | **done** (repo live, e1c2590) |
+| XA | `make-assets.mjs` — deterministic synthetic binaries (§2.2), committed; weight budget signed off | **done** (18 binaries, 19.2 MB — under budget) |
+| X1 | Author all seven pods' stage trees in MDY (content complete, front matter parses, cross-references + §2.2 sidecars resolve; `.mdyt` stretch decision) | **done** (`.mdyt` stretch: deferred) |
+| XC | Core dogfood affordances: `example/` alias in `parseImageRef` + `examples` verb + banner hint (§3.5); fix whichever of G1–G5 (§3.2) are real — each with tests | **done** (core 05f5dfd; see worklog for the G1–G5 verdicts) |
+| X2 | `build.sh` dogfood sessions → dist-store; verify locally (`artipod run -it example/case --store dist-store`, layer/parents inspection, deterministic-digest rebuild, lazy-hydration beat on the x-ray, digest table into worklog) | **done** (35 refs; two from-scratch builds digest-identical) |
+| X3 | First ghcr push (one pod, verify anon pull + digest match + `artipod run -it example/case` from clean machine) → push remaining six | **done*** (35 refs on ghcr, digests verified; *anon pull pending the owner's package-visibility flip — web-UI-only, §7) |
+| X4 | `docs/examples.md`, tutorial prompts, catalog affordance decision, README pointers | **done** (docs/examples.md + prompts; catalog affordance deferred to spa U-phases) |
 
 Gates: every phase ends with the repo pre-commit gate (`npm run lint && npm run build &&
 npm run test`); X2+ additionally paste the verification commands + digest table into the
@@ -501,3 +501,30 @@ worklog below.
   publish workflow, standalone dogfood proof); core repo keeps XC, `docs/examples.md`,
   and this plan. **No LFS** — write-once 25–40 MB rides plain git; LFS quota exhaustion
   would break public pulls; regeneration is a reviewed change, never a build step.
+- 2026-09-03 — **EXECUTED, all phases.** Verdicts and deviations:
+  - **G1–G5 verdicts**: G1 non-gap (cli already wires `sync:{remote:store}`); G5 non-gap
+    (volume config on commit AND `config.artipod` marker on import). G2/G4 real but
+    **`commit` was the wrong surface**: `snapshots.commit` builds one whole-tree layer
+    with no parents — `publishDirectory` (= `artipod import`) is the per-file-CAS +
+    parents-chaining path. **Deviation ratified**: build uses `import` to a rolling
+    `:latest` (chains the DAG) + new top-level **`artipod tag`** for stage tags, instead
+    of in-shell `commit --tag`/`push`. G3 moot (mtimes pinned by host `touch -d` in
+    build.sh — import reads host mtimes into layers).
+  - **Core (05f5dfd)**: `example/` alias in `parseImageRef` (+tests: tag/digest
+    pass-through, `examples/…` untouched); `artipod tag <ref|digest> <name:tag>`;
+    `import --actor` (default actor embeds hostname → non-reproducible manifests);
+    in-shell `examples` verb + `BASH_ALIAS_examples` + run-banner hint. Gate: 530 tests.
+  - **Examples repo (mieweb/artipod-examples, e1c2590)**: 7 pods × stage overlays, MDY
+    content, 18 committed binaries (19.2 MB; hero x-rays 3.4 MB each), build.sh,
+    publish.mjs (node-native distribution push — no skopeo/crane installed; digest
+    verified via Docker-Content-Digest on every PUT).
+  - **Build determinism finding**: re-importing stage 1 into a store whose head is stage 4
+    chains the WRONG parent — build.sh now always builds from scratch; determinism =
+    two from-scratch builds agree (verified: 35 refs digest-identical). Verified DAG:
+    case `closed→visit-2→visit-1→intake` = the four stage-tag digests exactly.
+  - **ghcr (X3)**: all 35 refs pushed, artipod volume mediaType accepted, registry-side
+    CAS visible (`:closed` after `:latest` = +0 blobs). **OWNER ACTION**: the 7 packages
+    were born private — flip each to public in the package settings web UI (no REST
+    endpoint exists for visibility) before the anon-pull + clean-machine checks can pass.
+  - X4: `docs/examples.md` (+README index row). Catalog suggested-refs affordance
+    deferred to the spa plan's U-phases (no speculative UI).
