@@ -48,6 +48,12 @@ export interface ArtipodCommandContext {
    * refusal (e.g. a sealed tag). See docs/sync.md § Publishing a workspace.
    */
   publish?: (target?: string) => Promise<string>;
+  /**
+   * `artipod ps` (spa-ui-plan D2/P10): the client's background schedule —
+   * key renewal, push retry, verdict refresh, delegations — as named tasks.
+   * App-provided; absent = the verb explains there is no scheduler here.
+   */
+  tasks?: () => PsTask[];
   /** Phase 6.5: login/lock/status against the pod's authority. */
   authority?: {
     /** App-provided authentication → lease + keys (raw, or device-unwrapped CryptoKeys). */
@@ -55,6 +61,18 @@ export interface ArtipodCommandContext {
     locker: PodLocker;
     keyring: Keyring;
   };
+}
+
+/** One row of `artipod ps` — the shape TaskScheduler snapshots satisfy. */
+export interface PsTask {
+  name: string;
+  state: string;
+  /** epoch ms */
+  nextRunAt?: number;
+  /** epoch ms */
+  lastRunAt?: number;
+  lastResult?: string;
+  lastError?: string;
 }
 
 const activeMounts = new Map<string, () => void>();
@@ -88,6 +106,7 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   login                                authenticate → lease → keyring populated
   lock [--all|<pod>]                   drop keys now (reads fail EACCES until login)
   status                               lease + capability expiries (also /proc/keys)
+  ps                                   background tasks: sync retries, key renewal, schedules
   image pull <ref> --index             index-level pull: metadata + placeholders only
   hydrate <ref> <path|glob>            fetch the lazy layers backing matching paths
   dehydrate <ref> <glob>               evict layer blobs; placeholders + indexes stay
@@ -140,6 +159,30 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
         if (entries.length === 0) return ok('locked — no live leases or capabilities (artipod login to restore)\n');
         const lines = entries.map((e) => `${e.kind.padEnd(10)} ${e.name.padEnd(32)} expires ${new Date(e.expiresAt).toISOString()}`);
         return ok(`${lines.join('\n')}\n`);
+      }
+
+      if (group === 'ps') {
+        const tasks = podContext.tasks?.();
+        if (!tasks) return fail('artipod ps: no task scheduler in this context (runs in app-managed pods)');
+        if (tasks.length === 0) return ok('no background tasks\n');
+        const now = Date.now();
+        const rel = (ms?: number): string => {
+          if (!ms) return '-';
+          const d = Math.round((ms - now) / 1000);
+          const abs = Math.abs(d);
+          const t = abs >= 3600 ? `${Math.round(abs / 3600)}h` : abs >= 60 ? `${Math.round(abs / 60)}m` : `${abs}s`;
+          return d >= 0 ? `in ${t}` : `${t} ago`;
+        };
+        const lines = tasks.map((t) =>
+          [
+            t.name.padEnd(22),
+            t.state.padEnd(10),
+            `next ${rel(t.nextRunAt)}`.padEnd(14),
+            `last ${rel(t.lastRunAt)}`.padEnd(14),
+            t.lastResult ? `${t.lastResult}${t.lastError ? `: ${t.lastError}` : ''}` : '-',
+          ].join(' '),
+        );
+        return ok(`${'TASK'.padEnd(22)} ${'STATE'.padEnd(10)} ${'NEXT'.padEnd(14)} ${'LAST'.padEnd(14)} RESULT\n${lines.join('\n')}\n`);
       }
 
       if (group === 'offline') {

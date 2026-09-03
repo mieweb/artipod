@@ -158,6 +158,8 @@ export interface ZenFsPodOptions
   oci?: { transport?: OciTransport };
   /** `artipod publish [<name:tag>]` handler (app-provided — see docs/sync.md). */
   publish?: (target?: string) => Promise<string>;
+  /** `artipod ps` rows — the app's background schedule (renewals, retries, delegations). */
+  tasks?: () => import('../oci/command.js').PsTask[];
   /** Manager sync: the remote PodStore push/pull/clone talk to. */
   sync?: {
     remote?: import('../manager/pod-store.js').PodStore;
@@ -489,6 +491,7 @@ export async function createZenFsPod(
             hydrator,
             pushBasis,
             publish: options.publish,
+            tasks: options.tasks,
           }),
           ...(options.extraCommands ?? []),
         ],

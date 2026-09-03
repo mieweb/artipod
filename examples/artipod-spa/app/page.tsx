@@ -9,9 +9,8 @@
  */
 import { useEffect, useState } from 'react';
 import Catalog from '@/components/Catalog';
+import Workspace from '@/components/Workspace';
 import { actorId, keys, parseRoute, type Route } from '@/lib/boot';
-
-const CORE_VERSION = process.env.NEXT_PUBLIC_ARTIPOD_VERSION ?? 'dev';
 
 export default function Page() {
   // undefined = parsing; null = catalog; Route = workspace
@@ -29,14 +28,5 @@ export default function Page() {
 
   if (route === undefined) return <main className="h-[var(--app-height)] bg-black" />;
   if (route === null) return <Catalog actorId={actorId} />;
-  return (
-    <main className="mx-auto max-w-lg p-8 font-mono text-sm">
-      <h1 className="mb-2 text-lg font-bold">workspace: {route.id}</h1>
-      <p className="opacity-60">
-        the workspace shell lands in U3 (spa-ui-plan) — mode {route.mode}, core {CORE_VERSION}
-      </p>
-      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-      <a href="/" className="underline">← catalog</a>
-    </main>
-  );
+  return <Workspace route={route} />;
 }

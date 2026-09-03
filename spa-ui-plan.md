@@ -31,7 +31,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 | UE — DRY the embed story (dry-example-server-plan E1–E4) | main | **done** | |
 | U1 — services + zustand stores (no React) | main | **done** | |
 | U2 — catalog on stores + @mieweb/ui | main | **done** | |
-| U3 — workspace shell + pod session service | main | todo | |
+| U3 — workspace shell + pod session service | main | **done** | |
 | U4 — panels: terminal, tree, editor, agent | main | todo | |
 | U5 — true SPA navigation (no reloads) | main | todo | |
 | U6 — yorm spike: collaborative editor (gated) | main | todo | |
@@ -245,6 +245,14 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### U3 — workspace shell + PodSessionService (2026-09-03)
+
+- **PodSessionService** (`lib/services/pod-session.ts`): the old 300-line boot effect as `openPodSession(route) → PodSession` — encrypted block-store upper (hash-named) under a broker key, plaintext upper otherwise; full `doPublish` port (push-back / publish-as / blank-publish, cow-migration + blank-retirement rules preserved verbatim); `createZenFsPod` with `authority.adopt` + re-login; push retry rewritten on the U1 pieces — the sync-machine reducer decides, the TaskScheduler's named `sync:push` task executes (boot retry, reconnect via brokerStore.subscribe, self-re-arming 15s interval); lease renewal/lock rides the same subscription (`locker.adoptLease`/`lock`); upper probe → hasChanges + offline reconcile; publishIntent handling. `close()` is the explicit U5 teardown seam. Live objects stay in the session; `workspaceStore` renders snapshots only.
+- **`artipod ps` shipped end-to-end (D2/P10)**: core grew `ArtipodCommandContext.tasks?: () => PsTask[]` + the `ps` verb (table: TASK/STATE/NEXT/LAST/RESULT, relative times) + `ZenFsPodOptions.tasks` pass-through (+2 core tests in settings.test.ts); the session wires `tasks: () => scheduler.list()` — so the schedule that drives the UI is the one the shell prints.
+- **Workspace shell** (`components/Workspace.tsx`): top bar (badges + store-driven SyncStatus + tabs + publish + terminal), inline publish panel on `workspaceStore.publish`, console panel, secondary-tab warning, iOS viewport mirror. Panels are a U4 placeholder; the terminal is fully live.
+
+**Verification (browser, exported app on serve 2785 --encrypt, doug:_1 rw)**: boot → leased, upper = opaque hash dir `73d27ff7de3d8236` w/ numbered blocks on raw OPFS; `artipod ps` in the workspace shell shows `keys:renew scheduled next in 14m` + `sync:push … ok`; online edit → push lands (~2s); `artipod offline on` → chip flips live, offline edit → badge "offline — changes local", registry `unsynced:true`; `artipod offline off` → retry lands ≈3s, `unsynced:false` healed; release-lease → keyring locked (`artipod status`), new encrypted writes EACCES; login → re-keyed with a NEW expiry (renewal re-keys the pod ✓), reads restored; `artipod publish` push-back correct ("nothing to push" after autopush). Gates: app 25 tests/tsc/lint/export-assertions; core 49 files/527 tests (+2).
 
 ### U2 — catalog (2026-09-03)
 

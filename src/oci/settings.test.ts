@@ -40,9 +40,43 @@ async function shell(): Promise<Sandbox> {
   await store.init();
   return createSandbox({
     zfs: zfs as unknown as ZenFsLike,
-    extraCommands: [makeArtipodCommand({ store, zfs: zfs as unknown as ZenFsLike, remote: failingRemote })],
+    extraCommands: [
+      makeArtipodCommand({
+        store,
+        zfs: zfs as unknown as ZenFsLike,
+        remote: failingRemote,
+        tasks: () => [
+          { name: 'keys:renew', state: 'scheduled', nextRunAt: Date.now() + 3_540_000, lastRunAt: Date.now() - 60_000, lastResult: 'ok' },
+          { name: 'sync:push', state: 'idle', lastResult: 'error', lastError: 'forced offline' },
+        ],
+      }),
+    ],
   });
 }
+
+describe('artipod ps', () => {
+  it('prints the app task table (the scheduler is app-provided)', async () => {
+    const sb = await shell();
+    const res = await sb.exec('artipod ps');
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain('TASK');
+    expect(res.stdout).toContain('keys:renew');
+    expect(res.stdout).toContain('next in 59m');
+    expect(res.stdout).toContain('error: forced offline');
+  });
+
+  it('explains itself when no scheduler is wired', async () => {
+    const store = new OciStore(zfs as unknown as ZenFsLike);
+    await store.init();
+    const bare = createSandbox({
+      zfs: zfs as unknown as ZenFsLike,
+      extraCommands: [makeArtipodCommand({ store, zfs: zfs as unknown as ZenFsLike })],
+    });
+    const res = await bare.exec('artipod ps');
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).toContain('no task scheduler');
+  });
+});
 
 describe('artipod offline', () => {
   it('round-trips through settings.json and gates push/pull/clone', async () => {
