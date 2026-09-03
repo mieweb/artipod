@@ -5,11 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-09-03
+
+### Fixed
+
+- **`artipod run REF` now caches registry pulls in the shared store**: pulling from a
+  registry landed only in the pod's own store, so `artipod serve` never saw what you just
+  ran and the next `run` re-downloaded everything. Registry pulls now tee into `--store`
+  under the canonical ref (docker-like local cache) — `artipod run -it example/case` then
+  `artipod serve` lists the case.
+- **Pulled refs are re-syncable**: `pullImage` skipped the annotation-referenced
+  layer-index artifact blobs (`org.artipod.layer-index`), leaving a pulled ref's
+  reachable set incomplete — any later `push`/sync of it failed with `ENOENT`. Pulls now
+  fetch them like any other blob (best-effort for registries that lack them).
+- **Lease TTL is exact**: one clock read per lease issue — the expiry delta no longer
+  drifts by the microseconds between two `Date.now()` calls.
+
 ## [0.10.0] - 2026-09-03
 
 ### Added
 
 - **`artipod ps`** (shell verb): the app's background schedule — key renewal, push retries, future delegations — as a live task table (TASK/STATE/NEXT/LAST/RESULT). App-provided via `createZenFsPod({ tasks })` / `ArtipodCommandContext.tasks` (`PsTask` exported from `@artipod/core/oci`); the SPA demo wires its TaskScheduler through it.
+- **The example pods** (`docs/examples.md`; unlisted here at release time): the reserved `example/` short-name prefix in refs (`artipod run -it example/case` ⇒ `ghcr.io/mieweb/artipod-examples/case`), the in-shell `examples` table (+ run-banner hint), top-level `artipod tag <ref|digest> <name:tag>`, and `artipod import --actor <name>` for reproducible manifests. The seven demo pods live in [mieweb/artipod-examples](https://github.com/mieweb/artipod-examples).
 - **`toNodeHandler(app)`** (`@artipod/core/server`): the node req/res adapter behind `serveApp`, now exported on its own — mount an `ArtipodApp` in Express or plain `node:http` in one line. `serveApp` reuses it (one dispatch path). `docs/serve.md#embedding` grew Express/Hono/Next/standalone snippets and the root-mount + Fastify caveats.
 - `examples/artipod-spa` — the SPA rewrite of the demo (spa-ui-plan U0–U7, complete): static-export-only Next app whose sole backend is `artipod serve`, vanilla-zustand state over a framework-free client-services layer (keys/leases, pod sessions, sync), Tailwind v4 + @mieweb/ui; exported with struct-minify and baked-version assertions.
 - **`artipod serve --encrypt` — key broker + encryption at rest** (serve plan S5.5): the served store writes chunked-AEAD ciphertext (`.alias` digest twins), and `/api/keys/login` issues signed key leases (TTL cap `--key-ttl`, default 1h) from an on-disk authority (`--authority`, default `~/.artipod/authority`, `0700`) that is **created automatically on first use** — signing key and per-store KEK included. Blob reads/writes and ref writes then require an `X-Artipod-Lease` header (ref reads stay open); `/v2` is off while encrypted (it cannot carry leases). Browsers adopt the leased KEK into the memory-only keyring (`decodeLoginResult` → `PodLocker.adoptLogin`) and encrypt their local stores at rest; expiry locks (`PodLockedError`), re-login restores. A keyless serve of encrypted refs remains a **blind host**: ciphertext syncs byte-exact, plaintext-addressed reads answer `423 Locked`, and the server can never read the data. Stated honestly: a broker CAN decrypt what it brokers. See `docs/serve.md`.
