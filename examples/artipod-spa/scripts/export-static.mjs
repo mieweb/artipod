@@ -38,6 +38,12 @@ try {
   fullVersion = copiedVersion; // gitless source tarball
 }
 
+// kerebron prep must run AFTER the install above (a fresh install restores
+// pristine @kerebron css) and runs here because `npx next build` below
+// bypasses npm lifecycle hooks — CI's export:static gets no prebuild.
+const prep = spawnSync('node', [join(root, 'scripts/wasm-assets.mjs')], { cwd: root, stdio: 'inherit' });
+if (prep.status !== 0) process.exit(prep.status ?? 1);
+
 await rm(join(root, '.next'), { recursive: true, force: true });
 await rm(join(root, 'out'), { recursive: true, force: true });
 const code = spawnSync('npx', ['next', 'build'], {
