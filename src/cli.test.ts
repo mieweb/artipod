@@ -350,6 +350,56 @@ describe('artipod CLI', () => {
     }
   });
 
+  it('tag points a new ref at an existing manifest; --actor + re-import chain parents', async () => {
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    const src = await mkdtemp(join(tmpdir(), 'apod-stage-'));
+    try {
+      await writeFile(join(src, 'case.mdy'), 'status: open\n');
+      const first = await run(['import', src, 'demo/case:latest', '--store', store, '--actor', 'examples-builder']);
+      expect(first.code).toBe(0);
+
+      const tagged = await run(['tag', 'demo/case:latest', 'demo/case:intake', '--store', store]);
+      expect(tagged.code).toBe(0);
+      expect(tagged.stdout).toMatch(/tagged demo\/case:intake → sha256:[0-9a-f]{64}/);
+
+      // stage 2: same rolling ref → new head, parents = previous head
+      await writeFile(join(src, 'visit.mdy'), 'seen: yes\n');
+      const second = await run(['import', src, 'demo/case:latest', '--store', store, '--actor', 'examples-builder']);
+      expect(second.code).toBe(0);
+
+      const index = JSON.parse(await readFile(join(store, 'index.json'), 'utf8')) as {
+        manifests: { digest: string; annotations?: Record<string, string> }[];
+      };
+      const digestOf = (ref: string) =>
+        index.manifests.find((m) => m.annotations?.['org.opencontainers.image.ref.name'] === ref)?.digest;
+      const intake = digestOf('demo/case:intake');
+      const latest = digestOf('demo/case:latest');
+      expect(intake).toMatch(/^sha256:/);
+      expect(latest).toMatch(/^sha256:/);
+      expect(latest).not.toBe(intake);
+      const head = JSON.parse(await readFile(join(store, 'blobs/sha256', latest!.slice(7)), 'utf8')) as {
+        annotations?: Record<string, string>;
+      };
+      expect(head.annotations?.['org.artipod.parents']).toContain(intake);
+      expect(head.annotations?.['org.artipod.actor']).toBe('examples-builder');
+
+      const missing = await run(['tag', 'demo/nothere:1', 'demo/x:1', '--store', store]);
+      expect(missing.code).not.toBe(0);
+      expect(`${missing.stdout}${missing.stderr}`).toContain('not found');
+    } finally {
+      await rm(store, { recursive: true, force: true });
+      await rm(src, { recursive: true, force: true });
+    }
+  });
+
+  it('`examples` prints the demo-pod table in the shell', async () => {
+    const r = await run(['run', '--rm', '-c', 'examples']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('example/case');
+    expect(r.stdout).toContain('ghcr.io/mieweb/artipod-examples');
+    expect(r.stdout).toContain('the layer history IS the record');
+  });
+
   it('refuses non-interactive run with no command', async () => {
     const r = await run(['run']);
     expect(r.code).toBe(2);

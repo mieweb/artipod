@@ -76,7 +76,12 @@ const HELP = `usage:
                                         or materialized from an image/volume REF
   artipod import <dir> <name:tag>       snapshot a host folder into the store as an
                                         image ref (no pod) — content-addressed, so
-                                        re-importing an unchanged tree is a no-op
+                                        re-importing an unchanged tree is a no-op;
+                                        re-importing a changed tree chains the previous
+                                        head in org.artipod.parents (--actor <name>
+                                        pins the recorded actor for reproducible builds)
+  artipod tag <ref|digest> <name:tag>   point a new ref at an existing manifest in the
+                                        store (content-addressed — no bytes move)
   artipod pods [--pods <path>]          list kept pods, newest first (docker ps -a for pods)
   artipod rm [--pods <path>] POD...     delete kept pods by id (unique prefix ok)
   artipod prune [-f] [-a] [--pods <path>]  delete untagged kept pods (-a: ALL); asks first
@@ -119,6 +124,8 @@ flags for run:
 examples:
   artipod run -it                      # fresh pod, kept under ~/.artipod/pods (untouched pods
                                        # are removed again — create-on-write)
+  artipod run -it example/case         # demo pod from ghcr.io (short-name alias; type
+                                       # \`examples\` inside any shell for the full list)
   artipod run -it 500edf8b             # resume a kept pod by id prefix (see: artipod pods)
   artipod run -it alpine:3.22          # registry image, cloned into the pod root
   artipod run -it field/notes:1        # a ref you pushed earlier (from --store)
@@ -173,7 +180,8 @@ function parseArgs(
   | { pods: true; podsRoot: string }
   | { removeIds: string[]; podsRoot: string }
   | { prune: true; force: boolean; all: boolean; podsRoot: string }
-  | { importDir: string; importRef: string; store: string }
+  | { importDir: string; importRef: string; store: string; actor?: string }
+  | { tagSrc: string; tagDest: string; store: string }
   | { serve: ServeCliOptions } {
   // per-verb help: `artipod serve --help` answers serve questions without the run wall
   if (args[0] === 'serve' && (args.includes('--help') || args.includes('-h'))) {
@@ -213,9 +221,11 @@ function parseArgs(
   }
   if (verb === 'import') {
     let store = env.ARTIPOD_STORE ?? resolve(homedir(), '.artipod/store');
+    let actor: string | undefined;
     const positional: string[] = [];
     for (let i = 0; i < rest.length; i++) {
       if (rest[i] === '--store') store = rest[++i];
+      else if (rest[i] === '--actor') actor = rest[++i];
       else if (rest[i].startsWith('-')) {
         stdout.write(`artipod import: unknown flag '${rest[i]}'\n\n${HELP}`);
         exit(2);
@@ -225,7 +235,23 @@ function parseArgs(
       stdout.write('artipod import: expected a folder and a ref — artipod import <dir> <name:tag>\n');
       exit(2);
     }
-    return { importDir: positional[0], importRef: positional[1], store };
+    return { importDir: positional[0], importRef: positional[1], store, actor };
+  }
+  if (verb === 'tag') {
+    let store = env.ARTIPOD_STORE ?? resolve(homedir(), '.artipod/store');
+    const positional: string[] = [];
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '--store') store = rest[++i];
+      else if (rest[i].startsWith('-')) {
+        stdout.write(`artipod tag: unknown flag '${rest[i]}'\n\n${HELP}`);
+        exit(2);
+      } else positional.push(rest[i]);
+    }
+    if (positional.length !== 2) {
+      stdout.write('artipod tag: expected a source and a destination — artipod tag <ref|digest> <name:tag>\n');
+      exit(2);
+    }
+    return { tagSrc: positional[0], tagDest: positional[1], store };
   }
   if (verb === 'prune') {
     let podsRoot = defaultPodsRoot;
@@ -309,7 +335,7 @@ function parseArgs(
   }
   if (verb !== 'run') {
     stdout.write(
-      `artipod: unknown command '${verb}' — top-level commands are run, import, serve, pods, rm, and prune; the pod verbs live INSIDE the shell (try: artipod run -it)\n\n${HELP}`,
+      `artipod: unknown command '${verb}' — top-level commands are run, import, tag, serve, pods, rm, and prune; the pod verbs live INSIDE the shell (try: artipod run -it)\n\n${HELP}`,
     );
     exit(2);
   }
@@ -694,10 +720,10 @@ function parseVolumeSpec(spec: string): { dir: string; at: string; mode: 'rw' | 
 }
 
 /** `artipod import <dir> <name:tag>` — folder → image ref in the store. */
-async function importDirectory(dir: string, ref: string, storePath: string): Promise<void> {
+async function importDirectory(dir: string, ref: string, storePath: string, actor?: string): Promise<void> {
   const abs = await assertDirectory('import', dir);
   const store = await openLayoutStore(storePath);
-  const result = await publishDirectory(store, abs, ref);
+  const result = await publishDirectory(store, abs, ref, actor ? { actor } : {});
   for (const w of result.warnings.slice(0, 10)) stdout.write(`warning: ${w}\n`);
   if (result.warnings.length > 10) stdout.write(`… and ${result.warnings.length - 10} more warnings\n`);
   if (result.unchanged) {
@@ -708,6 +734,30 @@ async function importDirectory(dir: string, ref: string, storePath: string): Pro
     `imported ${tildify(abs)} → ${ref}: ${result.layers} layer${result.layers === 1 ? '' : 's'} ` +
       `(${result.reusedLayers} reused), ${fmtSize(result.bytes)} new — run it: artipod run -it ${ref}\n`,
   );
+}
+
+/** `artipod tag <ref|digest> <name:tag>` — point a new ref at an existing manifest. */
+async function tagRef(src: string, dest: string, storePath: string): Promise<void> {
+  const store = await openLayoutStore(storePath);
+  let manifestDigest: string | undefined;
+  let mediaType = 'application/vnd.oci.image.manifest.v1+json';
+  if (/^sha256:[0-9a-f]{64}$/.test(src)) {
+    manifestDigest = src;
+  } else {
+    const canonical = (() => {
+      try {
+        return formatImageRef(parseImageRef(src));
+      } catch {
+        return src;
+      }
+    })();
+    const stored = (await store.getRef(src)) ?? (await store.getRef(canonical));
+    if (!stored) throw new Error(`artipod tag: '${src}' not found in ${tildify(resolve(storePath))}`);
+    manifestDigest = stored.manifestDigest;
+    mediaType = stored.mediaType;
+  }
+  await store.putRef(dest, manifestDigest as never, mediaType);
+  stdout.write(`tagged ${dest} → ${manifestDigest}\n`);
 }
 
 /** Stack the --base folders in order: each is imported into the store
@@ -755,6 +805,7 @@ async function repl(pod: ZenFsPod, note?: string): Promise<number> {
   const banner = [
     `artipod ${pod.oci.store.getSuperblock().podId} — type \`artipod\` for pod verbs, \`exit\` to leave`,
     `mounts: ${pod.mountTable.map((m) => `${m.path}${m.readonly ? ':ro' : ''}`).join(', ')}`,
+    'to see it in action, type: examples',
     ...(note ? [note] : []),
     '',
   ].join('\n');
@@ -896,7 +947,11 @@ async function main(): Promise<void> {
     return;
   }
   if ('importDir' in parsed) {
-    await importDirectory(parsed.importDir, parsed.importRef, parsed.store);
+    await importDirectory(parsed.importDir, parsed.importRef, parsed.store, parsed.actor);
+    return;
+  }
+  if ('tagSrc' in parsed) {
+    await tagRef(parsed.tagSrc, parsed.tagDest, parsed.store);
     return;
   }
   if ('serve' in parsed) {

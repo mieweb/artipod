@@ -278,4 +278,13 @@ describe('parseImageRef', () => {
     expect(parseImageRef(`quay.io/a/b@${d}`).digest).toBe(d);
     expect(decoder.decode(new Uint8Array(0))).toBe(''); // keep decoder referenced
   });
+
+  it('expands the example/ short-name alias (tags and digests pass through)', async () => {
+    expect(parseImageRef('example/case')).toMatchObject({ host: 'ghcr.io', repo: 'mieweb/artipod-examples/case', tag: 'latest' });
+    expect(parseImageRef('example/case:intake')).toMatchObject({ host: 'ghcr.io', repo: 'mieweb/artipod-examples/case', tag: 'intake' });
+    const d = await sha256(encoder.encode('y'));
+    expect(parseImageRef(`example/patient@${d}`)).toMatchObject({ host: 'ghcr.io', repo: 'mieweb/artipod-examples/patient', digest: d });
+    // only the exact reserved prefix — 'examples/…' is still a docker.io repo
+    expect(parseImageRef('examples/case')).toMatchObject({ host: 'docker.io', repo: 'examples/case' });
+  });
 });

@@ -109,6 +109,8 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       // no TTY — pagers degrade to cat; ordinary aliases, so unalias/redefine work
       BASH_ALIAS_less: 'cat',
       BASH_ALIAS_more: 'cat',
+      // bare `examples` works in any pod shell (demo-pod table, no network)
+      BASH_ALIAS_examples: 'artipod examples',
     },
     executionLimits: opts.executionLimits,
     executionLimitProfile: opts.executionLimitProfile,

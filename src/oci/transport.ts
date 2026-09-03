@@ -27,8 +27,16 @@ export interface ImageRef {
 /** docker.io's API actually lives on registry-1.docker.io. */
 const REGISTRY_HOST_ALIASES: Record<string, string> = { 'docker.io': 'registry-1.docker.io' };
 
+/** Reserved short-name prefixes (podman shortnames precedent) — the demo pods:
+ * `example/case` ⇒ `ghcr.io/mieweb/artipod-examples/case`. Deliberately not
+ * user-extensible; the one entry is documented in `--help` and docs/examples.md. */
+const SHORT_NAME_ALIASES: Record<string, string> = { 'example/': 'ghcr.io/mieweb/artipod-examples/' };
+
 export function parseImageRef(input: string): ImageRef {
   let rest = input.trim();
+  for (const [prefix, expansion] of Object.entries(SHORT_NAME_ALIASES)) {
+    if (rest.startsWith(prefix)) rest = expansion + rest.slice(prefix.length);
+  }
   let digest: Digest | undefined;
   const at = rest.indexOf('@');
   if (at !== -1) {

@@ -80,6 +80,28 @@ const activeMounts = new Map<string, () => void>();
 const ok = (stdout: string) => ({ stdout, stderr: '', exitCode: 0 });
 const fail = (stderr: string, exitCode = 1) => ({ stdout: '', stderr: stderr.endsWith('\n') ? stderr : `${stderr}\n`, exitCode });
 
+/** The demo pods (mieweb/artipod-examples) — a static table, no network. */
+const EXAMPLES = `demo pods — fictional records whose layer history tells a story
+(short ref \`example/<name>\` expands to ghcr.io/mieweb/artipod-examples/<name>)
+
+  NAME              STORY                                              STAGE TAGS
+  example/case      employee injury-absence case (administrative)     intake visit-1 visit-2 closed
+  example/patient   the same injury, clinical chart (FHIR-ish MDY)    2026-01-14 2026-01-21 2026-02-04 chart
+  example/ee        the employee: jobs + wages (the PII pod)          hired promoted absence current
+  example/provider  credentialing of the treating provider            application verified privileged recred-2026
+  example/seg       industrial-hygiene similar exposure group         defined profile-v1 sampled-2026-02 profile-v2
+  example/ticket    an IT trouble ticket                              opened triage fix closed
+  example/agent     a pod whose artifacts define an agent             scaffold skill-1 tools 1.0
+
+try:
+  artipod run -it example/case             # from your terminal (:latest)
+  artipod run -it example/case:intake      # time travel — each tag is that moment
+  artipod open example/patient             # from inside this shell
+  artipod image pull example/patient --index && artipod files example/patient
+                                           # list every file without moving a blob
+the layer history IS the record: try \`artipod image history example/case\`.
+`;
+
 const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   image pull <ref>                     pull through the configured transport
   image ls                             list pulled refs
@@ -112,6 +134,7 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   dehydrate <ref> <glob>               evict layer blobs; placeholders + indexes stay
   open <ref> [path]                    writable overlay on a lazy basis (pulls index if needed)
   files [<ref>]                        per-file local/remote hydration state
+  examples                             the demo pods on ghcr.io — what they are, how to open them
 `;
 
 function sanitizeRefForPath(ref: string): string {
@@ -131,6 +154,10 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
     const [group, sub, ...rest] = args;
 
     try {
+      if (group === 'examples') {
+        return ok(EXAMPLES);
+      }
+
       if (group === 'publish') {
         if (!publish) return fail('artipod publish: not available in this pod (no publish handler configured)');
         const message = await publish(sub);
