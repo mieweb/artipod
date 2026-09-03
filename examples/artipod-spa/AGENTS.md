@@ -26,6 +26,22 @@ npm run dev            # http://localhost:3600
 # ARTIPOD_SERVE_URL overrides the proxy target
 ```
 
+## Deployment: sample site (`artipod-bash`)
+
+- **Detection**: if `hostname` returns `artipod-bash`, this machine is the public sample site.
+- **One process**: `artipod serve` on port 3000 serves the API **and** the bundled
+  SPA (`dist-ui`, committed in the repo). No Next server, no separate UI deploy.
+  The load balancer maps `https://artipod-bash.os.mieweb.org` → :3000.
+- **Process manager**: systemd unit `artipod-serve` (source of truth:
+  `deploy/artipod-serve.service` in this directory; it documents install +
+  the retirement of the old `artipod-sync` unit).
+- **Deploy**: `git pull && npm ci && npm run build && sudo systemctl restart artipod-serve`
+  — dist-ui ships in git, so no UI build on the box. Logs: `journalctl -u artipod-serve -f`.
+- **Options**: `--publish <dir>` exposes server folders as artipods; `--encrypt`
+  turns on the key broker (authority auto-created; understand docs/serve.md S5.5
+  first — the badge wording promises honest semantics).
+- Generated links/callbacks/CORS origins must use the public HTTPS URL, not `localhost:3000`.
+
 ## Build / export
 
 ```bash

@@ -4,19 +4,31 @@ This directory contains example applications demonstrating the ArtiPod library.
 
 ## Available Examples
 
-### [artipod-sync](./artipod-sync)
+### [artipod-spa](./artipod-spa)
 
-The hosted example implementation: a Next.js app where the whole pod runs in your browser — terminal (just-bash), Monaco editor, file tree, agent panel — with server routes for the manager sync store (`/api/pods`), the OCI registry relay (`/api/oci`), the git CORS proxy (`/api/git`), and exec sessions (`/api/exec`). Formerly the standalone `horner/artipod-sync` repo; imported with full history.
+The hosted example implementation (bundled into the npm package as `dist-ui` —
+`npx artipod serve` ships it): a static-exported SPA where the whole pod runs in
+your browser — terminal (just-bash), kerebron editor, file tree, agent panel —
+with **`artipod serve` as its only backend**. State is zustand snapshots over a
+framework-free client-services layer (keys/leases, pod sessions, sync — see
+`lib/services/`). True no-reload navigation between workspaces; `artipod ps` in
+every shell shows the client's live schedule.
 
 **Run it:**
 
 ```bash
-cd examples/artipod-sync
+# terminal 1 — the backend (from the repository root)
+node dist/cli.js serve --port 2784
+
+# terminal 2 — the app (dev rewrites proxy /api to serve)
+cd examples/artipod-spa
 npm ci
-npm run dev   # http://localhost:3500
+npm run dev   # http://localhost:3600
 ```
 
-See its [README](./artipod-sync/README.md) and [AGENTS.md](./artipod-sync/AGENTS.md) (deployment runbook).
+See its [AGENTS.md](./artipod-spa/AGENTS.md) (dev loop, landmines, sample-site
+deployment runbook). The previous Next.js implementation (`artipod-sync`, with
+its own API routes) was retired at spa-ui-plan U7 — history is in git.
 
 ### [basic](./basic)
 

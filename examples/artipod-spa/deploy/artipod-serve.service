@@ -1,0 +1,36 @@
+# Sample site (artipod-bash): `artipod serve` IS the whole deployment —
+# API + bundled SPA UI (dist-ui) from one process on port 3000.
+# The external load balancer maps https://artipod-bash.os.mieweb.org/ -> :3000
+#
+# Install:  sudo cp examples/artipod-spa/deploy/artipod-serve.service /etc/systemd/system/
+#           sudo systemctl daemon-reload
+#           sudo systemctl enable --now artipod-serve
+# Deploy:   git pull && npm ci && npm run build && sudo systemctl restart artipod-serve
+#           (dist-ui is committed — no UI build step on the box; ARTIPOD_UI_DIR
+#            only for testing an uncommitted export)
+# Logs:     journalctl -u artipod-serve -f
+#
+# Replaces the retired `artipod-sync` unit (next start): disable it first —
+#           sudo systemctl disable --now artipod-sync
+
+[Unit]
+Description=artipod serve (API + bundled SPA UI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=horner
+WorkingDirectory=/home/horner/artipod
+Environment=NODE_ENV=production
+# --publish makes server folders appear as artipods (empty = none published).
+# Add --encrypt to run the key broker (authority auto-created under ~/.artipod).
+ExecStart=/usr/bin/env node /home/horner/artipod/dist/cli.js serve --host 0.0.0.0 --port 3000 --store /home/horner/.artipod/store
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

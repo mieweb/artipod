@@ -29,7 +29,7 @@ The working rules, commit conventions, phase-gate ritual (`docs(plan): serve pha
 |---|---|---|---|
 | S0 — node adapter + `createArtipodApp` + `serve` verb | main | **done** (2026-09-02) | |
 | S1 — `--publish` folder delight + auto-token + landing | main | **done** (2026-09-02) | |
-| S2 — ship the sync demo UI (static export, bundled in the npm package) | main | **done** (2026-09-02) — npm bundling superseded the ghcr artifact; demo catch-all refactor + CI both-modes job moved to the e2e close | |
+| S2 — ship the sync demo UI (static export, bundled in the npm package) | main | **done** (2026-09-02) — npm bundling superseded the ghcr artifact; demo catch-all refactor done at spa-ui-plan UE, then the whole Next API layer retired with the old app at spa-ui-plan U7 (the SPA's only backend is serve) | |
 | S3 — OCI distribution read (`/v2/` pull) | main | **done** (2026-09-02) | |
 | S4 — OCI distribution write (push + conformance) | main | **done** (2026-09-02) | |
 | S5 — static token auth across all surfaces | main | **done** (2026-09-02) | |

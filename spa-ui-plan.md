@@ -35,7 +35,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 | U4 — panels: terminal, tree, editor, agent | main | **done** (agent = interim port; Ozwell tri-mode + AgentPod spike deferred, see worklog) | |
 | U5 — true SPA navigation (no reloads) | main | **done** (stretch — two side-by-side workspaces — not started) | |
 | U6 — yorm spike: collaborative editor (gated) | main | **done** — recommendation below (adopt bare extension-yjs, defer yorm) | |
-| U7 — cutover: dist-ui swap, retire old app, redeploy | main | **swap done**; retire + redeploy await owner sign-off | |
+| U7 — cutover: dist-ui swap, retire old app, redeploy | main | **done** (owner sign-off 2026-09-03; box swap = runbook, owner executes) | |
 
 ## 1. Goal — the north star
 
@@ -245,6 +245,14 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### U7 — cutover, part 2: retirement + redeploy runbook (2026-09-03, owner sign-off)
+
+- **`examples/artipod-sync` retired** (history in git): the app, its catch-all API, agent/sandbox shims, vitest config, and CI job are gone; `build:ui:legacy` removed; README/examples-README point at artipod-spa; the serve-plan S2 note records the arc (catch-all refactor at UE → whole API layer retired at U7).
+- **Sample-site redeploy prepared**: `examples/artipod-spa/deploy/artipod-serve.service` — ONE process (`artipod serve` :3000) serves API + bundled dist-ui; no UI build on the box (dist-ui is committed); the unit documents installing itself and disabling the old `artipod-sync` unit. Runbook in the SPA's AGENTS.md (deploy = `git pull && npm ci && npm run build && systemctl restart artipod-serve`; `--publish`/`--encrypt` optional). **The box swap itself is the owner's action** — no SSH from here; steps are in the unit header.
+- Pushed to origin/main with everything U0–U7.
+
+**The plan is complete.** Deliverables: D1 sample app (kerebron editor, interim agent) — shipped as dist-ui; D2 client lib (services layer + artipod ps) — shipped in-app, core `/client` subpath move queued; D3 artipod-shell Terminal component — shipped in-app; D4 serve = pure API — shipped. Follow-ups queued outside this plan: serve `/yjs` relay phase (owner-ratified collab model), Ozwell tri-mode + AgentPod spike (await @mieweb/ui component + harness-core), `@artipod/core/client` packaging, upstream kerebron PRs.
 
 ### U7 — cutover, part 1: parity + dist-ui swap (2026-09-03)
 
