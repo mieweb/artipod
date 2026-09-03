@@ -537,3 +537,14 @@ worklog below.
   Known residue: materialized trees carry pull-time mtimes (story dates live in the layer
   annotations, not the working tree) — the "ls -l reads like the story" beat needs
   materializeImage to apply tar mtimes; small core follow-up, not blocking.
+- 2026-09-03 — dogfood bite #1 (owner: "ran `npx artipod run -it example/case`, then
+  `artipod serve` — case not there"). Two real core gaps, fixed on main (3ddfffc):
+  (1) `run REF` registry pulls landed only in the pod's own store — the shared `--store`
+  (what serve hosts) never saw the ref; materializeRef now tees registry pulls into the
+  store via syncRef under the canonical name (docker-like cache; second run resolves from
+  the store). (2) `pullImage` never stored annotation-referenced layer-index artifact
+  blobs, so a pulled ref's reachable set was incomplete and ANY resync dead-ended ENOENT
+  — pulls now fetch them (best-effort) + regression test (pull→syncRef completes).
+  publish.mjs also had to push those artifacts (key `org.artipod.layer-index`);
+  re-published, all 35 digests unchanged. NOTE: the fix is on main only — the owner's
+  `npx artipod` (0.10.0) won't cache until the next release.
