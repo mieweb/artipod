@@ -77,3 +77,38 @@ jobs:
 
     - name: Build
       run: npm run build
+
+  spa-app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/artipod-spa
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Use Node.js 20.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+
+    # file:../.. runs the core's prepare (tsc) — its devDeps must exist first
+    - name: Install core dependencies
+      run: npm ci
+      working-directory: .
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Lint
+      run: npm run lint
+
+    - name: Typecheck
+      run: npm run typecheck
+
+    - name: Test
+      run: npx vitest run
+
+    # export:static carries the struct-minify + baked-version assertions
+    - name: Static export (with assertions)
+      run: npm run export:static

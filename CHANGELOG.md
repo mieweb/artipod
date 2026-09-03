@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The bundled browser UI is now the SPA** (`examples/artipod-spa`, spa-ui-plan U7): zustand-backed state over a framework-free client-services layer, kerebron editor (markdown WYSIWYG + code), true no-reload navigation with flush-push-on-close, `artipod ps` in every workspace shell, and the same honest badges — rebuilt on snapshots instead of a 1,900-line component. `npm run build:ui` exports it; the previous app remains at `build:ui:legacy` until retirement.
 - `examples/artipod-sync`'s four hand-wired API routes (`/api/pods`, `/api/oci`, `/api/git`, `/api/exec`) collapsed onto one `createArtipodApp` catch-all, and its `PublishMap` fork was deleted in favor of core's (`publish-map.json` format unchanged) — the demo now runs the same object `artipod serve` runs.
 
 ## [0.9.1] - 2026-09-02

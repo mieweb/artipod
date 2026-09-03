@@ -35,7 +35,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 | U4 — panels: terminal, tree, editor, agent | main | **done** (agent = interim port; Ozwell tri-mode + AgentPod spike deferred, see worklog) | |
 | U5 — true SPA navigation (no reloads) | main | **done** (stretch — two side-by-side workspaces — not started) | |
 | U6 — yorm spike: collaborative editor (gated) | main | **done** — recommendation below (adopt bare extension-yjs, defer yorm) | |
-| U7 — cutover: dist-ui swap, retire old app, redeploy | main | todo | |
+| U7 — cutover: dist-ui swap, retire old app, redeploy | main | **swap done**; retire + redeploy await owner sign-off | |
 
 ## 1. Goal — the north star
 
@@ -245,6 +245,14 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### U7 — cutover, part 1: parity + dist-ui swap (2026-09-03)
+
+**Parity checklist replayed** in one consolidated scripted pass against the broker serve (2785 --encrypt), all green: catalog — leased badge, 3× 🔒 encrypted chips, 2× digest-verified `synced` badges, online toggle; SPA hop into doug:_1 with the no-reload marker intact; `artipod ps` showing keys:renew + sync:push; edit → push ok; `artipod offline on` → chip flips → offline edit → `offline off` → recovery push ok; release → keyring locked → login → re-keyed; the parity file confirmed IN the server manifest. (Full per-scenario evidence lives in the U2–U6 gate worklogs — this pass re-proves the loop end-to-end on the final build.)
+
+**Swap executed** (repo-local, reversible): root `build:ui` now exports **examples/artipod-spa** → `dist-ui` (kerebron-wasm assets included; buildinfo baked — version-skew warning intact); the old app remains reachable as `build:ui:legacy` until retirement. `publish.yml` bundles the SPA; `nodejs.yml` gains a `spa-app` job (lint/typecheck/tests/export-with-assertions) alongside the existing `example-app` job (kept until retirement). CHANGELOG updated. `npx artipod serve` now ships the SPA.
+
+**Remaining U7 items — ask-first, awaiting owner**: ① retire `examples/artipod-sync` (delete app + catch-all + vitest config, update examples/README, note in serve plan); ② sample-site redeploy (`artipod serve --publish …` replaces `next start`; new deploy unit + runbook). Also queued post-cutover: `@artipod/core/client` subpath move, serve `/yjs` relay phase, upstream kerebron PRs.
 
 ### U6 — collab spike + RECOMMENDATION (2026-09-03)
 
