@@ -5,9 +5,11 @@
 # Install:  sudo cp examples/artipod-spa/deploy/artipod-serve.service /etc/systemd/system/
 #           sudo systemctl daemon-reload
 #           sudo systemctl enable --now artipod-serve
-# Deploy:   git pull && npm ci && npm run build && sudo systemctl restart artipod-serve
-#           (dist-ui is committed — no UI build step on the box; ARTIPOD_UI_DIR
-#            only for testing an uncommitted export)
+# Deploy:   git pull && npm ci && npm run build
+#           (cd examples/artipod-spa && npm ci) && npm run build:ui
+#           sudo systemctl restart artipod-serve
+#           (dist-ui is gitignored — build:ui produces it; alternatively run the
+#            published package, `npm i -g artipod`, which bundles the UI)
 # Logs:     journalctl -u artipod-serve -f
 #
 # Replaces the retired `artipod-sync` unit (next start): disable it first —
