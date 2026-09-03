@@ -29,7 +29,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 |---|---|---|---|
 | U0 — scaffold + build pipeline parity | main | **done** | |
 | UE — DRY the embed story (dry-example-server-plan E1–E4) | main | **done** | |
-| U1 — services + zustand stores (no React) | main | todo | |
+| U1 — services + zustand stores (no React) | main | **done** | |
 | U2 — catalog on stores + @mieweb/ui | main | todo | |
 | U3 — workspace shell + pod session service | main | todo | |
 | U4 — panels: terminal, tree, editor, agent | main | todo | |
@@ -242,6 +242,21 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### U1 — services + stores, no React (2026-09-03)
+
+The client lib (D2) exists in embryo under `examples/artipod-spa/lib/services/` — every file DOM-free, browser specifics behind two injected interfaces (`KeyValue` = IDB/Map, `Mirror` = localStorage/Map in `adapters.ts`):
+- **KeysService** (from lib/keys.ts, behavior parity): probe (failures non-memoized), ECDH device-wrapped login, wrapped-session persistence/restore-before-probe, release-suppresses-auto-relogin, forced-offline (mirror boot copy + injectable pod-settings writer for U3), the ONE fetch patch (`patchedFetch` exposed for tests; `install()` claims globalThis.fetch). Snapshots → `brokerStore`/`settingsStore`; lease + CryptoKeys never leave the service. Renewal is the named task `keys:renew`.
+- **TaskScheduler**: named tasks with state/nextRunAt/lastResult introspection + onChange — the `artipod ps` substrate (shell wiring lands U3).
+- **UiStateIO** (from page.tsx): same file/schema (`ui-state.json`), injected `StateMedium` (raw-OPFS + Web-Lock + exclusive-writable medium for the browser, memory medium for node); actorId/record/patch/drop; `upperDirName` hash. `registryStore` = write-through snapshot cache.
+- **CatalogService**: pure `computeVerdicts` (synced=digest-equal, ahead=ancestry-proven, behind=else, walk-failure⇒no-verdict-flag-stands) + `healUnsynced` + `boundAncestry` (real OciStore walker w/ broker-key decrypt).
+- **sync-machine**: the push-retry reducer (`reduceSync`/`wantsPush`) — edits racing an in-flight push, retry on tick/reconnect only, never while offline.
+
+**Packaging decision (P10, recorded at gate)**: the lib graduates to a **`@artipod/core/client` subpath export** — same version/repo as core, browser-safe like /sandbox//oci//manager, no new npm package to administer. The physical move happens once the API survives U3–U5 contact (before U7); until then the app folder is the incubator.
+
+**Deviation**: `PodSessionService.open/close` (the impure wrapper) moves to U3 where the workspace exists to exercise it — U1 shipped its pure parts (upper naming, retry machine) as planned; wiring an untestable 300-line wrapper with no UI would be theater.
+
+**Verification**: app 25/25 tests under plain node — including a REAL broker (core `createKeysHandler` + `Authority`) behind fake fetch: full ECDH login round-trip, non-extractable keys, no key material in any store snapshot (asserted), lease-survives-reload restore with a dead network, 401→relogin→retry carrying a fresh lease, release drops the persisted grant, renew task visible with nextRunAt ≈ expiry−10s. tsc + lint + `next build` green; core gate 49/525. One node-parity fix worth keeping: node's `Request` rejects relative URLs — patchedFetch resolves against `adapters.origin`.
 
 ### UE — DRY the embed story (2026-09-03)
 
