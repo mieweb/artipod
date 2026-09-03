@@ -528,3 +528,12 @@ worklog below.
     endpoint exists for visibility) before the anon-pull + clean-machine checks can pass.
   - X4: `docs/examples.md` (+README index row). Catalog suggested-refs affordance
     deferred to the spa plan's U-phases (no speculative UI).
+- 2026-09-03 — **X3 fully closed**: owner flipped the 7 packages public. Verified: anon
+  token dance → manifest GET 200; clean-machine simulation (scratch store + pods root)
+  pulls `example/case` from ghcr, 13 per-file layers, closed status + timeline correct,
+  `examples` verb renders; `example/patient:2026-01-14` delivers both 3.4 MB x-rays with
+  their sidecars in ~3.8 s cold. Bare `curl` 401 on public packages is EXPECTED (ghcr
+  requires the anonymous token exchange even for public pulls) — don't re-diagnose it.
+  Known residue: materialized trees carry pull-time mtimes (story dates live in the layer
+  annotations, not the working tree) — the "ls -l reads like the story" beat needs
+  materializeImage to apply tar mtimes; small core follow-up, not blocking.
