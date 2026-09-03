@@ -30,7 +30,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 | U0 — scaffold + build pipeline parity | main | **done** | |
 | UE — DRY the embed story (dry-example-server-plan E1–E4) | main | **done** | |
 | U1 — services + zustand stores (no React) | main | **done** | |
-| U2 — catalog on stores + @mieweb/ui | main | todo | |
+| U2 — catalog on stores + @mieweb/ui | main | **done** | |
 | U3 — workspace shell + pod session service | main | todo | |
 | U4 — panels: terminal, tree, editor, agent | main | todo | |
 | U5 — true SPA navigation (no reloads) | main | todo | |
@@ -242,6 +242,16 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### U2 — catalog (2026-09-03)
+
+The catalog renders entirely from snapshots: `catalogStore` (serverRefs + localHeads + verdicts + changedRefs, all serializable), `registryStore`, `brokerStore`/`settingsStore` — `components/Catalog.tsx` has ZERO data-fetching of its own. Data flow lives in `lib/services/catalog-refresh.ts` (the old refreshLocal ported whole: dead-blank sweep, published-blank content-address reconciliation, opaque-upper veto logic, local heads; plus `refreshVerdicts` = pure computeVerdicts + registry heal). `lib/boot.ts` holds the singletons (KeysService, UiStateIO over opfs/zenfs medium, registry actions) + route/ref helpers. Components ported onto stores: EncryptionBadge (release X + login, tooltips verbatim), OfflineToggle, Terminal (xterm/TerminalSession — already shaped as the D3 attach/dispose component), Catalog + NewWorkspace. Workspace links land on a U3 stub.
+
+**Fix found by verification**: offline did NOT survive reloads at first — the pod-settings write-through was scheduled for U3, so boot's fs reconcile stomped the localStorage mirror. `refreshLocal` now wires `keys().setOfflineWriter` (writePodSettings) before reconciling; the U1 service design (injectable writer) made it a 6-line fix.
+
+**Verification (browser, exported app on `serve --port 2785 --encrypt`)**: boot auto-login → leased badge with real expiry; 3 refs with 🔒 encrypted chips + digest chips + rw/cow/ro links; release-X → locked → click-login → re-leased; offline toggle → reload → STILL offline (pod-setting round-trip) and refs blocked; back online → refs return; lease survived every reload (wrapped-session restore). Root console mounts at `/ $` with factory-reset guarding. App gates: tsc/lint/25 tests/`build:ui:spa` assertions green.
+
+**Deferred to U3-done**: the change-dependent scenarios (edit-offline, aborted-push residue, reopen-heal, 'local changes'/forked/out-of-sync chips) need a workspace to create changes — they replay side-by-side once U3 lands.
 
 ### U1 — services + stores, no React (2026-09-03)
 

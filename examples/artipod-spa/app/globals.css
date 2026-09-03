@@ -4,7 +4,11 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* Theme goes through --mieweb-* tokens only (plan P5); never generic shadcn vars. */
+:root {
+  /* the visual viewport height — mobile keyboards shrink it (set by JS later; fallback 100dvh) */
+  --app-height: 100dvh;
+}
 body {
-  background: var(--mieweb-background, #0b0e14);
-  color: var(--mieweb-foreground, #e6e6e6);
+  background: var(--mieweb-background, #000);
+  color: var(--mieweb-foreground, #fff);
 }

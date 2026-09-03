@@ -6,7 +6,7 @@
  * backstop. The medium is injected so node tests run against memory.
  */
 
-export type OpenMode = 'rw' | 'cow';
+export type OpenMode = 'rw' | 'cow' | 'ro';
 
 export interface LocalEntry {
   id: string;
