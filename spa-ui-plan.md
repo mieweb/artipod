@@ -33,7 +33,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 | U2 — catalog on stores + @mieweb/ui | main | **done** | |
 | U3 — workspace shell + pod session service | main | **done** | |
 | U4 — panels: terminal, tree, editor, agent | main | **done** (agent = interim port; Ozwell tri-mode + AgentPod spike deferred, see worklog) | |
-| U5 — true SPA navigation (no reloads) | main | todo | |
+| U5 — true SPA navigation (no reloads) | main | **done** (stretch — two side-by-side workspaces — not started) | |
 | U6 — yorm spike: collaborative editor (gated) | main | todo | |
 | U7 — cutover: dist-ui swap, retire old app, redeploy | main | todo | |
 
@@ -245,6 +245,16 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### U5 — true SPA navigation (2026-09-03)
+
+- **Router**: `lib/stores/route.ts` — routeStore + `initRouting` (popstate) + `navigateTo`/`navClick` (pushState; modified clicks still open tabs; hrefs stay link-compatible). Catalog rows/mode-links/publish flows, workspace home, and post-publish redirects all client-side. The workspace is keyed by `id:mode` — switching pods unmounts the old session and boots the next in the same page.
+- **`PodSessionService.close()` is real**: ① **flush-on-close** — rw sessions `await pod.pushBasis()` before dying (offline/ro skip; flag stays truthful); ② unsubscribe audit — every `events.on` this session attached is collected in `offs[]` and removed, brokerStore/rearm/scheduler/probeTimer included; ③ `pod.dispose()` (core already unmounts overlays + unregisters the pod/keys/hydration proc providers); ④ the workspace lifetime Web Lock is now HELD-WITH-RESOLVER and released on close; ⑤ `window.__artipod` cleared if ours.
+- **Landmine confirmed live, then fixed**: parallel open/close — React unmount-cleanup fires close() while the next route's open() races it; the old dispose() tore down the NEW session's proc providers (`ls /proc` lost hydration+keys on hop 2). Sessions are now **strictly serialized** through a module-level lifecycle promise: open awaits the previous close (flush included); the component resets workspaceStore to "Opening…" immediately so the handoff is visible.
+
+**Verification (browser, exported app on serve --encrypt)**: reload-marker on window survives catalog → doug:_1 → (edit + IMMEDIATE hop) → lin:_1 → catalog → lin:_1 — zero page loads. `/proc` = `hydration keys pod storage` after every hop; `lsmod` shows exactly the live session's four modules; the stale `/open/doug__1` is an EMPTY mountpoint dir (no live view — core's closeOverlay leaves the plain dir; cosmetic). **Mid-push navigation ends synced**: the file written milliseconds before hopping (`u5-flush2.md`) is IN the server manifest and the catalog badge reads `synced` — the aborted-push residue that drove this rewrite is gone. Gates: app 25/tsc/lint/export-assertions; core 49/527.
+
+**Stretch (side-by-side workspaces) not started** — needs the session registry to go multi-instance (workspaceStore is single-session); gate note required before attempting.
 
 ### U4 — panels (2026-09-03)
 

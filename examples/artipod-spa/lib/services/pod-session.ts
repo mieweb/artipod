@@ -17,6 +17,7 @@ import { TaskScheduler } from './task-scheduler';
 import { initialSyncState, reduceSync, wantsPush, type SyncEvent, type SyncState } from './sync-machine';
 import { workspaceStore, initialWorkspace } from '../stores/workspace';
 import { brokerStore } from '../stores/broker';
+import { navigateTo } from '../stores/route';
 import { nextDraftRef } from '../boot';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
@@ -37,11 +38,31 @@ export interface PodSession {
 export const PUSH_TASK = 'sync:push';
 export const wsLockName = (id: string): string => `artipod-ws-${id}`;
 
-export async function openPodSession(route: Route): Promise<PodSession> {
+// U5: sessions are strictly serialized — proc providers and overlay mounts
+// are page-global, so the NEXT open must wait for the previous teardown
+// (flush-push included) or the old dispose() tears down the new session's
+// registrations (the "single-provider collision" landmine, observed live).
+let lifecycle: Promise<unknown> = Promise.resolve();
+
+export function openPodSession(route: Route): Promise<PodSession> {
+  const opened = lifecycle.catch(() => {}).then(() => bootPodSession(route));
+  lifecycle = opened.catch(() => {});
+  return opened;
+}
+
+async function bootPodSession(route: Route): Promise<PodSession> {
   workspaceStore.setState({ ...initialWorkspace, syncActive: route.isRef && route.mode === 'rw' });
   // Hold a lifetime lock so the catalog's sweeper knows this tab is alive.
+  // U5: the session RELEASES it on close — navigation no longer reloads.
+  let releaseWsLock: (() => void) | null = null;
   try {
-    void navigator.locks.request(wsLockName(route.id), { mode: 'shared' }, () => new Promise(() => {}));
+    void navigator.locks.request(
+      wsLockName(route.id),
+      { mode: 'shared' },
+      () => new Promise<void>((resolve) => {
+        releaseWsLock = resolve;
+      }),
+    );
   } catch {
     // no Web Locks — the sweeper is conservative without it
   }
@@ -168,7 +189,7 @@ export async function openPodSession(route: Route): Promise<PodSession> {
       await io.drop([route.id]);
     }
     setTimeout(() => {
-      window.location.href = workspaceUrl(target, 'rw');
+      navigateTo(target, 'rw'); // U5: client-side — this session closes on the way
     }, 800);
     return `published ${target} (${result.overlayLayers} layer(s) over ${route.isRef ? `${route.id}'s basis` : 'an empty basis'}) — opening it read-write…`;
   };
@@ -242,20 +263,26 @@ export async function openPodSession(route: Route): Promise<PodSession> {
 
   // ── sync status + retry ────────────────────────────────────────────────────
   // The catalog's verdict rides push OUTCOMES, not trust in autoPush.
+  // U5: every subscription is collected for close() — no page-lifetime leaks.
+  const offs: (() => void)[] = [];
   let needsPush = route.mode === 'rw' && ((await io.read()).workspaces.find((e) => e.id === route.id)?.unsynced ?? false);
   if (needsPush) syncState = reduceSync(syncState, { type: 'push-fail' });
-  events.on('sync:push', (e) => {
-    needsPush = !e.ok;
-    void io.patch(route.id, { unsynced: !e.ok });
-    dispatch(e.ok ? { type: 'push-ok', at: Date.now() } : { type: 'push-fail' });
-    workspaceStore.setState({
-      sync: e.ok ? { kind: 'synced', at: Date.now(), layers: e.layers } : { kind: 'failed', at: Date.now(), error: e.error },
-    });
-  });
-  events.on('fs:changed', () => {
-    dispatch({ type: 'edit' });
-    workspaceStore.setState((s) => (s.sync.kind === 'failed' ? s : { ...s, sync: { kind: 'pending' } }));
-  });
+  offs.push(
+    events.on('sync:push', (e) => {
+      needsPush = !e.ok;
+      void io.patch(route.id, { unsynced: !e.ok });
+      dispatch(e.ok ? { type: 'push-ok', at: Date.now() } : { type: 'push-fail' });
+      workspaceStore.setState({
+        sync: e.ok ? { kind: 'synced', at: Date.now(), layers: e.layers } : { kind: 'failed', at: Date.now(), error: e.error },
+      });
+    }),
+  );
+  offs.push(
+    events.on('fs:changed', () => {
+      dispatch({ type: 'edit' });
+      workspaceStore.setState((s) => (s.sync.kind === 'failed' ? s : { ...s, sync: { kind: 'pending' } }));
+    }),
+  );
   scheduler.register(PUSH_TASK, async () => {
     if (!needsPush || route.mode !== 'rw' || svc.forcedOffline) return;
     dispatch({ type: 'push-start' });
@@ -302,8 +329,8 @@ export async function openPodSession(route: Route): Promise<PodSession> {
       })();
     }, 500);
   };
-  events.on('fs:changed', probe);
-  events.on('sync:push', probe);
+  offs.push(events.on('fs:changed', probe));
+  offs.push(events.on('sync:push', probe));
   probe();
 
   // demo/debug escape hatch (docs/console.md's future replacement)
@@ -328,10 +355,35 @@ export async function openPodSession(route: Route): Promise<PodSession> {
       }
     },
     async close(): Promise<void> {
-      // U5: dispose pod, unmount uppers, release locks, unregister providers.
-      unsubBroker();
-      rearm();
-      scheduler.cancel(PUSH_TASK);
+      const closing = (async () => {
+        // Flush-on-close (U5): a mid-flight or pending push finishes BEFORE the
+        // pod dies — the aborted-push residue from reload-navigation, fixed
+        // properly. Offline or ro: nothing to flush; the registry flag stands.
+        if (route.isRef && route.mode === 'rw' && !svc.forcedOffline) {
+          try {
+            const result = await pod.pushBasis();
+            if (result) {
+              void io.patch(route.id, { unsynced: false });
+            }
+          } catch {
+            // server unreachable — unsynced flag remains truthful
+          }
+        }
+        // Unsubscribe audit: every listener this session attached comes off.
+        for (const off of offs) off();
+        unsubBroker();
+        rearm();
+        scheduler.cancel(PUSH_TASK);
+        if (probeTimer) clearTimeout(probeTimer);
+        // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
+        // keys, hydration) unregister — the next session must not collide.
+        pod.dispose();
+        releaseWsLock?.();
+        const w = window as unknown as { __artipod?: unknown };
+        if (w.__artipod === pod) delete w.__artipod;
+      })();
+      lifecycle = lifecycle.catch(() => {}).then(() => closing);
+      return closing;
     },
   };
 

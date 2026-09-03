@@ -10,9 +10,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamicImport from 'next/dynamic';
 import { useStore } from 'zustand';
 import { Terminal as LucideTerminal, Home as HomeIcon, FolderTree, FileCode, Bot, Settings, UploadCloud } from 'lucide-react';
-import { workspaceStore, patchPublish, setView, setEditingFile, type ViewMode } from '@/lib/stores/workspace';
+import { workspaceStore, initialWorkspace, patchPublish, setView, setEditingFile, type ViewMode } from '@/lib/stores/workspace';
 import { openPodSession, type PodSession } from '@/lib/services/pod-session';
 import { OPEN_DRAFT_TIP, actorId, isOpenRef, setOpenTag, type Route } from '@/lib/boot';
+import { navClick } from '@/lib/stores/route';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import OfflineToggle from '@/components/OfflineToggle';
 import SyncStatus from '@/components/SyncStatus';
@@ -34,9 +35,14 @@ export default function Workspace({ route }: { route: Route }) {
 
   useEffect(() => {
     let cancelled = false;
+    let opened: PodSession | null = null;
+    // Show "Opening…" NOW — the boot itself queues behind the previous
+    // session's serialized close (flush-push included).
+    workspaceStore.setState({ ...initialWorkspace, syncActive: route.isRef && route.mode === 'rw' });
     void openPodSession(route)
       .then((session) => {
         if (cancelled) return void session.close();
+        opened = session;
         sessionRef.current = session;
         setSessionTick((t) => t + 1);
       })
@@ -45,9 +51,12 @@ export default function Workspace({ route }: { route: Route }) {
         workspaceStore.setState({ phase: 'error', error: (e as Error).message });
       });
     return () => {
+      // U5: leaving the route closes the session — flush-push, unsubscribe,
+      // pod.dispose (overlays + proc providers), Web Lock release.
       cancelled = true;
+      sessionRef.current = null;
+      void opened?.close();
     };
-    // Until U5, navigation reloads the page — the session is page-lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.id, route.isRef]);
 
@@ -142,9 +151,15 @@ export default function Workspace({ route }: { route: Route }) {
   return (
     <main className="flex h-[var(--app-height)] flex-col overflow-hidden bg-black pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] text-white">
       <div className="flex items-center border-b border-gray-700 bg-[#2d2d2d] px-2">
-        {/* full reload on purpose until U5: leaving a workspace drops its FS/pod state */}
+        {/* U5: client-side — the session closes (flush + dispose) on the way out.
+            Not next/link: our router owns the transition (href kept for new-tab). */}
         {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-        <a href="/" className="flex items-center gap-2 px-3 py-3 text-sm font-medium text-gray-400 hover:bg-[#3d3d3d] hover:text-gray-200" aria-label="All artipods">
+        <a
+          href="/"
+          onClick={(e) => navClick(e)}
+          className="flex items-center gap-2 px-3 py-3 text-sm font-medium text-gray-400 hover:bg-[#3d3d3d] hover:text-gray-200"
+          aria-label="All artipods"
+        >
           <HomeIcon size={16} />
         </a>
         <span className="min-w-0 max-w-[7rem] truncate px-2 font-mono text-sm text-gray-300 sm:max-w-[14rem]" title={route.id}>

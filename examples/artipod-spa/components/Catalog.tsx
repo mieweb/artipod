@@ -16,6 +16,7 @@ import { registryStore } from '@/lib/stores/registry';
 import { brokerStore } from '@/lib/stores/broker';
 import { refreshLocal, refreshVerdicts } from '@/lib/services/catalog-refresh';
 import { OPEN_DRAFT_TIP, isOpenRef, nextDraftRef, setOpenTag, workspaceUrl, type OpenMode } from '@/lib/boot';
+import { navClick, navigateTo } from '@/lib/stores/route';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import OfflineToggle from '@/components/OfflineToggle';
 
@@ -137,10 +138,10 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
 
   const row = (id: string, badge: React.ReactNode, note: string, mode: OpenMode = 'rw', label?: string) => (
     <li key={`${id}:${mode}`}>
-      {/* full reload on purpose until U5: a workspace boots its FS once per page */}
-      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+      {/* U5: client-side navigation — the href stays for copy/new-tab */}
       <a
         href={workspaceUrl(id, mode)}
+        onClick={(e) => navClick(e, id, mode)}
         className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded bg-[#333] px-3 py-2 text-sm hover:bg-[#3d3d3d]"
       >
         <span className="min-w-0 flex-1 basis-40 truncate font-mono">{label ?? id}</span>
@@ -156,11 +157,13 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
   const modeLinks = (ref: string, locked?: boolean) => (
     <span className="flex items-center gap-1 font-mono">
       {(locked ? (['cow', 'ro'] as const) : (['rw', 'cow', 'ro'] as const)).map((m) => (
-        // eslint-disable-next-line @next/next/no-html-link-for-pages
         <a
           key={m}
           href={workspaceUrl(ref, m)}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            navClick(e, ref, m);
+          }}
           title={m === 'rw' ? 'writes auto-push to the server' : m === 'cow' ? 'writes stay on this machine (fork)' : 'read-only'}
           className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] uppercase text-gray-400 hover:border-gray-400 hover:text-white"
         >
@@ -398,7 +401,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
                 onKeyDown={(e) => {
                   if (e.key === 'Escape') setPub(null);
                   if (e.key === 'Enter' && pub.value.trim()) {
-                    window.location.href = `${workspaceUrl(pub.id, pub.mode)}&publish=${encodeURIComponent(pub.value.trim())}`;
+                    navigateTo(pub.id, pub.mode, `&publish=${encodeURIComponent(pub.value.trim())}`);
                   }
                 }}
                 className="min-w-0 flex-1 rounded border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm text-gray-200"
@@ -413,8 +416,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
               </label>
               <button
                 onClick={() => {
-                  if (pub.value.trim())
-                    window.location.href = `${workspaceUrl(pub.id, pub.mode)}&publish=${encodeURIComponent(pub.value.trim())}`;
+                  if (pub.value.trim()) navigateTo(pub.id, pub.mode, `&publish=${encodeURIComponent(pub.value.trim())}`);
                 }}
                 className="rounded bg-blue-700 px-3 py-1 text-sm hover:bg-blue-600"
               >
@@ -460,9 +462,9 @@ function NewWorkspace() {
   const go = () => {
     const id = crypto.randomUUID().slice(0, 8);
     const target = name.trim();
-    if (!target) return void (window.location.href = workspaceUrl(id));
+    if (!target) return navigateTo(id);
     const ref = setOpenTag(target.includes(':') ? target : `${target}:1`, openDraft);
-    window.location.href = `${workspaceUrl(id)}&publish=${encodeURIComponent(ref)}`;
+    navigateTo(id, 'rw', `&publish=${encodeURIComponent(ref)}`);
   };
   return (
     <div className="flex flex-wrap items-center gap-2">
