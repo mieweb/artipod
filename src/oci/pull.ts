@@ -6,7 +6,7 @@
  */
 
 import { gunzip, isGzip } from './gzip.js';
-import { indexTar, type LayerEntry } from './tar.js';
+import { indexTar, ANNOTATION_LAYER_INDEX, type LayerEntry } from './tar.js';
 import { sha256, verifyDigest, isDigest, type Digest } from './digest.js';
 import type { OciStore } from './store.js';
 import { parseImageRef, formatImageRef, type ImageRef, type OciTransport } from './transport.js';
@@ -97,6 +97,17 @@ export async function pullImage(options: PullOptions): Promise<PullResult> {
   const layers: PulledLayer[] = [];
   for (const [i, layer] of manifest.layers.entries()) {
     const knownDiffId = diffIds[i] && isDigest(diffIds[i]) ? (diffIds[i] as Digest) : undefined;
+    // Annotation-referenced index artifact: fetch (or skip) like any blob, so
+    // the pulled ref's reachable set is complete and re-syncable (syncRef
+    // walks these digests — a pull-then-push must not dead-end).
+    const indexDigest = layer.annotations?.[ANNOTATION_LAYER_INDEX];
+    if (indexDigest && isDigest(indexDigest) && !(await store.hasBlob(indexDigest))) {
+      try {
+        await store.putBlob(await transport.fetchBlob(ref, indexDigest), indexDigest);
+      } catch {
+        onProgress?.(`layer ${i + 1}: index artifact ${indexDigest.slice(0, 19)}… unavailable — skipped`);
+      }
+    }
     // Anti-entropy skip: digest-addressed content already here never re-fetches.
     if (knownDiffId && (await store.hasBlob(layer.digest)) && (await store.hasUncompressed(knownDiffId))) {
       const entryCount = (await store.getLayerIndex(knownDiffId)).entries.length;

@@ -14,6 +14,7 @@ import { mergeLayerEntries, mountOciView } from './view.js';
 import { OciStore } from './store.js';
 import { DirectRegistryTransport, OciLayoutTransport, parseImageRef } from './transport.js';
 import { pullImage, loadImageLayers } from './pull.js';
+import { syncRef } from '../manager/sync.js';
 import { makeArtipodCommand } from './command.js';
 import { makeTar, gzipBytes } from './test-fixtures.js';
 
@@ -208,6 +209,33 @@ describe('pullImage through the registry transport', () => {
     const image = await buildFakeImage();
     const transport = new DirectRegistryTransport({ fetchFn: fakeRegistryFetch(image, { corruptLayers: true }) });
     await expect(pullImage({ store, transport, ref: 'fake.test/demo/app:1.0' })).rejects.toThrow(/mismatch|tampered/);
+  });
+
+  it('pulled refs are re-syncable: annotation-referenced index artifacts come along', async () => {
+    // publish-shaped image: layers carry org.artipod.layer-index annotations
+    const image = await buildFakeImage();
+    const manifest = JSON.parse(decoder.decode(image.manifestBytes)) as {
+      layers: { annotations?: Record<string, string> }[];
+    };
+    const indexArtifact = encoder.encode(JSON.stringify({ formatVersion: 1, entries: [] }));
+    const indexDigest = await sha256(indexArtifact);
+    image.blobs.set(indexDigest, indexArtifact);
+    for (const layer of manifest.layers) layer.annotations = { 'org.artipod.layer-index': indexDigest };
+    image.manifestBytes = encoder.encode(JSON.stringify(manifest));
+    image.manifestDigest = await sha256(image.manifestBytes);
+
+    const transport = new DirectRegistryTransport({ fetchFn: fakeRegistryFetch(image) });
+    const pulled = await pullImage({ store, transport, ref: 'fake.test/demo/app:1.0' });
+    expect(await store.hasBlob(indexDigest)).toBe(true);
+
+    // syncRef walks manifest → config → layers → index artifacts; a pulled
+    // ref must not dead-end (this is `run REF` teeing into the shared store).
+    const dest = new OciStore(zfs, '/repo/.artipod-dest');
+    await dest.init();
+    const result = await syncRef(store, dest, 'fake.test/demo/app:1.0');
+    expect(result.complete).toBe(true);
+    expect(await dest.hasBlob(indexDigest)).toBe(true);
+    expect((await dest.getRef('fake.test/demo/app:1.0'))?.manifestDigest).toBe(pulled.manifestDigest);
   });
 
   it('pulls from an OCI image-layout directory (local import)', async () => {

@@ -21,7 +21,7 @@ import { createZenFsPod, type ZenFsPod } from './realize/zenfs.js';
 import type { PodManifest } from './manifest.js';
 import { OciLayoutPodStore } from './manager/pod-store.js';
 import { newSuperblock, OCI_ROOT, SUPERBLOCK_PATH, type PodSuperblock } from './oci/store.js';
-import { storeTransport, materializeImage } from './manager/sync.js';
+import { storeTransport, materializeImage, syncRef } from './manager/sync.js';
 import { DirectRegistryTransport, parseImageRef, formatImageRef } from './oci/transport.js';
 import { pullImage } from './oci/pull.js';
 import { publishDirectory } from './server/folder.js';
@@ -659,6 +659,13 @@ async function materializeRef(pod: ZenFsPod, args: RunArgs): Promise<void> {
     onProgress: (m) => stdout.write(`  ${m}\n`),
   });
   await pod.oci.store.putRef(ref, pulled.manifestDigest, 'application/vnd.oci.image.manifest.v1+json');
+  // Registry pulls tee into the shared store (docker-like cache): the next
+  // `run` resolves locally and `artipod serve` can host what you just ran.
+  if (!stored) {
+    await pod.oci.store.putRef(canonical, pulled.manifestDigest, 'application/vnd.oci.image.manifest.v1+json');
+    const cached = await syncRef(pod.oci.store, store, canonical);
+    stdout.write(`cached ${canonical} in ${tildify(resolve(args.store))} (${cached.moved} blobs)\n`);
+  }
   const manifest = JSON.parse(new TextDecoder().decode(await pod.oci.store.getBlob(pulled.manifestDigest))) as {
     config?: { mediaType?: string; digest?: string };
   };
