@@ -7,6 +7,12 @@
  *    (`@import 'vars.css'`) that Vite resolves relative-first but
  *    postcss/tailwind treat as package requests. Rewrite to './…' in the
  *    installed copy (idempotent; upstream PR candidate).
+ * 3. Fix @kerebron/extension-menu 0.8.12 CustomMenuPlugin: overflow/pinned
+ *    dropdown items build synthetic MouseEvents with
+ *    `view: dntShim.dntGlobalThis` — a dnt merge Proxy that Chrome refuses
+ *    to convert to a Window, so the constructor throws and toolbar items in
+ *    "More tools" / pinned dropdowns (e.g. Heading 1) silently do nothing.
+ *    Rewrite to `view: window` (idempotent; upstream PR candidate).
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -41,4 +47,18 @@ for (const pkg of existsSync(kerebronRoot) ? readdirSync(kerebronRoot) : []) {
     }
   }
 }
-console.log(`kerebron wasm assets → public/kerebron-wasm${fixed ? ` · ${fixed} css import fix(es)` : ''}`);
+
+let menuFixed = 0;
+const menuPlugin = join(kerebronRoot, 'extension-menu/esm/CustomMenuPlugin.js');
+if (existsSync(menuPlugin)) {
+  const before = readFileSync(menuPlugin, 'utf8');
+  const after = before.replaceAll('view: dntShim.dntGlobalThis', 'view: window');
+  if (after !== before) {
+    writeFileSync(menuPlugin, after);
+    menuFixed = 1;
+  }
+}
+
+console.log(
+  `kerebron wasm assets → public/kerebron-wasm${fixed ? ` · ${fixed} css import fix(es)` : ''}${menuFixed ? ' · menu MouseEvent view fix' : ''}`,
+);

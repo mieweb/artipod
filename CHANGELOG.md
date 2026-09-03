@@ -5,13 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-09-03
 
 ### Added
 
 - **`artipod ps`** (shell verb): the app's background schedule — key renewal, push retries, future delegations — as a live task table (TASK/STATE/NEXT/LAST/RESULT). App-provided via `createZenFsPod({ tasks })` / `ArtipodCommandContext.tasks` (`PsTask` exported from `@artipod/core/oci`); the SPA demo wires its TaskScheduler through it.
 - **`toNodeHandler(app)`** (`@artipod/core/server`): the node req/res adapter behind `serveApp`, now exported on its own — mount an `ArtipodApp` in Express or plain `node:http` in one line. `serveApp` reuses it (one dispatch path). `docs/serve.md#embedding` grew Express/Hono/Next/standalone snippets and the root-mount + Fastify caveats.
-- `examples/artipod-spa` — the SPA rewrite of the demo begins (spa-ui-plan U0): static-export-only Next app whose sole backend is `artipod serve`, vanilla-zustand state, Tailwind v4 + @mieweb/ui; `npm run build:ui:spa` exports it with the struct-minify and baked-version assertions.
+- `examples/artipod-spa` — the SPA rewrite of the demo (spa-ui-plan U0–U7, complete): static-export-only Next app whose sole backend is `artipod serve`, vanilla-zustand state over a framework-free client-services layer (keys/leases, pod sessions, sync), Tailwind v4 + @mieweb/ui; exported with struct-minify and baked-version assertions.
 - **`artipod serve --encrypt` — key broker + encryption at rest** (serve plan S5.5): the served store writes chunked-AEAD ciphertext (`.alias` digest twins), and `/api/keys/login` issues signed key leases (TTL cap `--key-ttl`, default 1h) from an on-disk authority (`--authority`, default `~/.artipod/authority`, `0700`) that is **created automatically on first use** — signing key and per-store KEK included. Blob reads/writes and ref writes then require an `X-Artipod-Lease` header (ref reads stay open); `/v2` is off while encrypted (it cannot carry leases). Browsers adopt the leased KEK into the memory-only keyring (`decodeLoginResult` → `PodLocker.adoptLogin`) and encrypt their local stores at rest; expiry locks (`PodLockedError`), re-login restores. A keyless serve of encrypted refs remains a **blind host**: ciphertext syncs byte-exact, plaintext-addressed reads answer `423 Locked`, and the server can never read the data. Stated honestly: a broker CAN decrypt what it brokers. See `docs/serve.md`.
 - `createArtipodApp({ keys })` for embedders: mounts `/api/keys` over any `Authority` and (default on) lease-gates the pods surface; `createKeysHandler`/`requireLease`/`loadOrCreateAuthority`/`ensurePodKek` exported from `@artipod/core/server`; `encodeLoginResult`/`decodeLoginResult` from `@artipod/core/manager`; `OciLayoutPodStore.enableEncryption` for at-rest ciphertext on directory stores.
 - **Per-artipod encryption visibility**: `GET /api/pods/refs` entries carry `encrypted: true` when the content is an e2e envelope or sits as ciphertext at rest (advertised even by keyless blind hosts — the alias twin is on disk regardless); `createArtipodApp({ isEncrypted })` for embedders. The demo catalog badges every artipod — 🔒 e2e / 🔒 encrypted / muted plaintext — on both the server list and "on this machine".
@@ -19,8 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The bundled browser UI is now the SPA** (`examples/artipod-spa`, spa-ui-plan U7): zustand-backed state over a framework-free client-services layer, kerebron editor (markdown WYSIWYG + code), true no-reload navigation with flush-push-on-close, `artipod ps` in every workspace shell, and the same honest badges — rebuilt on snapshots instead of a 1,900-line component. `npm run build:ui` exports it; the previous app remains at `build:ui:legacy` until retirement.
-- `examples/artipod-sync`'s four hand-wired API routes (`/api/pods`, `/api/oci`, `/api/git`, `/api/exec`) collapsed onto one `createArtipodApp` catch-all, and its `PublishMap` fork was deleted in favor of core's (`publish-map.json` format unchanged) — the demo now runs the same object `artipod serve` runs.
+- **The bundled browser UI is now the SPA** (`examples/artipod-spa`, spa-ui-plan U7): zustand-backed state over a framework-free client-services layer, kerebron editor (markdown WYSIWYG + code), true no-reload navigation with flush-push-on-close, `artipod ps` in every workspace shell, and the same honest badges — rebuilt on snapshots instead of a 1,900-line component. `npm run build:ui` exports it.
+- **`examples/artipod-sync` retired** (history in git): its four hand-wired API routes were first collapsed onto one `createArtipodApp` catch-all and its `PublishMap` fork deleted in favor of core's, then the whole app was removed at cutover — the SPA has no server-side app code at all; `artipod serve` is the only backend. The sample-site deployment moves to `examples/artipod-spa/deploy/artipod-serve.service` (one process serves API + UI).
 
 ## [0.9.1] - 2026-09-02
 
