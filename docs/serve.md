@@ -218,15 +218,48 @@ KEK material.
 ## Embedding
 
 The CLI hosts a single Fetch handler — embedding it is one import and one
-route:
+route. Shared setup (node):
 
 ```ts
-import { createArtipodApp, serveApp } from '@artipod/core/server';
+import { nodePodFs } from '@artipod/core';
 import { OciLayoutPodStore } from '@artipod/core/manager';
+import { createArtipodApp, toNodeHandler } from '@artipod/core/server';
 
-const app = createArtipodApp({ store });   // (req: Request) => Promise<Response>
-// mount in Next.js catch-all, Hono, Bun.serve, Deno.serve — or:
-const { url, close } = await serveApp(app, { port: 2784 });
+const store = new OciLayoutPodStore(nodePodFs(), './my-store');
+await store.init();
+const artipod = createArtipodApp({ store }); // (req: Request) => Promise<Response>
 ```
 
-The CLI and your app run the same object; behavior cannot drift.
+Express (or anything req/res-shaped on node:http):
+
+```ts
+app.use(toNodeHandler(artipod)); // mount at root — see caveat below
+```
+
+Hono — or any fetch-native host (Bun.serve, Deno.serve):
+
+```ts
+app.all('*', (c) => artipod(c.req.raw));
+```
+
+Next.js App Router — `app/api/[...path]/route.ts` (and
+`app/v2/[[...path]]/route.ts` if you want the registry surface):
+
+```ts
+const h = (req: Request) => artipod(req);
+export { h as GET, h as HEAD, h as POST, h as PUT, h as DELETE, h as OPTIONS };
+```
+
+Standalone, no framework:
+
+```ts
+import { serveApp } from '@artipod/core/server';
+const { url, close } = await serveApp(artipod, { port: 2784 });
+```
+
+The CLI and your app run the same object; behavior cannot drift. Caveats:
+
+- `createArtipodApp` routes on the **root** pathname (`/api/...`, `/v2/...`);
+  mounting under a prefix is not supported — mount at `/`.
+- Fastify parses request bodies before handlers run; either run `serveApp`
+  beside it or register `toNodeHandler` via `@fastify/middie`.

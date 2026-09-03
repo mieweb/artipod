@@ -28,7 +28,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 | Phase | Branch | Status | PR |
 |---|---|---|---|
 | U0 — scaffold + build pipeline parity | main | **done** | |
-| UE — DRY the embed story (dry-example-server-plan E1–E4) | main | todo | |
+| UE — DRY the embed story (dry-example-server-plan E1–E4) | main | **done** | |
 | U1 — services + zustand stores (no React) | main | todo | |
 | U2 — catalog on stores + @mieweb/ui | main | todo | |
 | U3 — workspace shell + pod session service | main | todo | |
@@ -242,6 +242,16 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### UE — DRY the embed story (2026-09-03)
+
+All four dry-example-server-plan milestones landed in one push:
+- **E1**: `toNodeHandler(app)` exported from `/server`; `serveApp` now routes through it (one dispatch path; `req.headers.host ??= host` preserves the old fallback). Four new tests (plain `http.createServer` GET, streamed PUT body, HEAD-no-body, throw→500 JSON) — node.test.ts 10/10. `docs/serve.md#embedding` rewritten: shared setup + Express/Hono/Next/standalone snippets, root-mount and Fastify caveats.
+- **E2**: old app's four routes deleted; ONE catch-all (`app/api/[...path]`, nodejs runtime, force-dynamic) serves the lazy `getArtipodApp()` singleton (`lib/artipod-app.ts`) — same env policy, same exec numbers, `ui: false`, no fallback. Static segments (publish, fake-llm) untouched and winning over the catch-all as documented.
+- **E3**: `lib/publish-map.ts` fork → 23-line shim over core `PublishMap`/`withinRoots` (env parsing only); publish route + onRefPut rewired; `publish-map.json` format unchanged.
+- **E4**: README architecture section points at the catch-all + embed docs; CHANGELOG (`toNodeHandler` added, example refactor under Changed). Line count: api routes 56 lines (was ~200) + glue libs 104.
+
+**Verification:** core gate green (49 files/525 tests — +4 for E1). Old app: `next build` lists exactly `/api/[...path]`, `/api/fake-llm/…`, `/api/pods/publish`; tsc/lint clean; wiring tests rewritten onto the catch-all (8/8, incl. a new unknown-route→404-JSON pin). Live smoke on `next dev` against the encrypted store: refs 200, blob GET **423** (keyless app + encrypted store — the composed handler carries PodLockedError correctly), `/api/nope` → `{"error":"not found"}`, oci/git deny-all 403, exec 400-validating. Write-back path covered by the materialize test (publish → drift → ref PUT restores the folder).
 
 ### U0 — scaffold + build pipeline parity (2026-09-03)
 

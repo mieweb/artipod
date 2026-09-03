@@ -1,8 +1,9 @@
 /**
- * Deployment wiring smoke tests: the Next routes are option-building
- * one-liners over @artipod/core/server handlers (sync plan Phase B) —
- * the generic behaviors are covered by package tests; here we pin THIS
- * app's wiring (policy env vars, store dir, session policy).
+ * Deployment wiring smoke tests. Since dry plan E2 the app has ONE API
+ * surface: the composed `createArtipodApp` behind `app/api/[...path]`
+ * (plus the static-segment publish route). Generic handler behaviors are
+ * covered by package tests; here we pin THIS app's wiring — policy env
+ * vars, store dir, session policy — through the catch-all.
  */
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,7 +17,7 @@ process.env.ARTIPOD_STORE_DIR = STORE_DIR;
 
 describe('route wiring', () => {
   it('POST /api/exec runs a command in a session with this deployment policy', async () => {
-    const { POST } = await import('../app/api/exec/route');
+    const { POST } = await import('../app/api/[...path]/route');
     const res = await POST(
       new Request('http://localhost/api/exec', {
         method: 'POST',
@@ -30,7 +31,7 @@ describe('route wiring', () => {
   });
 
   it('honors EXEC_API_TOKEN at request time', async () => {
-    const { POST } = await import('../app/api/exec/route');
+    const { POST } = await import('../app/api/[...path]/route');
     process.env.EXEC_API_TOKEN = 'shh';
     try {
       const denied = await POST(
@@ -46,10 +47,17 @@ describe('route wiring', () => {
   });
 
   it('serves the pods store from ARTIPOD_STORE_DIR', async () => {
-    const { GET } = await import('../app/api/pods/[...path]/route');
-    const res = await GET(new Request('http://localhost/api/pods/refs'), { params: { path: ['refs'] } });
+    const { GET } = await import('../app/api/[...path]/route');
+    const res = await GET(new Request('http://localhost/api/pods/refs'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
+  });
+
+  it('unknown /api/* routes return 404 JSON', async () => {
+    const { GET } = await import('../app/api/[...path]/route');
+    const res = await GET(new Request('http://localhost/api/nope'));
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: string }).error).toBeTruthy();
   });
 
   it('publishes a folder under ARTIPOD_PUBLISH_ROOTS and refuses one outside', async () => {
@@ -78,8 +86,8 @@ describe('route wiring', () => {
       expect(outside.status).toBe(403);
 
       // The published ref shows up on the sync surface (same store).
-      const { GET } = await import('../app/api/pods/[...path]/route');
-      const refs = await GET(new Request('http://localhost/api/pods/refs'), { params: { path: ['refs'] } });
+      const { GET } = await import('../app/api/[...path]/route');
+      const refs = await GET(new Request('http://localhost/api/pods/refs'));
       const list = (await refs.json()) as { ref: string }[];
       expect(list.some((r) => r.ref === 'folder/site:latest')).toBe(true);
     } finally {
@@ -115,13 +123,12 @@ describe('route wiring', () => {
       const { manifestDigest } = (await publish.json()) as { manifestDigest: string };
 
       rmSync(join(root, 'site', 'index.md')); // drift the folder…
-      const { PUT } = await import('../app/api/pods/[...path]/route');
+      const { PUT } = await import('../app/api/[...path]/route');
       const put = await PUT(
         new Request('http://localhost/api/pods/refs', {
           method: 'PUT',
           body: JSON.stringify({ ref: 'folder/wb:latest', manifestDigest }),
         }),
-        { params: { path: ['refs'] } },
       );
       expect(put.status).toBe(201);
       // …the onRefPut hook restores it from the pushed head.
@@ -133,10 +140,8 @@ describe('route wiring', () => {
 
   it('OCI relay stays deny-all without ARTIPOD_OCI_ALLOWED_HOSTS', async () => {
     delete process.env.ARTIPOD_OCI_ALLOWED_HOSTS;
-    const { GET } = await import('../app/api/oci/[...path]/route');
-    const res = await GET(new Request('http://localhost/api/oci/registry-1.docker.io/v2/'), {
-      params: { path: ['registry-1.docker.io', 'v2'] },
-    });
+    const { GET } = await import('../app/api/[...path]/route');
+    const res = await GET(new Request('http://localhost/api/oci/registry-1.docker.io/v2/'));
     expect(res.status).toBe(403);
   });
 });

@@ -4,7 +4,9 @@
  * keep-alive sockets open.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { serveApp, type RunningServer } from './node.js';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { serveApp, toNodeHandler, type RunningServer } from './node.js';
 import type { ArtipodApp } from './app.js';
 
 let running: RunningServer | null = null;
@@ -102,5 +104,60 @@ describe('serveApp', () => {
     await close();
     running = null;
     await expect(fetch(url)).rejects.toThrow();
+  });
+});
+
+describe('toNodeHandler (dry plan E1: the Express/node:http embed surface)', () => {
+  let server: Server | null = null;
+  afterEach(async () => {
+    if (server) {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server!.close((e) => (e ? reject(e) : resolve())));
+      server = null;
+    }
+  });
+
+  const listen = async (app: ArtipodApp): Promise<string> => {
+    server = createServer(toNodeHandler(app));
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as AddressInfo;
+    return `http://127.0.0.1:${addr.port}`;
+  };
+
+  it('serves a GET on plain http.createServer — status, headers, body', async () => {
+    const url = await listen(async (req) =>
+      Response.json({ path: new URL(req.url).pathname }, { status: 200, headers: { 'x-served-by': 'artipod' } }),
+    );
+    const res = await fetch(`${url}/api/pods/refs`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-served-by')).toBe('artipod');
+    expect(await res.json()).toEqual({ path: '/api/pods/refs' });
+  });
+
+  it('a PUT body reaches the app intact (streamed request body)', async () => {
+    let seen = '';
+    const url = await listen(async (req) => {
+      seen = await req.text();
+      return new Response(null, { status: 204 });
+    });
+    const res = await fetch(`${url}/api/pods/blobs/x`, { method: 'PUT', body: 'streamed payload' });
+    expect(res.status).toBe(204);
+    expect(seen).toBe('streamed payload');
+  });
+
+  it('HEAD returns headers but no body', async () => {
+    const url = await listen(async () => new Response('body bytes', { headers: { 'content-length': '10' } }));
+    const res = await fetch(url, { method: 'HEAD' });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('');
+  });
+
+  it('an app that throws yields 500 JSON, socket not left hanging', async () => {
+    const url = await listen(async () => {
+      throw new Error('embed boom');
+    });
+    const res = await fetch(url);
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toBe('embed boom');
   });
 });

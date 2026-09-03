@@ -59,7 +59,7 @@ notes                    # shell semantics & limitations
 - **FileSystem**: `@zenfs/core` singleton; just-bash sees it through `lib/sandbox/zenfs-adapter.ts`, isomorphic-git/Monaco/tree use it directly — one store, coherent views.
 - **Git**: `lib/git.ts` (`createGitOps`) as a trusted just-bash custom command.
 - **Agent**: `lib/agent/` — client, loop, and sandbox-bound tools (OpenAI + MCP serializers).
-- **Server**: `lib/server/` + thin route handlers (`/api/exec`, `/api/git/[...path]`).
+- **Server**: one catch-all (`app/api/[...path]`) serving the composed `createArtipodApp` from `lib/artipod-app.ts` — the exact object `artipod serve` runs (pods sync, registry relay, git proxy, exec; policy arrives as env). Static segments (`/api/pods/publish`, `/api/fake-llm`) win over the catch-all. Embedding guide: `docs/serve.md#embedding`.
 
 `lib/sandbox/` and `lib/agent/` are framework-free (no React/Next/window) so they can be extracted for reuse — plan §Phase 6.
 

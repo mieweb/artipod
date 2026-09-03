@@ -24,7 +24,7 @@ export {
   type PathHandler,
 } from './common.js';
 export { createArtipodApp, type ArtipodApp, type ArtipodAppOptions } from './app.js';
-export { serveApp, type RunningServer, type ServeAppOptions } from './node.js';
+export { serveApp, toNodeHandler, type RunningServer, type ServeAppOptions } from './node.js';
 export { withCors } from './cors.js';
 export { PublishMap, withinRoots } from './publish-map.js';
 export {

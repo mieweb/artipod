@@ -61,11 +61,20 @@ async function dispatch(app: ArtipodApp, req: IncomingMessage, res: ServerRespon
   }
 }
 
+/** Node req/res adapter: mount an ArtipodApp in Express or node:http (dry plan E1). */
+export function toNodeHandler(app: ArtipodApp): (req: IncomingMessage, res: ServerResponse) => void {
+  return (req, res) => {
+    void dispatch(app, req, res, req.headers.host ?? 'localhost');
+  };
+}
+
 /** Bind an ArtipodApp on node:http. Resolves once listening; `close` drops keep-alive sockets too. */
 export async function serveApp(app: ArtipodApp, options: ServeAppOptions = {}): Promise<RunningServer> {
   const host = options.host ?? '127.0.0.1';
+  const handler = toNodeHandler(app);
   const server = createServer((req, res) => {
-    void dispatch(app, req, res, host);
+    req.headers.host ??= host;
+    handler(req, res);
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);

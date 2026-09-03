@@ -5,9 +5,9 @@
  * lives in @artipod/core/server; THIS deployment's policy is the
  * ARTIPOD_PUBLISH_ROOTS allowlist — empty = publishing disabled.
  */
-import { publishDirectory } from '@artipod/core/server';
+import { publishDirectory, withinRoots } from '@artipod/core/server';
 import { getPodStore } from '@/lib/pods-store';
-import { recordPublishDir, withinPublishRoots } from '@/lib/publish-map';
+import { getPublishMap, publishRoots } from '@/lib/publish-map';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +23,7 @@ export async function POST(req: Request): Promise<Response> {
   if (typeof body.dir !== 'string' || typeof body.ref !== 'string' || !REF_RE.test(body.ref)) {
     return Response.json({ error: 'dir and ref (name[:tag]) required' }, { status: 400 });
   }
-  const dir = await withinPublishRoots(body.dir);
+  const dir = await withinRoots(body.dir, publishRoots());
   if (!dir) {
     return Response.json(
       { error: `dir not under ARTIPOD_PUBLISH_ROOTS`, hint: 'the allowlist is empty by default — publishing is opt-in' },
@@ -37,6 +37,6 @@ export async function POST(req: Request): Promise<Response> {
     actor: typeof body.actor === 'string' ? body.actor : undefined,
   });
   // Write-back target (sync plan Phase E): pushed heads materialize here.
-  await recordPublishDir(body.ref, dir);
+  await getPublishMap().record(body.ref, dir);
   return Response.json(result, { status: result.unchanged ? 200 : 201 });
 }
