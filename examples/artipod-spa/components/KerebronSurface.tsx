@@ -7,7 +7,7 @@
  * CoreEditor.destroy() replaces its mount node with a clone, so we remount
  * by key instead of ever reparenting, and external reloads bump the key.
  */
-import { RichEditor, CodeEditor } from '@mieweb/ui/kerebron';
+import { RichEditor, CodeEditor, type CollabConfig } from '@mieweb/ui/kerebron';
 import '@mieweb/ui/kerebron.css';
 
 /** Monaco-style language ids (FileBuffer.language) → kerebron grammar names. */
@@ -29,15 +29,18 @@ export default function KerebronSurface({
   value,
   onChange,
   readOnly,
+  collab,
 }: {
   language: string;
   value: string;
   onChange: (next: string) => void;
   readOnly?: boolean;
+  /** U6 spike: live co-editing for markdown (RichEditor only). */
+  collab?: CollabConfig;
 }) {
   const surface =
     language === 'markdown' ? (
-      <RichEditor value={value} onChange={onChange} />
+      <RichEditor value={value} onChange={onChange} collab={collab} />
     ) : (
       <CodeEditor value={value} onChange={onChange} lang={LANG_MAP[language] ?? 'text'} />
     );

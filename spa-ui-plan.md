@@ -34,7 +34,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 | U3 — workspace shell + pod session service | main | **done** | |
 | U4 — panels: terminal, tree, editor, agent | main | **done** (agent = interim port; Ozwell tri-mode + AgentPod spike deferred, see worklog) | |
 | U5 — true SPA navigation (no reloads) | main | **done** (stretch — two side-by-side workspaces — not started) | |
-| U6 — yorm spike: collaborative editor (gated) | main | todo | |
+| U6 — yorm spike: collaborative editor (gated) | main | **done** — recommendation below (adopt bare extension-yjs, defer yorm) | |
 | U7 — cutover: dist-ui swap, retire old app, redeploy | main | todo | |
 
 ## 1. Goal — the north star
@@ -245,6 +245,20 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### U6 — collab spike + RECOMMENDATION (2026-09-03)
+
+**Demoed**: two browser tabs co-editing `doug:_1//open/doug__1/secret-note.md` live — kerebron RichEditor's built-in `collab` prop (rooms = encoded pod path), a sidecar `@y/websocket-server` on :2790 as the relay, gated behind the inert localStorage flag `artipod-collab-ws` (no production wiring, per the phase contract). Edits crossed both ways; the second tab's insert appeared in the first.
+
+**Findings (each one earns its keep):**
+1. **Dual-Yjs landmine**: `@kerebron/extension-yjs` pins `yjs` as a REGULAR dep → nested 13.6.30 beside our 13.6.32 → "Yjs was already imported", `Not same Y.Doc`, insert crashes. Fixed with webpack aliases (`yjs`, `y-protocols/awareness` → one copy). **Upstream PR: yjs must be a peer dep of extension-yjs.**
+2. **Double-seed race reproduced** (the known kerebron join semantics, now observed in artipod): both tabs treated the room as unseeded and pushed the file content → doc = seed+editsA + seed+editsB. Convergent, but doubled — and `onChange → buffer.setContent` would write the doubled text back to the pod on save. **Adoption blocker ⇒ one authoritative seeder is required.**
+3. **Transport reality**: the sidecar answers the question — RichEditor speaks plain y-websocket protocol and defaults to `<host>/yjs`, which is EXACTLY the shape a core `serveApp` opt-in WS `upgrade` hook would serve. One port, no second process, and the keys handler can mint a lease-derived `params.token` so room names (pod paths!) don't leak on encrypted pods.
+
+**RECOMMENDATION** (the phase's contract):
+- **Adopt bare kerebron `extension-yjs`** (via the RichEditor `collab` prop we already ship) for editor co-editing; **defer yorm**. Rationale: zero new dependencies (U4 already installs the whole chain), the surface is already our editor, and the protocol is commodity y-websocket. yorm's differentiators — object graphs, trigger policies, the Yjs⇄Zustand bridge, suggestion mode — target APP-STATE collaboration we don't need yet; revisit yorm when catalog/registry state goes collaborative or AgentPod delegation wants suggestion-mode review.
+- **Production wiring is follow-up work with four named preconditions**: ① core `serveApp` WS upgrade hook serving `/yjs` (ask-first, small); ② seeding: ONE authoritative seeder — the pod is the natural anchor: persist the Y.Doc update log in the pod (`/.artipod/collab/…` — layer-plan Phase 7 "Yjs-in-a-file": artipod stays durability, the relay is the live layer, rooms seed from the pod snapshot); ③ write-back: only the fs-primary tab flows collab edits into buffer/save/push (else doubled writes); ④ relay auth via lease-derived token. With ②+③ the "one tab at a time" banner retires for markdown.
+- Upstream PRs queued: extension-yjs peer-dep fix (#1 above), the U4 css-import fix, and the @mieweb/ui collab-chunk static-resolve note.
 
 ### U5 — true SPA navigation (2026-09-03)
 

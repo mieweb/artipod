@@ -116,6 +116,13 @@ export default function Editor({ filepath, onClose, events, readOnly }: EditorPr
             value={seed}
             onChange={(next) => buffer?.setContent(next)}
             readOnly={readOnly}
+            // U6 spike flag (inert by default): localStorage artipod-collab-ws
+            // = ws relay base URL → markdown files co-edit, roomed per path.
+            collab={
+              typeof localStorage !== 'undefined' && localStorage.getItem('artipod-collab-ws')
+                ? { room: encodeURIComponent(filepath), wsUrl: localStorage.getItem('artipod-collab-ws')! }
+                : undefined
+            }
           />
         </div>
       )}

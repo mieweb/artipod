@@ -56,6 +56,13 @@ const nextConfig = {
         // kerebron css uses extensionless @import 'vars.css' — css-loader
         // treats that as a module request; relative-first matches Vite.
         config.resolve.preferRelative = true;
+        // @kerebron/extension-yjs pins yjs as a regular dep (nested copy) —
+        // two Y instances break constructor checks (yjs#438). One copy wins.
+        config.resolve.alias = {
+            ...config.resolve.alias,
+            yjs: require.resolve('yjs'),
+            'y-protocols/awareness': require.resolve('y-protocols/awareness'),
+        };
         if (!isServer) {
             config.optimization.minimizer[0] = new SkipStructChunkMinifyPlugin();
             // just-bash & friends reference node: builtins; strip the scheme
