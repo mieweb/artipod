@@ -10,12 +10,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamicImport from 'next/dynamic';
 import { useStore } from 'zustand';
 import { Terminal as LucideTerminal, Home as HomeIcon, FolderTree, FileCode, Bot, Settings, UploadCloud } from 'lucide-react';
-import { workspaceStore, patchPublish, setView, type ViewMode } from '@/lib/stores/workspace';
+import { workspaceStore, patchPublish, setView, setEditingFile, type ViewMode } from '@/lib/stores/workspace';
 import { openPodSession, type PodSession } from '@/lib/services/pod-session';
 import { OPEN_DRAFT_TIP, actorId, isOpenRef, setOpenTag, type Route } from '@/lib/boot';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import OfflineToggle from '@/components/OfflineToggle';
 import SyncStatus from '@/components/SyncStatus';
+import FileTree from '@/components/FileTree';
+import Editor from '@/components/Editor';
+import StorageSettings from '@/components/StorageSettings';
+import AgentPanel from '@/components/AgentPanel';
+import LayersView from '@/components/LayersView';
+import { Layers as LayersIcon } from 'lucide-react';
 
 const Terminal = dynamicImport(() => import('@/components/Terminal'), { ssr: false });
 
@@ -238,14 +244,73 @@ export default function Workspace({ route }: { route: Route }) {
             workspace boot failed: {snap.error}
           </div>
         )}
-        {ready && (
-          <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-gray-500">
-            <p>
-              workspace root <code className="text-gray-300">{snap.root}</code> — panels (files / editor / agent / storage) land in U4.
-              <br />
-              The terminal below is fully live: try <code className="text-gray-300">ls</code>, <code className="text-gray-300">artipod ps</code>,{' '}
-              <code className="text-gray-300">artipod publish</code>, <code className="text-gray-300">artipod offline on</code>.
-            </p>
+
+        {/* Agent — always mounted to preserve chat state */}
+        <div className={`absolute inset-0 ${snap.activeView === 'agent' ? 'z-10' : 'invisible z-0'}`}>
+          {ready && (
+            <AgentPanel
+              getSandbox={() => sessionRef.current?.sandbox ?? null}
+              events={sessionRef.current?.events}
+              getLoopOptions={() => sessionRef.current?.pod.agentLoopOptions() ?? {}}
+            />
+          )}
+        </div>
+
+        {/* File tree — always mounted: fs:changed keeps it fresh across views */}
+        <div className={`absolute inset-0 ${snap.activeView === 'tree' ? 'z-10' : 'invisible z-0'}`}>
+          {ready && (
+            <FileTree
+              onSelectFile={(path) => setEditingFile(path)}
+              events={sessionRef.current?.events}
+              roots={[snap.root]}
+              headerExtra={
+                <button
+                  onClick={() => setView('layers')}
+                  className="flex items-center gap-1 rounded bg-gray-700 px-2 py-1 text-xs hover:bg-gray-600"
+                  title="The pod's layer stack (basis + local upper)"
+                >
+                  <LayersIcon size={12} /> Layers
+                </button>
+              }
+              getDehydratedPaths={async () => {
+                const pod = sessionRef.current?.pod;
+                if (!pod?.hydrator || !pod.basis) return [];
+                const paths = await pod.hydrator.dehydratedPaths(pod.basis.ref);
+                return paths.map((p) => `${pod.basis!.at}${p}`);
+              }}
+            />
+          )}
+        </div>
+
+        {/* Editor — mounted while a file is open, so external changes land even when hidden */}
+        {snap.editingFile && (
+          <div className={`absolute inset-0 ${snap.activeView === 'editor' ? 'z-10' : 'invisible z-0'}`}>
+            <Editor
+              filepath={snap.editingFile}
+              onClose={() => {
+                setEditingFile(null);
+                setView('tree');
+              }}
+              events={sessionRef.current?.events}
+              readOnly={route.mode === 'ro' || !snap.isPrimaryTab}
+            />
+          </div>
+        )}
+        {snap.activeView === 'editor' && !snap.editingFile && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center text-gray-400">
+            No file open. Select a file from Files or use the <code className="mx-1">edit</code> command.
+          </div>
+        )}
+
+        {snap.activeView === 'settings' && snap.backend && (
+          <div className="absolute inset-0 z-10">
+            <StorageSettings backend={snap.backend as never} isPrimaryTab={snap.isPrimaryTab} />
+          </div>
+        )}
+
+        {snap.activeView === 'layers' && (
+          <div className="absolute inset-0 z-10 overflow-auto">
+            <LayersView route={route} ready={ready} onPublish={route.mode !== 'ro' ? openPublish : undefined} onBack={() => setView('tree')} />
           </div>
         )}
       </div>

@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/wasm-assets.mjs",
     "dev": "next dev -p 3600",
+    "prebuild": "node scripts/wasm-assets.mjs",
     "build": "next build",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
@@ -13,6 +15,11 @@
   },
   "dependencies": {
     "@artipod/core": "file:../..",
+    "@huggingface/transformers": "^4.2.0",
+    "@kerebron/editor": "^0.8.12",
+    "@kerebron/editor-kits": "^0.8.12",
+    "@kerebron/extension-yjs": "^0.8.12",
+    "@kerebron/wasm": "^0.8.12",
     "@mieweb/ui": "^0.7.3",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
@@ -23,7 +30,10 @@
     "lucide-react": "^1.39.0",
     "next": "^15.5.21",
     "react": "^19",
+    "react-complex-tree": "^2.6.1",
     "react-dom": "^19",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.0",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
@@ -43,6 +53,12 @@
     "dompurify": "^3.4.13",
     "next": {
       "postcss": "^8.5.23"
+    },
+    "onnxruntime-node": {
+      "adm-zip": "^0.6.0"
+    },
+    "@huggingface/transformers": {
+      "sharp": "^0.35.0"
     }
   }
 }

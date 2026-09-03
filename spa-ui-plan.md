@@ -32,7 +32,7 @@ Working rules, commit conventions, phase-gate ritual (`docs(plan): spa phase UN 
 | U1 — services + zustand stores (no React) | main | **done** | |
 | U2 — catalog on stores + @mieweb/ui | main | **done** | |
 | U3 — workspace shell + pod session service | main | **done** | |
-| U4 — panels: terminal, tree, editor, agent | main | todo | |
+| U4 — panels: terminal, tree, editor, agent | main | **done** (agent = interim port; Ozwell tri-mode + AgentPod spike deferred, see worklog) | |
 | U5 — true SPA navigation (no reloads) | main | todo | |
 | U6 — yorm spike: collaborative editor (gated) | main | todo | |
 | U7 — cutover: dist-ui swap, retire old app, redeploy | main | todo | |
@@ -245,6 +245,15 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### U4 — panels (2026-09-03)
+
+- **Editor = kerebron** (P8) via @mieweb/ui's `/kerebron` entry — `RichEditor` for markdown, `CodeEditor` for the rest (language map from FileBuffer). `Editor.tsx` keeps FileBuffer for open/save/dirty/external-change; the kerebron surface is UNCONTROLLED in a keyed disposable subtree (external reloads bump the key — never reparent a CoreEditor). Wasm grammars served from `public/kerebron-wasm` (predev/prebuild copy). No readOnly prop upstream yet — ro mode inerts the subtree (pointer-events none, aria-readonly).
+- **Landmines found + handled** (all upstream-PR candidates): ① @mieweb/ui's kerebron entry statically resolves its collab chunk → `@kerebron/extension-yjs` + `yjs`/`y-protocols` must install even unused (now present — U6 is pre-positioned); ② every `@kerebron/*/assets/*.css` uses extensionless sibling imports (`@import 'vars.css'`) that Vite resolves relative-first but postcss/tailwind treat as package requests — `scripts/wasm-assets.mjs` rewrites them to `./…` in the installed copies (idempotent); ③ `web-tree-sitter` probes node's `module` API → webpack fallback `module: false`; `resolve.preferRelative` set globally.
+- **FileTree / StorageSettings / AgentPanel** ported — shims deleted: imports point straight at `@artipod/core/{sandbox,host,agent}` (the old app's lib/agent + lib/sandbox re-export shims die with it at U7). AgentPanel = the INTERIM agent (old remote/local provider config over core OzwellClient/LocalModelClient); **the Ozwell tri-mode window (P9) + AgentPod spike (P11) are deferred** until the harmonized component lands in @mieweb/ui and harness-core has an entry point — the swap is localized to one always-mounted panel. LayersView ported from the old page.
+- **D3**: Terminal.tsx is the artipod-shell component by construction — self-contained over core `TerminalSession`, attach-at-mount/dispose-at-unmount, zero app imports; packaging home rides the client-lib move (U7 window).
+
+**Verification (browser, exported app, doug:_1 rw on serve --encrypt)**: tree renders with ☁︎ dehydration badges → open `secret-note.md` → RichEditor with full toolbar shows the DECRYPTED hydrated payload → edit → dirty ● → Save → on disk via shell `cat` → auto-push ok in `artipod ps` (~3s). Agent panel renders (provider config + input), Storage shows opfs/2.7 MiB usage, Layers shows upper band + 302 draft layers + head provenance line. Note for scripted verification: synthetic keyboard events don't reach ProseMirror in the shared-browser tab — drive edits via `execCommand('insertText')` (app behavior verified correct; recorded for future sessions). Gates: app tsc/lint/25 tests + export assertions green; core 49/527.
 
 ### U3 — workspace shell + PodSessionService (2026-09-03)
 

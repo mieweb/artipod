@@ -53,6 +53,9 @@ const nextConfig = {
           }
         : {}),
     webpack: (config, { isServer }) => {
+        // kerebron css uses extensionless @import 'vars.css' — css-loader
+        // treats that as a module request; relative-first matches Vite.
+        config.resolve.preferRelative = true;
         if (!isServer) {
             config.optimization.minimizer[0] = new SkipStructChunkMinifyPlugin();
             // just-bash & friends reference node: builtins; strip the scheme
@@ -66,6 +69,8 @@ const nextConfig = {
                 fs: false,
                 path: false,
                 zlib: false,
+                // web-tree-sitter (kerebron grammars) probes node's module API
+                module: false,
             };
         }
         return config;
