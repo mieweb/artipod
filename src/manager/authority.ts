@@ -172,14 +172,17 @@ export class Authority {
       if (!kek) throw new Error(`authority '${this.name}' has no KEK for pod '${podId}'`);
       keys[podId] = kek;
     }
+    // One clock read: expiresAt - issuedAt must be EXACTLY the ttl (clients
+    // and tests reason about the delta; two reads drift under load).
+    const now = this.clock();
     const lease = await signJson<Lease>(
       {
         formatVersion: 1,
         podIds: opts.podIds,
         principal: opts.principal,
         permissions: opts.permissions ?? ['mount', 'read', 'write'],
-        issuedAt: new Date(this.clock()).toISOString(),
-        expiresAt: new Date(this.clock() + opts.ttlMs).toISOString(),
+        issuedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + opts.ttlMs).toISOString(),
         issuer: this.name,
       },
       this.keys.privateKey,
@@ -287,14 +290,15 @@ export class DelegatedAuthority {
       throw new Error(`principal '${opts.principal}' outside delegated scope '${this.cert.scope.principals}'`);
     }
     const ttlMs = Math.min(opts.ttlMs, this.cert.maxLeaseTtlMs);
+    const now = this.clock(); // one read — the delta IS the ttl
     return signJson<Lease>(
       {
         formatVersion: 1,
         podIds: opts.podIds,
         principal: opts.principal,
         permissions: opts.permissions ?? ['mount', 'read'],
-        issuedAt: new Date(this.clock()).toISOString(),
-        expiresAt: new Date(this.clock() + ttlMs).toISOString(),
+        issuedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + ttlMs).toISOString(),
         issuer: this.cert.subject,
         chain: [...this.parentChain, this.cert],
       },
