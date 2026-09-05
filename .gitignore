@@ -10,6 +10,8 @@ dist/
 dist-ui/
 build/
 *.tsbuildinfo
+weighbridge-report.json
+weighbridge-baseline.json
 
 # Coverage
 coverage/

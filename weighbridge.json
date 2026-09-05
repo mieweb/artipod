@@ -1,0 +1,24 @@
+{
+  "esbuild": {
+    "version": "0.25.0",
+    "platform": "browser",
+    "external": ["dockerode", "node:*"]
+  },
+  "pack": {
+    "maxTarballBytes": 5000000,
+    "maxUnpackedBytes": 22000000,
+    "sections": {
+      "dist": { "prefix": "dist/", "maxBytes": 3300000 },
+      "dist-ui": { "prefix": "dist-ui/" }
+    }
+  },
+  "entries": [
+    { "name": ".", "path": "dist/index.js", "maxGzipBytes": 670000, "maxImportMs": 700 },
+    { "name": "./tools", "path": "dist/tools/index.js", "maxGzipBytes": 16000, "maxImportMs": 150 },
+    { "name": "./sandbox", "path": "dist/sandbox/index.js", "maxGzipBytes": 610000, "maxImportMs": 500 },
+    { "name": "./oci", "path": "dist/oci/index.js", "maxGzipBytes": 410000, "maxImportMs": 500 }
+  ],
+  "commands": [
+    { "name": "cli --help", "command": ["node", "dist/cli.js", "--help"], "maxMs": 800 }
+  ]
+}
