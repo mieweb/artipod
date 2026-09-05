@@ -46,7 +46,7 @@ jobs:
         fi
 
     - name: Weigh-in (curb weight limits)
-      uses: ./.github/actions/weighbridge
+      uses: mieweb/weighbridge@v1
 
     - name: Upload report
       if: always()
