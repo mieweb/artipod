@@ -12,6 +12,8 @@ build/
 *.tsbuildinfo
 weighbridge-report.json
 weighbridge-baseline.json
+weighbridge-summary.md
+weigh-ins.jsonl
 
 # Coverage
 coverage/
