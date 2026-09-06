@@ -1,7 +1,7 @@
 # Artipod pod model and execution proof of concept
 
-**Status:** Living implementation plan - owner-approved execution-admission direction (2026-09-05); revised M0 baseline repaired and passing, admission/runtime gate not yet verified. Historical isolation-probe results and resolved baseline blockers remain recorded. The implementer updates this file as work proceeds (see section 0).
-**Date:** 2026-09-05
+**Status:** Living implementation plan - owner-approved execution-admission direction (2026-09-05); browser runtime MVP committed on `main` as `0f3fcf6` (2026-09-06). M0 tasks 1-2 and 4-6 are earned; 3, 7-11 remain open (see the checklist and the 2026-09-06 reconciliation worklog). The implementer updates this file as work proceeds (see section 0).
+**Date:** 2026-09-06
 **Owner / Implementer:** horner (phase gates self-reviewed)
 **Builds on:** [spa-ui-plan.md](spa-ui-plan.md), [artipod-layer-plan.md](artipod-layer-plan.md), and [artipod-serv-plan.md](artipod-serv-plan.md).
 
@@ -51,8 +51,8 @@ All phases run on `main`.
 
 | Phase | Status | Gate |
 |---|---|---|
-| M0 - admission and browser runtime | in progress; signed OPFS execution, development, offline and debugger proof implemented; full automated checks pass; browser/audit gaps remain | pending |
-| M1 - semantic discovery and composition | narrow catalog discovery/UI overlap authorized 2026-09-06; full phase depends on M0 | pending |
+| M0 - admission and browser runtime | in progress; MVP committed `0f3fcf6`: catalog Run, signed/dev admission, worker projection, preview lifecycle, telemetry. Open: CasePod mount selection, D4 record + bypass audit, offline cache/revocation port, mapped Sources replay, full-gate run | pending |
+| M1 - semantic discovery and composition | narrow catalog discovery/UI overlap authorized 2026-09-06 and shipped in `0f3fcf6` (SPAPod descriptor + Run); full phase depends on M0 | pending |
 | M2 - submission, review, and approved distribution | not started; depends on M1 | pending |
 | M3 - agent-driven edits | not started; depends on M2 and provider confirmation | pending |
 | M4 - multiple apps and documentation | not started; depends on M3 | pending |
@@ -66,7 +66,7 @@ The execution-admission direction was approved by the owner on 2026-09-05. Imple
 | D1 | Keep the existing SPA as the trusted workbench; only admitted code runs, and same-origin apps share its browser trust boundary | Owner-approved amendment, 2026-09-05; not hostile-code confinement |
 | D2 | Add shallow semantic conventions above existing filesystem/mount APIs; no inheritance framework | Plan constraint |
 | D3 | One authoritative `artipod.json`; host-owned resolved mounts and grants remain separate | Proposed format; finalize in M1 without breaking `PodManifest` |
-| D4 | Verify admission before executable URL projection; same-origin execution is permitted for approved releases or explicitly authorized local development | Direction approved, 2026-09-05; concrete loading/CSP/session design open in revised M0. Earlier opaque-iframe failure remains historical evidence. |
+| D4 | Verify admission before executable URL projection; same-origin execution is permitted for approved releases or explicitly authorized local development | Direction approved, 2026-09-05. Candidate implemented in `0f3fcf6`: root-scoped worker intercepts only `/_artipod/run/`, grants are memory-only owner-bound capabilities, iframe `allow-scripts allow-same-origin`, CSP defense in depth, static server denies the prefix. Final record and forged-message/fallback/startup audit still open (M0 task 7). Earlier opaque-iframe failure remains historical evidence. |
 | D5 | Multiple installed applications, one active preview; second viewer proves independence | Plan constraint |
 | D6 | Submit a coherent application-only candidate; review and sign approval of its final digest before approved distribution | Owner-approved amendment; snapshot/transport/review integration selected in M2 |
 | D7 | Declarative AgentPod/skills, existing trusted filesystem tools, no embedded harness | Plan constraint; external integration specifics need owner confirmation before M3 |
@@ -74,8 +74,9 @@ The execution-admission direction was approved by the owner on 2026-09-05. Imple
 | D9 | Separate author/publisher attribution from execution approval; support human or organizational identities with privately auditable responsible actors | Owner-approved direction; signing format, identity mapping, and test trust roots selected in M0; production enrollment deferred |
 | D10 | Layer attestations are reusable evidence, never automatic approval of a new composition | Owner-approved direction; final application digest, executable dependency closure, and declared capabilities must be approved |
 | D11 | Local edits invalidate release approval for the modified revision; explicit workspace-scoped development authorization permits local execution only | Owner-approved direction; authorization is revocable and cannot approve distribution |
-| D12 | M0 signing candidate: RFC 7515 flattened JWS through `jose` 6.2.12, ES256, externally signed OCI-digest statements; separate publisher and approval payload types | Selected for a reversible POC, 2026-09-05; browser proof pending. Standard JWS envelope, application-specific artifact/approval claims; not Notary/Notation or Sigstore interoperability. No custom signature encoding or canonicalization. |
-| D13 | Test-only independent human/organization publisher keys and reviewer key, pinned host public JWKs; release approval lifetime at most one hour and offline freshness at most five minutes | Selected M0 test policy, 2026-09-05; provisioning/verification pending. Revocation freshness must come from an independently signed host status statement, not a pod or client timestamp. Production trust roots unchanged. |
+| D12 | M0 signing candidate: RFC 7515 flattened JWS through `jose` 6.2.12, ES256, externally signed OCI-digest statements; separate publisher and approval payload types | Selected 2026-09-05; implemented in `lib/m0/admission.ts` and pinned in `0f3fcf6`. Node-signed evidence verified in Chrome (core-js codecs). Standard JWS envelope, application-specific artifact/approval claims; not Notary/Notation or Sigstore interoperability. |
+| D13 | Test-only independent human/organization publisher keys and reviewer key, pinned host public JWKs; release approval lifetime at most one hour and offline freshness at most five minutes | Implemented as test policy in `0f3fcf6` (`MAX_APPROVAL_MS`, signed status freshness). Offline cached-approval reuse and remembered revocation exist only in retired probe evidence; port to the integrated runtime is open (M0 task 8). Production trust roots unchanged. |
+| D14 | Preview lifecycle: Stop is a cooperative, acknowledged in-place suspend (`artipod:runtime-lifecycle/v1`); Close revokes and tears down; Reload starts a fresh instance | Owner-selected 2026-09-06, shipped in `0f3fcf6`. Not a generic iframe freeze; unsupported/unresponsive apps are shown as such. Telemetry is app-reported, informational only. |
 
 ### Reference map
 
@@ -437,14 +438,14 @@ Use existing authorization and audit facilities where suitable. Validate broker 
 ### M0: Admission and browser runtime go/no-go
 
 - [x] Record setup, starting revision, worktree state, and core/SPA baseline results; identify blockers before implementation.
-- [ ] Refresh the baseline for the revised scope; inspect existing signing/authority facilities, choose a maintained attestation implementation, and record test human/organization publisher identities, independent approver policy, pinned trust roots, and offline freshness limits. Test keys are not production identities.
-- [ ] Build the smallest reversible Artipod/OPFS-backed fixture with a separate read-only data mount and admission-aware launcher. Do not replace its execution source with a server directory. Unknown candidate inspection stays inert, including direct asset URLs and fallback routes.
-- [ ] Prove a valid signed approval admits exactly its immutable release bytes; reject missing/tampered signatures, unknown signers, altered digests, wrong audience/mode, expired/known-revoked approvals, and unapproved layers/dependencies. Bind verification to the loaded immutable view to avoid mutable-tree substitution after checking.
-- [ ] Prove explicit workspace/session-scoped local development authorization, visible development state, saved edits, and revocation. Modified bytes do not inherit the base release's approval; failures do not silently enable development mode. Reload after browser restart requires renewed development authorization.
-- [ ] Prove relative modules, dynamic imports, CSS assets, and binary fetches; test root-relative URLs and source maps and record their actual support.
-- [ ] Select and document D4: admission before projection, origin/context, defense-in-depth CSP, supported execution entry points, broker API checks, and OPFS ownership. State the ambient authority of admitted same-origin code; do not claim mounts or iframes isolate it. Test forged admission/session messages, direct-route bypass, and broker path escapes.
-- [ ] Prove saved-edit reload under development authorization, file persistence across host reload, disposal, and denial of stale/revoked launch/broker sessions. Test expired/missing offline approval and valid bounded cached approval; record browser versions and limits of revocation.
-- [ ] Prove Chrome DevTools for a running admitted application: recognizable scripts in Sources, a breakpoint and inspected variables, Network-visible mounted reads, source-map resolution, and new saved source after reload. Host-side downloads alone do not satisfy this check; DevTools edits are not automatic pod writes.
+- [x] Refresh the baseline for the revised scope; inspect existing signing/authority facilities, choose a maintained attestation implementation, and record test human/organization publisher identities, independent approver policy, pinned trust roots, and offline freshness limits. Test keys are not production identities. *(2026-09-05 baseline repairs + signing selection; D12/D13.)*
+- [ ] Build the smallest reversible Artipod/OPFS-backed fixture with a separate read-only data mount and admission-aware launcher. Do not replace its execution source with a server directory. Unknown candidate inspection stays inert, including direct asset URLs and fallback routes. *(Partial: OPFS-backed launcher, inert inspection, direct-URL/fallback denial shipped in `0f3fcf6`; the read-only data mount was proven only in the retired probe — declared mounts currently block launch in the integrated path.)*
+- [x] Prove a valid signed approval admits exactly its immutable release bytes; reject missing/tampered signatures, unknown signers, altered digests, wrong audience/mode, expired/known-revoked approvals, and unapproved layers/dependencies. Bind verification to the loaded immutable view to avoid mutable-tree substitution after checking. *(Automated: `lib/m0` admission matrix + `browser-runtime.test.ts` real ES256 launch/mutation/immutable-read; live: Chrome verified Node-signed evidence on the probe path. Integrated live signed replay is tracked under task 10.)*
+- [x] Prove explicit workspace/session-scoped local development authorization, visible development state, saved edits, and revocation. Modified bytes do not inherit the base release's approval; failures do not silently enable development mode. Reload after browser restart requires renewed development authorization. *(Live 2026-09-06 on 2784: confirm dialog, "Development (unapproved)", saved edit invisible until Reload, Close/Stop-revoke, re-authorization required; missing policy 404 → no fallback; authorization is memory-only.)*
+- [x] Prove relative modules, dynamic imports, CSS assets, and binary fetches; test root-relative URLs and source maps and record their actual support. *(Live: CSS/PNG/static+dynamic module/8-byte WASM; root-relative `/case/...` unsupported by CSP; inline source map works, external DevTools map load bypasses the worker → 404.)*
+- [ ] Select and document D4: admission before projection, origin/context, defense-in-depth CSP, supported execution entry points, broker API checks, and OPFS ownership. State the ambient authority of admitted same-origin code; do not claim mounts or iframes isolate it. Test forged admission/session messages, direct-route bypass, and broker path escapes. *(Partial: candidate shipped and documented in `execution-preview.md`; `runtime-worker.test.ts` + `static.test.ts` cover owner/guest/path/prefix denial. Full forged-message/fallback/startup/entrypoint audit and the final D4 record are open. Known defect: catalog-navigation launch times out until the workspace is reloaded.)*
+- [ ] Prove saved-edit reload under development authorization, file persistence across host reload, disposal, and denial of stale/revoked launch/broker sessions. Test expired/missing offline approval and valid bounded cached approval; record browser versions and limits of revocation. *(Partial: reload/persistence/disposal/stale-URL 403 proven live; offline cached approval and remembered revocation not yet ported from the probe to the integrated runtime.)*
+- [ ] Prove Chrome DevTools for a running admitted application: recognizable scripts in Sources, a breakpoint and inspected variables, Network-visible mounted reads, source-map resolution, and new saved source after reload. Host-side downloads alone do not satisfy this check; DevTools edits are not automatic pod writes. *(Partial: CDP breakpoint + variables on projected `main.js` and post-edit reload proven; visible mapped Sources replay and mounted-read Network evidence open — the latter depends on task 3.)*
 - [ ] Run section 12's full phase checks and browser procedure; paste commands/results into the M0 worklog and update the decision register and tracker.
 - [ ] **Done when:** ordinary assets and debugging work from OPFS; supported launch paths execute only a verified approved release or explicitly authorized local development; tampering, unapproved execution, and stale authorization checks fail closed. Trust and offline limits are documented, all checks pass, and `docs(plan): model-exec phase M0 gate` is ready. Existing isolation experiments are not evidence of this revised gate. Obtain owner sign-off before relaxing admission requirements.
 
@@ -571,6 +572,25 @@ Success means humans and agents share an explicitly authorized local development
 ## Worklog
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
+
+### 2026-09-06 - MVP commit and M0 checklist reconciliation
+
+- Committed the browser runtime MVP on `main` as `0f3fcf6` (46 files; core
+  532 tests, SPA 119 tests, lint/typecheck/export gates green; not pushed).
+  Owner-owned `git-plan.md` and `cloud-container-plan.md` left untracked.
+  Pre-commit cleanups: `static.ts` indentation, removed stale
+  `public/m0/test-admission.json` references and the empty `public/m0/` dir.
+- Reconciled the M0 checklist against the worklogs above: tasks 2, 4, 5, 6 now
+  checked with their evidence; tasks 3, 7, 8, 9 annotated as partial with the
+  exact open items; tasks 10-11 remain open. Tracker and D4/D12/D13 updated;
+  D14 added for the Stop/Resume/Close lifecycle decision. This is a status
+  reconciliation, not a gate: no `docs(plan): model-exec phase M0 gate` yet.
+- Open before the M0 gate: (a) integrated CasePod read-only mount selection
+  (task 3); (b) D4 record + forged-message/fallback/startup audit and the
+  catalog-navigation grant timeout (task 7); (c) offline cached approval and
+  revocation memory in `browser-runtime.ts` (task 8); (d) visible mapped
+  Sources and mounted-read Network replay (task 9); (e) full section 12 run
+  including weighbridge on the final bundle (task 10).
 
 ### 2026-09-06 - Stop suspends in place; Close tears down
 
