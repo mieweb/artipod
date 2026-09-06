@@ -123,7 +123,7 @@
     "@zenfs/core": "2.4.4",
     "@zenfs/dom": "1.2.5",
     "diff": "^8.0.2",
-    "dockerode": "^4.0.9",
+    "dockerode": "^5.0.1",
     "eslint": "^8.56.0",
     "fflate": "^0.8.3",
     "isomorphic-git": "^1.25.0",
@@ -135,7 +135,7 @@
     "@zenfs/core": "2.4.4",
     "@zenfs/dom": "1.2.5",
     "diff": "^8.0.2",
-    "dockerode": "^4.0.9",
+    "dockerode": "^4.0.9 || ^5.0.0",
     "fflate": "^0.8.2",
     "isomorphic-git": "^1.25.0",
     "just-bash": "3.2.0"
@@ -147,9 +147,6 @@
   },
   "overrides": {
     "minimatch@9": "^9.0.7",
-    "dockerode": {
-      "uuid": "^11.1.1"
-    },
     "onnxruntime-node": {
       "adm-zip": "^0.6.0"
     },
