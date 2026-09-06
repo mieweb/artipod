@@ -97,6 +97,11 @@ describe('ps / kill in the shell', () => {
     expect(long.stdout).toContain('mode=development');
     await sandbox.exec('cd /');
     expect(table.get(2)?.detail.cwd).toBe('/');
+    const scratch = createSandbox({ zfs, cwd: '/repo', processes: table });
+    expect(table.list().filter((p) => p.kind === 'shell')).toHaveLength(2);
+    scratch.dispose();
+    scratch.dispose();
+    expect(table.list().filter((p) => p.kind === 'shell')).toHaveLength(1);
   });
 
   it('kill sends the named signal, defaults to TERM, and reports failures per pid', async () => {

@@ -52,7 +52,7 @@ All phases run on `main`.
 | Phase | Status | Gate |
 |---|---|---|
 | M0 - admission and browser runtime | in progress; MVP committed `0f3fcf6`: catalog Run, signed/dev admission, worker projection, preview lifecycle, telemetry. Open: CasePod mount selection, D4 record + bypass audit, offline cache/revocation port, mapped Sources replay, full-gate run | pending |
-| MA - apps layer, process namespaces, `ps`/`kill` | owner-requested 2026-09-06; runs inside PR #57 before M0 closes | pending |
+| MA - apps layer, process namespaces, `ps`/`kill` | owner-requested 2026-09-06; implemented in PR #57 (`2f35fa7`, `ed56df7`, follow-up): `@artipod/core/apps`, `ProcessTable` + `/proc/<pid>`, `ps`/`kill`, sample at `examples/lifecycle-app`, runbook `docs/apps.md`; live-verified on 2784 | earned pending PR review; not an M0 gate |
 | M1 - semantic discovery and composition | narrow catalog discovery/UI overlap authorized 2026-09-06 and shipped in `0f3fcf6` (SPAPod descriptor + Run); full phase depends on M0 | pending |
 | M2 - submission, review, and approved distribution | not started; depends on M1 | pending |
 | M3 - agent-driven edits | not started; depends on M2 and provider confirmation | pending |
@@ -75,10 +75,10 @@ The execution-admission direction was approved by the owner on 2026-09-05. Imple
 | D9 | Separate author/publisher attribution from execution approval; support human or organizational identities with privately auditable responsible actors | Owner-approved direction; signing format, identity mapping, and test trust roots selected in M0; production enrollment deferred |
 | D10 | Layer attestations are reusable evidence, never automatic approval of a new composition | Owner-approved direction; final application digest, executable dependency closure, and declared capabilities must be approved |
 | D11 | Local edits invalidate release approval for the modified revision; explicit workspace-scoped development authorization permits local execution only | Owner-approved direction; authorization is revocable and cannot approve distribution |
-| D12 | M0 signing candidate: RFC 7515 flattened JWS through `jose` 6.2.12, ES256, externally signed OCI-digest statements; separate publisher and approval payload types | Selected 2026-09-05; implemented in `lib/m0/admission.ts` and pinned in `0f3fcf6`. Node-signed evidence verified in Chrome (core-js codecs). Standard JWS envelope, application-specific artifact/approval claims; not Notary/Notation or Sigstore interoperability. |
+| D12 | M0 signing candidate: RFC 7515 flattened JWS through `jose` 6.2.12, ES256, externally signed OCI-digest statements; separate publisher and approval payload types | Selected 2026-09-05; implemented in `src/apps/admission.ts` (was `lib/m0`) and pinned in `0f3fcf6`. Statement types/schema renamed `artipod-apps-*+jws` / `artipod.apps/v1` in MA. Node-signed evidence verified in Chrome (core-js codecs). Standard JWS envelope, application-specific artifact/approval claims; not Notary/Notation or Sigstore interoperability. |
 | D13 | Test-only independent human/organization publisher keys and reviewer key, pinned host public JWKs; release approval lifetime at most one hour and offline freshness at most five minutes | Implemented as test policy in `0f3fcf6` (`MAX_APPROVAL_MS`, signed status freshness). Offline cached-approval reuse and remembered revocation exist only in retired probe evidence; port to the integrated runtime is open (M0 task 8). Production trust roots unchanged. |
 | D14 | Preview lifecycle: Stop is a cooperative, acknowledged in-place suspend (`artipod:runtime-lifecycle/v1`); Close revokes and tears down; Reload starts a fresh instance | Owner-selected 2026-09-06, shipped in `0f3fcf6`. Not a generic iframe freeze; unsupported/unresponsive apps are shown as such. Telemetry is app-reported, informational only. |
-| D15 | The browser app runtime ships as the core subpath `@artipod/core/apps` (browser-safe, adapter-injected, imports only public core barrels), not an SPA-private `lib/m0` and not yet a separate package | Owner-selected 2026-09-06 after pros/cons review. Lift to `@artipod/apps` later if a second consumer appears; code must stay lift-able (no sibling-internal imports). `jose` moves to core deps. The service worker ships as a dist asset consumers copy to their site root. |
+| D15 | The browser app runtime ships as the core subpath `@artipod/core/apps` (browser-safe, adapter-injected, imports only dependency-free core leaf modules such as `oci/digest` and `oci/tar`, never the `/oci` barrel), not an SPA-private `lib/m0` and not yet a separate package | Owner-selected 2026-09-06 after pros/cons review. Lift to `@artipod/apps` later if a second consumer appears; a lifted package would need core to expose those leaves as a light subpath. `jose` moves to core deps. The service worker ships as a dist asset consumers copy to their site root. Weighbridge `./apps` budget 30 KB gzip (measured 19.2 KB). |
 | D16 | Processes are namespaced per supervisor ("turtles all the way down"): a pod session owns a `ProcessTable`; shells, running apps and background tasks are its processes; a process that launches things owns a child table. Visibility is downward only; lifecycle cascades down; pids are namespace-local, identity is a uuid | Owner-selected 2026-09-06. Browser tabs and the server are separate namespaces — no implicit merge; cross-namespace views are explicit future commands. Signals map per kind (`STOP/CONT` = cooperative suspend/resume, `TERM/KILL` = close); unsupported → `ENOTSUP`, never a fake state. `/proc/<pid>/*` mirrors Linux layout. |
 
 ### Reference map
@@ -462,43 +462,52 @@ adopt, not `lib/m0` spaghetti, and running apps must be visible and killable
 from the shell. D15/D16 record the choices. This phase re-homes what M0 built;
 it does not relax any M0 admission requirement or earn the M0 gate.
 
-- [ ] Move descriptor parsing, application capture (`application-files` +
+- [x] Move descriptor parsing, application capture (`application-files` +
   `release-view`), admission, browser runtime, lifecycle/telemetry protocol
   and the service worker into `src/apps/`, exported as `@artipod/core/apps`.
   Imports only public core barrels (`../oci/index.js` etc.), browser-safe,
   no SPA/React/zustand-store coupling beyond `zustand/vanilla`. Tests move
   with the code; `lib/m0/fixtures.ts` becomes a core test fixture. `jose`
-  moves to core dependencies. Add a `./apps` weighbridge entry.
-- [ ] Ship the service worker as a dist asset (`dist/apps/runtime-sw.js`);
+  moves to core dependencies. Add a `./apps` weighbridge entry. *(`2f35fa7`;
+  zustand dropped entirely — `createSnapshotStore` is shape-compatible with
+  `useStore`.)*
+- [x] Ship the service worker as a dist asset (`dist/apps/runtime-sw.js`);
   the SPA's existing asset prebuild copies it to `public/artipod-runtime-sw.js`.
-  No consumer has to vendor the worker by hand.
-- [ ] `ProcessTable` in `src/proc/processes.ts`: namespace-local pids, uuid
+  No consumer has to vendor the worker by hand. *(`2f35fa7`; also exported
+  as `@artipod/core/apps/runtime-sw.js`.)*
+- [x] `ProcessTable` in `src/proc/processes.ts`: namespace-local pids, uuid
   identity, kinds `shell` / `app` / `task`, per-kind `signal()` with `ENOTSUP`,
   change subscription, downward-only visibility, cascade on dispose. A
   `/proc/<pid>/{status,cmdline}` provider (root `''`) plus `/proc/self`.
-- [ ] `ps` and `kill [-STOP|-CONT|-TERM|-KILL] <pid>` in
+  *(`ed56df7`; `/proc/self` dropped — the snapshot has no symlinks and the
+  shell's pid is in `ps`.)*
+- [x] `ps` and `kill [-STOP|-CONT|-TERM|-KILL] <pid>` in
   `src/sandbox/process-command.ts`, registered when a table is supplied via
   `CreateSandboxOptions.processes` / `ZenFsPodOptions.processes`. The shell
   registers itself as a `shell` process; `tasks` render as bracketed `task`
-  rows (`artipod ps` stays as the task-detail view).
-- [ ] The apps runtime registers each launched instance as an `app` process
+  rows (`artipod ps` stays as the task-detail view). *(`ed56df7`; `Sandbox.dispose()`
+  added so short-lived shells retire their row.)*
+- [x] The apps runtime registers each launched instance as an `app` process
   (name, pod/ref, mode, digest, state, telemetry); `STOP`/`CONT` drive the
   cooperative lifecycle, `TERM`/`KILL` close. `ApplicationPreview` reads
   lifecycle state from the process, not component-local controller state.
-- [ ] Re-home the sample to `examples/lifecycle-app/`; delete
+  *(`ed56df7`; `runtime.attach()` / `runtime.report()`, pid shown in status.)*
+- [x] Re-home the sample to `examples/lifecycle-app/`; delete
   `examples/artipod-spa/m0-preview` and `lib/m0`; move
   `execution-preview.md` to `docs/apps.md` as the consumer runbook (install
   the subpath, serve the worker at `/`, wire a `ProcessTable`, render your UI).
-- [ ] Verify: core lint/build/tsc/tests, SPA lint/typecheck/tests/export,
+- [x] Verify: core lint/build/tsc/tests, SPA lint/typecheck/tests/export,
   weighbridge with the new entry; live on 2784: `ps` lists shell + running
   app, `kill -STOP` freezes it (same as the Stop button), `kill -CONT`
   resumes, `kill <pid>` closes and the preview reflects it; `cat
   /proc/<pid>/status` shows the app. Record evidence in the worklog.
-- [ ] **Done when:** no `m0` path remains outside historical worklog text,
+  *(See the 2026-09-06 MA worklog.)*
+- [x] **Done when:** no `m0` path remains outside historical worklog text,
   the SPA imports the runtime only from `@artipod/core/apps`, `ps`/`kill`
   and `/proc/<pid>` work against real running apps, and all gates pass on
   PR #57. Nested (child) namespaces are designed for, not built: today one
   table per pod session; apps that launch sub-apps are a later phase.
+  *(Remaining `m0` strings are synthetic test identity/fixture names.)*
 
 ### M1: Semantic discovery and simple composition
 
@@ -623,6 +632,54 @@ Success means humans and agents share an explicitly authorized local development
 ## Worklog
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
+
+### 2026-09-06 - MA: apps subpath, process namespaces, `ps`/`kill`
+
+- `2f35fa7` extracted the runtime into `src/apps` → `@artipod/core/apps`
+  (descriptor, capture, admission, runtime, lifecycle, telemetry, worker),
+  with 90 tests relocated (SPA 119 → 29; core 532 → 622). The runtime store
+  is a framework-free `createSnapshotStore`; zustand is no longer a runtime
+  dependency. `jose`/`core-js` moved to core `dependencies`; `./apps`
+  weighbridge entry (120 KB gzip budget). Worker ships as
+  `dist/apps/runtime-sw.js`; the SPA prebuild copies it to `public/`.
+  Sample → `examples/lifecycle-app/` with its VM test; runbook →
+  `docs/apps.md` rewritten for consumers.
+- `ed56df7` added `ProcessTable` (`src/proc/processes.ts`): pid 1 = session,
+  rows for `shell` / `app` / `task`, per-kind cooperative signals with
+  `ENOTSUP`, cascade on `dispose()`, `/proc/<pid>/{status,cmdline}`
+  provider. `ps [-l]` / `kill [-SIG] <pid>...` in
+  `src/sandbox/process-command.ts`; `CreateSandboxOptions.processes` +
+  `ZenFsPodOptions.processes`; shell rows track exec state and cwd;
+  `Sandbox.dispose()` retires a row. Apps runtime spawns an `app` row per
+  launch with `attach()`/`report()` so `kill -STOP/-CONT` reach the iframe's
+  lifecycle controller and its acks flow back to the row and the snapshot.
+  SPA `pod-session` owns the table (registered provider, disposed on close),
+  `[sync:push]` is a task row, `ApplicationPreview` shows the pid and reads
+  lifecycle from the store. JWS statement types renamed
+  `artipod-apps-*+jws` / `artipod.apps/v1`.
+- Checks: core lint PASS, `ARTIPOD_NO_DEVLINK=1 npm run build` PASS,
+  `npx tsc --noEmit` PASS, `npm test` PASS (60 files / 629 tests); SPA lint,
+  nonincremental typecheck, tests (4 files / 29) and `export:static` with
+  assertions PASS. `ARTIPOD_NO_DEVLINK=1 npm run weighbridge`: first run
+  reported `./apps` **OVER** at 349.6 KB gzip because `capture.ts` imported
+  the `/oci` barrel (isomorphic-git and friends). Switched to the
+  dependency-free leaves `oci/digest` + `oci/tar` → 19.2 KB gzip, 17 ms
+  import; budget set to 30 KB. All other budgets unchanged and met
+  (tarball 4.30 MB, root gzip 595.0 KB).
+- Live on 2784 (`samples/lifecycle:_3`, cow, dev-authorized): `ps -l` listed
+  init / bash / `[sync:push]` / `Lifecycle sample` (pid 4, pod, mode, digest,
+  url, elapsed, retained). `kill -STOP 4` froze the allocation (same value
+  2.5 s apart), toolbar flipped to Resume + "Suspended by you", `ps` showed
+  `suspended`, `cat /proc/4/status` showed the row. `kill -CONT 4` resumed
+  and allocation grew. `kill -STOP 3` (task) and `kill 99` reported
+  `Operation not supported` / `No such process`. `kill 4` closed the app:
+  iframe removed, status `Closed`, row gone. Ad-hoc shells created per
+  command leaked rows until `Sandbox.dispose()` was added; re-verified
+  after the fix. Test tab released to `about:blank`.
+- Not done here (unchanged M0 gaps): CasePod mount selection, D4 record and
+  bypass audit, offline cache/revocation port, mapped Sources replay,
+  catalog-navigation grant timeout. Nested namespaces are designed for
+  (`ppid`, uuid identity) but only one table per session exists.
 
 ### 2026-09-06 - MVP commit and M0 checklist reconciliation
 
@@ -754,7 +811,7 @@ M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. Fo
   PASS, all budgets unchanged; tarball 4.26 MB, unpacked 20.01 MB, UI 18.40 MB,
   core root gzip 594.2 KB. Temporary probe backend 2787 also stopped. Main
   server 2784 remains running; no commits, pushes, or releases performed.
-- Current runbook: [Executable Pod Preview](examples/artipod-spa/execution-preview.md).
+- Current runbook: [Browser Apps](docs/apps.md) (was `examples/artipod-spa/execution-preview.md`).
 
 ### 2026-09-05 - single-branch workflow
 
@@ -909,7 +966,7 @@ Owner requested all phases remain on `main`. Removed per-phase branches and PR/m
 - **Isolation observations:** evaluation inside the opaque 404 frame throws `SecurityError` for parent DOM, parent `__m0`, localStorage, and OPFS access. These do not establish a complete guest security boundary: the failed navigation receives Next's fallback page, not the projection's CSP, and its dev scripts attempt network traffic. External-network denial, malicious-app behavior, and comprehensive browser compatibility are not passed.
 - **UI verification:** light/mobile 390x844 and dark/desktop 1280x800 inspected with `screenshot_page`; no horizontal overflow. Fixed the foreground token after the first dark check; confirmed rgb(250,250,250) text on rgb(23,23,23). The visible 404 is the recorded experimental failure, not a successful viewer.
 - **Deviations / blockers:** baseline core typecheck/export failures and post-refresh SPA duplicate-core types prevent a full gate. No new core API, package dependency, release, production deployment, or permission relaxation. Full gates/struct-minify/weighbridge were not claimed after the no-go. Stop before M1; obtain owner review of a new D4 candidate. A dedicated unprivileged preview origin is a candidate to investigate, not a proven solution; it must separately address navigation-based exfiltration, worker scope, mount grants, and credential separation.
-- **Gate / PR:** no gate commit or PR; candidate rejected, not the overall Artipod concept. The standalone reproduction was retired on 2026-09-06; current workflow: [Executable Pod Preview](examples/artipod-spa/execution-preview.md).
+- **Gate / PR:** no gate commit or PR; candidate rejected, not the overall Artipod concept. The standalone reproduction was retired on 2026-09-06; current workflow: [Browser Apps](docs/apps.md).
 
 ### M1 - semantic discovery and composition
 

@@ -1,4 +1,6 @@
-import { sha256, writeTar } from '../oci/index.js';
+// Leaf modules, not the /oci barrel: the barrel drags isomorphic-git & co. into every consumer.
+import { sha256 } from '../oci/digest.js';
+import { writeTar } from '../oci/tar.js';
 import { verifyRelease, type AdmissionPolicy, type ExecutionSubject, type ReleaseEvidence } from './admission.js';
 import { applicationPath, parseExecutableDescriptor } from './descriptor.js';
 

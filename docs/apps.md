@@ -1,10 +1,54 @@
-# Executable Pod Preview
+# Browser Apps (`@artipod/core/apps`)
 
-The M0 browser runtime is an option in the main artipod catalog. It uses the
-same `artipod serve` origin as the workbench. No separate Next server or
-`/m0/probe` page is required.
+Run SPAPod applications from a pod, in the browser, on your own site. The
+layer decides *whether* code may run (signed release evidence or an explicit
+development authorization), projects the admitted bytes through a service
+worker, and gives you a process table so running apps show up in `ps` and
+answer `kill`. The artipod workbench (`examples/artipod-spa`) is the reference
+consumer; nothing here depends on it.
 
-## Run a Local App
+## Use It in Your Own Site
+
+```sh
+npm install @artipod/core
+```
+
+1. Serve the worker from your site root. It is shipped as a dist asset; copy
+   `node_modules/@artipod/core/dist/apps/runtime-sw.js` to
+   `/artipod-runtime-sw.js` at build time (the workbench does this in its
+   asset prebuild). The worker registers with scope `/` but intercepts only
+   `/_artipod/run/…`; every grant is memory-only and bound to the page that
+   made it. Return 404 for that prefix from your static server so a page
+   without a worker never serves anything there.
+2. Create a process table for the session and a runtime over the pod's files:
+
+   ```ts
+   import { createBrowserRuntime } from '@artipod/core/apps';
+   import { ProcessTable, registerProcessTable } from '@artipod/core/proc';
+
+   const processes = new ProcessTable('my-session');
+   registerProcessTable(processes);            // /proc/<pid>/status in shells
+   const runtime = createBrowserRuntime({
+     read: (path) => pod.zfs.promises.readFile(path),
+     list: (path) => pod.zfs.promises.readdir(path),
+     stat: (path) => pod.zfs.promises.lstat(path),
+   }, '/work/my-app', { processes, detail: { pod: 'my-app' } });
+   ```
+
+   Pass the same table to `createZenFsPod({ processes })` (or
+   `createSandbox({ processes })`) and every shell gets `ps` / `kill` plus its
+   own `shell` row.
+3. Render `runtime.store` however you like (`getState`/`subscribe`; the shape
+   is zustand-compatible). `launch('development', true)` after your own
+   explicit confirmation, or `launch('release')` against host-pinned policy.
+   Mount `snapshot.url` in an iframe. For Stop/Resume, run
+   `controlRuntimeLifecycle` over the iframe and hand it to
+   `runtime.attach({ suspend, resume })` so `kill -STOP` reaches the app;
+   forward its reports with `runtime.report(...)`.
+4. `runtime.stop()` revokes the session; `processes.dispose()` on teardown
+   cascades KILL to every row.
+
+## Run a Local App in the Workbench
 
 Place an `artipod.json` descriptor and saved application assets in a pod root:
 
@@ -36,13 +80,39 @@ Saving does not mutate an already admitted snapshot. Changed requirements or
 file lists require a new development confirmation. Authorization is memory-only
 and expires after at most one hour or when stopped/closed.
 
+## Processes: `ps`, `kill`, `/proc/<pid>`
+
+A pod session is a PID namespace. pid 1 is the session; the terminal shell,
+each running app and each background task is a row. Visibility is downward
+only: a shell sees its session, never another tab or the server.
+
+```text
+$ ps
+PID PPID KIND  STATE     TIME NAME
+  1    0 init  running   12s  samples/lifecycle:_3:cow
+  2    1 shell idle      12s  bash
+  3    1 task  idle      12s  [sync:push]
+  4    1 app   running   4s   Lifecycle sample
+$ kill -STOP 4      # cooperative suspend — same as the Stop button
+$ kill -CONT 4      # resume
+$ kill 4            # TERM/KILL: close and revoke the projection
+$ cat /proc/4/status
+```
+
+`ps -l` adds kind-specific detail (mode, digest, url, reported telemetry).
+Signals are honest: a row that does not handle one answers `Operation not
+supported` — an app that never implemented the lifecycle protocol cannot be
+frozen, and `ps` will keep saying `running`. `artipod ps` remains the detailed
+view of scheduler tasks.
+
 ## Lifecycle Sample
 
-The durable [sample pod](m0-preview/artipod.json) lives in `m0-preview/`.
-Its plain HTML and JavaScript require no build step. Import the directory into
-a new pod (for example, from the repository root, `node dist/cli.js import
-examples/artipod-spa/m0-preview samples/lifecycle:_1`) or copy its files into
-a new local workspace, then use the catalog's Run action. Choose a new ref
+The durable [sample pod](../examples/lifecycle-app/artipod.json) lives in
+`examples/lifecycle-app/`. Its plain HTML and JavaScript require no build
+step. Import the directory into a new pod (for example, from the repository
+root, `node dist/cli.js import examples/lifecycle-app samples/lifecycle:_1`)
+or copy its files into a new local workspace, then use the catalog's Run
+action. Choose a new ref
 when importing if that example ref already contains edits you want to retain.
 
 On load, the app starts a one-second interval. Each tick fills and retains a
@@ -81,7 +151,7 @@ These are POC admission statements, not production signing infrastructure.
 The snapshot digest is a deterministic application-only OCI composition, not
 necessarily the enclosing pod's registry manifest digest.
 
-Policy format follows `AdmissionPolicy` in `lib/m0/admission.ts`, omitting
+Policy format follows `AdmissionPolicy` in `src/apps/admission.ts`, omitting
 `clock` and `revokedApprovalIds`; evidence follows `ReleaseEvidence`. Private
 keys never belong in these files. Provision public host configuration separately
 from the distributable UI; export refuses local configuration under `public/`.
@@ -93,7 +163,7 @@ Approval, status freshness, and publisher validity all bound the session TTL.
 
 Admitted applications are **trusted same-origin code** with ambient browser
 authority over the workbench and other pods. The iframe, CSP, read-only
-projection, and random URLs are not hostile-code isolation. Stop revokes the
+projection, and random URLs are not hostile-code isolation. Close revokes the
 projection and removes the frame; it cannot undo actions already taken by an app.
 
 Declared `/case` mounts currently block launch until explicit compatible mount
@@ -113,6 +183,7 @@ JavaScript breakpoint and variable inspection passed on the catalog runtime.
 ## Verification
 
 ```sh
+npm run lint && npm run build && npx tsc --noEmit && npm run test   # core, incl. src/apps + src/proc
 npm --prefix examples/artipod-spa run lint
 npm --prefix examples/artipod-spa run typecheck -- --incremental false
 npm --prefix examples/artipod-spa run test
@@ -123,4 +194,4 @@ Stop any Next dev server using this app before export. Serve the export through
 `artipod serve`, using its bundled UI or `ARTIPOD_UI_DIR`; do not introduce a
 second UI origin. The standalone opaque-frame and admission probes were retired
 after catalog-path verification. Their findings remain historical evidence in
-[the model execution plan](../../model-exec-poc.md).
+[the model execution plan](../model-exec-poc.md).

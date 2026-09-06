@@ -21,7 +21,7 @@ async function signedFixture() {
   const reviewer = await generateKeyPair('ES256');
   const now = Date.UTC(2026, 8, 5);
   let clock = now;
-  const sign = async (type: string, id: string, key: CryptoKey, claims: object) => JSON.stringify(await new FlattenedSign(encoder.encode(JSON.stringify({ schema: 'artipod.m0/v1', issuedAt: now, expiresAt: now + MAX_FRESHNESS_MS, ...claims })))
+  const sign = async (type: string, id: string, key: CryptoKey, claims: object) => JSON.stringify(await new FlattenedSign(encoder.encode(JSON.stringify({ schema: 'artipod.apps/v1', issuedAt: now, expiresAt: now + MAX_FRESHNESS_MS, ...claims })))
     .setProtectedHeader({ alg: 'ES256', typ: type, cty: 'application/json', kid: id }).sign(key));
   const attribution = await sign(STATEMENT_TYPES.publisher, 'publisher', publisher.privateKey, { subject: captured.subject });
   const approval = await sign(STATEMENT_TYPES.approval, 'reviewer', reviewer.privateKey, {

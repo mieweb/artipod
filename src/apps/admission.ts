@@ -3,9 +3,9 @@ import 'core-js/actual/typed-array/from-base64.js';
 import { calculateJwkThumbprint, decodeProtectedHeader, flattenedVerify, importJWK, type JWK } from 'jose';
 
 export const STATEMENT_TYPES = {
-  publisher: 'artipod-m0-publisher+jws',
-  approval: 'artipod-m0-approval+jws',
-  status: 'artipod-m0-status+jws',
+  publisher: 'artipod-apps-publisher+jws',
+  approval: 'artipod-apps-approval+jws',
+  status: 'artipod-apps-status+jws',
 } as const;
 export const MAX_APPROVAL_MS = 60 * 60 * 1000;
 export const MAX_FRESHNESS_MS = 5 * 60 * 1000;
@@ -137,7 +137,7 @@ async function verifyStatement(wire: string, type: string, identities: readonly 
   const key = await importJWK(identity.publicKey, 'ES256');
   const verified = await flattenedVerify(envelope as unknown as Parameters<typeof flattenedVerify>[0], key, { algorithms: ['ES256'] });
   const claims = record(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(verified.payload)));
-  if (claims.schema !== 'artipod.m0/v1') denied('unsupported statement schema');
+  if (claims.schema !== 'artipod.apps/v1') denied('unsupported statement schema');
   return { claims, identity, thumbprint: await calculateJwkThumbprint(identity.publicKey) };
 }
 

@@ -207,6 +207,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     customCommands: commands.map((c) => c.name),
     fs: adapter,
     zfs: opts.zfs,
+    dispose: () => shellProcess?.exit(),
   };
   return sandbox;
 }

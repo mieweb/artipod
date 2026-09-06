@@ -23,7 +23,7 @@ async function identity(id: string): Promise<Signer> {
 }
 
 async function sign(signer: Signer, type: string, claims: Record<string, unknown>): Promise<string> {
-  return JSON.stringify(await new FlattenedSign(new TextEncoder().encode(JSON.stringify({ schema: 'artipod.m0/v1', ...claims })))
+  return JSON.stringify(await new FlattenedSign(new TextEncoder().encode(JSON.stringify({ schema: 'artipod.apps/v1', ...claims })))
     .setProtectedHeader({ alg: 'ES256', typ: type, cty: 'application/json', kid: signer.id })
     .sign(signer.privateKey));
 }

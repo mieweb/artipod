@@ -16,7 +16,7 @@ it('provisions test-only host identities and signed fixture evidence without exp
     async read(path) { const value = fixtureFiles[path]; return typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value); },
   });
   const now = Date.now();
-  const sign = async (identity: typeof human, type: string, claims: object) => JSON.stringify(await new FlattenedSign(new TextEncoder().encode(JSON.stringify({ schema: 'artipod.m0/v1', issuedAt: now, expiresAt: now + MAX_APPROVAL_MS, ...claims })))
+  const sign = async (identity: typeof human, type: string, claims: object) => JSON.stringify(await new FlattenedSign(new TextEncoder().encode(JSON.stringify({ schema: 'artipod.apps/v1', issuedAt: now, expiresAt: now + MAX_APPROVAL_MS, ...claims })))
     .setProtectedHeader({ alg: 'ES256', typ: type, cty: 'application/json', kid: identity.id }).sign(identity.privateKey));
   const publisher = await sign(organization, STATEMENT_TYPES.publisher, { subject: application.subject, claimedAuthor: 'Synthetic M0 author' });
   const approvalId = crypto.randomUUID();

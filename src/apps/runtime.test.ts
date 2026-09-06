@@ -173,7 +173,7 @@ describe('selected pod runtime', () => {
     const reviewer = await generateKeyPair('ES256');
     const now = Date.now();
     const sign = async (type: string, id: string, privateKey: CryptoKey, claims: object) => JSON.stringify(
-      await new FlattenedSign(encode({ schema: 'artipod.m0/v1', issuedAt: now, expiresAt: now + MAX_FRESHNESS_MS, ...claims }))
+      await new FlattenedSign(encode({ schema: 'artipod.apps/v1', issuedAt: now, expiresAt: now + MAX_FRESHNESS_MS, ...claims }))
         .setProtectedHeader({ alg: 'ES256', typ: type, cty: 'application/json', kid: id }).sign(privateKey),
     );
     const attribution = await sign(STATEMENT_TYPES.publisher, 'publisher', publisher.privateKey, { subject: captured.subject });
