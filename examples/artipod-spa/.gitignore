@@ -4,5 +4,6 @@ out/
 next-env.d.ts
 *.tsbuildinfo
 public/kerebron-wasm/
+public/artipod-runtime-sw.js
 public/execution-policy.json
 public/execution-approvals/

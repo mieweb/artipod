@@ -11,7 +11,7 @@ import dynamicImport from 'next/dynamic';
 import { useStore } from 'zustand';
 import { Terminal as LucideTerminal, Home as HomeIcon, FolderTree, FileCode, Bot, Settings, UploadCloud, Play } from 'lucide-react';
 import ApplicationPreview from '@/components/ApplicationPreview';
-import { inspectApplication } from '@/lib/services/application-files';
+import { inspectApplication } from '@artipod/core/apps';
 import { workspaceStore, initialWorkspace, patchPublish, setView, setEditingFile, type ViewMode } from '@/lib/stores/workspace';
 import { openPodSession, type PodSession } from '@/lib/services/pod-session';
 import { OPEN_DRAFT_TIP, actorId, isOpenRef, setOpenTag, type Route } from '@/lib/boot';

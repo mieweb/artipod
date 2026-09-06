@@ -1,6 +1,6 @@
-import { sha256, writeTar } from '@artipod/core/oci';
-import { verifyRelease, type AdmissionPolicy, type ExecutionSubject, type ReleaseEvidence } from './admission';
-import { applicationPath, parseExecutableDescriptor } from '../services/executable-descriptor';
+import { sha256, writeTar } from '../oci/index.js';
+import { verifyRelease, type AdmissionPolicy, type ExecutionSubject, type ReleaseEvidence } from './admission.js';
+import { applicationPath, parseExecutableDescriptor } from './descriptor.js';
 
 export interface ApplicationSource {
   paths: readonly string[];

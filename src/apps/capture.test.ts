@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { captureApplication, openApprovedView } from './release-view';
+import { captureApplication, openApprovedView } from './capture.js';
 import { exportJWK, FlattenedSign, generateKeyPair } from 'jose';
-import { evidenceDigest, MAX_FRESHNESS_MS, STATEMENT_TYPES, type AdmissionPolicy } from './admission';
+import { evidenceDigest, MAX_FRESHNESS_MS, STATEMENT_TYPES, type AdmissionPolicy } from './admission.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

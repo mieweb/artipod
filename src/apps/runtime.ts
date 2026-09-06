@@ -1,8 +1,33 @@
-import { createStore } from 'zustand/vanilla';
-import { captureApplication } from '../m0/release-view';
-import { MAX_APPROVAL_MS, verifyRelease, type AdmissionPolicy, type ReleaseEvidence } from '../m0/admission';
-import { applicationSource, type ApplicationFiles } from './application-files';
-import { parseExecutableDescriptor } from './executable-descriptor';
+import { captureApplication } from './capture.js';
+import { MAX_APPROVAL_MS, verifyRelease, type AdmissionPolicy, type ReleaseEvidence } from './admission.js';
+import { applicationSource, type ApplicationFiles } from './files.js';
+import { parseExecutableDescriptor } from './descriptor.js';
+
+/** Minimal external store; shape-compatible with zustand's `useStore`. */
+export interface SnapshotStore<T> {
+  getState(): T;
+  getInitialState(): T;
+  setState(next: T): void;
+  subscribe(listener: (state: T, previous: T) => void): () => void;
+}
+
+export function createSnapshotStore<T>(initial: T): SnapshotStore<T> {
+  let state = initial;
+  const listeners = new Set<(state: T, previous: T) => void>();
+  return {
+    getState: () => state,
+    getInitialState: () => initial,
+    setState(next) {
+      const previous = state;
+      state = next;
+      for (const listener of listeners) listener(state, previous);
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  };
+}
 
 export interface RuntimeSnapshot {
   phase: 'stopped' | 'opening' | 'running' | 'error';
@@ -49,7 +74,7 @@ const mime = (path: string) => ({
 }[path.split('.').pop() ?? ''] ?? 'application/octet-stream');
 
 export function createBrowserRuntime(files: ApplicationFiles, root: string) {
-  const store = createStore<RuntimeSnapshot>()(() => ({ phase: 'stopped' }));
+  const store = createSnapshotStore<RuntimeSnapshot>({ phase: 'stopped' });
   let generation = 0;
   let session = '';
   let worker: ServiceWorker | null = null;
@@ -64,7 +89,7 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string) {
     port?.close();
     port = undefined;
     clearTimeout(timer);
-    store.setState({ phase: 'stopped' }, true);
+    store.setState({ phase: 'stopped' });
   };
   const revoke = () => { development = undefined; stop(); };
   const requirements = (descriptor: ReturnType<typeof parseExecutableDescriptor>, paths: readonly string[]) => JSON.stringify({
@@ -79,7 +104,7 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string) {
       if (disposed) throw new Error('Workspace closed');
       stop();
       const current = generation;
-      store.setState({ phase: 'opening', mode }, true);
+      store.setState({ phase: 'opening', mode });
       try {
         const source = await deadline(applicationSource(files, root), 'Application scan');
         const captured = await deadline(captureApplication(source), 'Application snapshot');
@@ -141,11 +166,11 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string) {
         if (mode === 'development') development = fingerprint;
         timer = setTimeout(revoke, Math.max(0, validUntil - Date.now()));
         store.setState({ phase: 'running', mode, digest: captured.subject.digest, publisher, approver, validUntil,
-          url: `/_artipod/run/${admitted}/app/${captured.entrypoint}` }, true);
+          url: `/_artipod/run/${admitted}/app/${captured.entrypoint}` });
       } catch (error) {
         if (current === generation) {
           stop();
-          store.setState({ phase: 'error', error: error instanceof Error ? error.message : String(error) }, true);
+          store.setState({ phase: 'error', error: error instanceof Error ? error.message : String(error) });
         }
       }
     },

@@ -1,4 +1,4 @@
-import { parseRuntimeTelemetry, type RuntimeTelemetry } from './runtime-telemetry';
+import { parseRuntimeTelemetry, type RuntimeTelemetry } from './telemetry.js';
 
 export type LifecycleState = 'unknown' | 'unsupported' | 'running' | 'suspending' | 'suspended' | 'resuming' | 'error';
 

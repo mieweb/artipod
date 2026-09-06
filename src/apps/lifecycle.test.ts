@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { controlRuntimeLifecycle, type LifecycleSnapshot } from './runtime-lifecycle';
+import { controlRuntimeLifecycle, type LifecycleSnapshot } from './lifecycle.js';
 
 const ORIGIN = 'http://host.test';
 function harness() {

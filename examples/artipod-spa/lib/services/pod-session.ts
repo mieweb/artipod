@@ -19,7 +19,7 @@ import { workspaceStore, initialWorkspace } from '../stores/workspace';
 import { brokerStore } from '../stores/broker';
 import { navigateTo } from '../stores/route';
 import { nextDraftRef } from '../boot';
-import { createBrowserRuntime, type BrowserRuntime } from './browser-runtime';
+import { createBrowserRuntime, type BrowserRuntime } from '@artipod/core/apps';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
 

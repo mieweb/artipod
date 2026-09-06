@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applicationSource, type ApplicationFiles } from './application-files';
+import { applicationSource, type ApplicationFiles } from './files.js';
 
 function fixture() {
   const files: ApplicationFiles = {

@@ -4,8 +4,10 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { useStore } from 'zustand';
 import { Play, Square, RotateCw, Maximize2, Minimize2, X } from 'lucide-react';
 import type { PodSession } from '@/lib/services/pod-session';
-import { observeRuntimeTelemetry, type RuntimeTelemetry } from '@/lib/services/runtime-telemetry';
-import { controlRuntimeLifecycle, type LifecycleController, type LifecycleSnapshot } from '@/lib/services/runtime-lifecycle';
+import {
+  controlRuntimeLifecycle, observeRuntimeTelemetry,
+  type LifecycleController, type LifecycleSnapshot, type RuntimeTelemetry,
+} from '@artipod/core/apps';
 import styles from './ApplicationPreview.module.css';
 
 function PreviewInstance({ url, control, onLifecycle }: {

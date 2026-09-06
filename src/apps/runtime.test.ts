@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBrowserRuntime, boundedResponse, type BrowserRuntime } from './browser-runtime';
-import type { ApplicationFiles } from './application-files';
+import { createBrowserRuntime, boundedResponse, type BrowserRuntime } from './runtime.js';
+import type { ApplicationFiles } from './files.js';
 import { exportJWK, FlattenedSign, generateKeyPair } from 'jose';
-import { captureApplication } from '../m0/release-view';
-import { evidenceDigest, MAX_FRESHNESS_MS, STATEMENT_TYPES } from '../m0/admission';
+import { captureApplication } from './capture.js';
+import { evidenceDigest, MAX_FRESHNESS_MS, STATEMENT_TYPES } from './admission.js';
 
 class Port {
   onmessage?: (event: { data: unknown }) => void;

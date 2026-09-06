@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applicationPath, parseExecutableDescriptor } from './executable-descriptor';
+import { applicationPath, parseExecutableDescriptor } from './descriptor.js';
 
 const encode = (spec: object = {}, overrides: object = {}) => new TextEncoder().encode(JSON.stringify({
   apiVersion: 'artipod.io/v1', kind: 'SPAPod', metadata: { name: 'viewer' }, spec: { entrypoint: 'index.html', ...spec }, ...overrides,

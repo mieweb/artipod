@@ -16,7 +16,7 @@ function harness() {
       if (data.type === 'read') queueMicrotask(() => { for (const callback of listeners) callback({ data: { id: data.id, status: 200, bytes: new Uint8Array([65]), mime: 'text/html' } }); });
     },
   };
-  runInNewContext(readFileSync(new URL('../../public/artipod-runtime-sw.js', import.meta.url), 'utf8'), {
+  runInNewContext(readFileSync(new URL('./runtime-sw.js', import.meta.url), 'utf8'), {
     URL, Response, Uint8Array, crypto, setTimeout, clearTimeout,
     self: { location: { origin }, clients: { get: async () => owner }, addEventListener: (name: string, handler: (event: Record<string, unknown>) => void) => handlers.set(name, handler) },
   });

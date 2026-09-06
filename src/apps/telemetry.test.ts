@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { observeRuntimeTelemetry, type RuntimeTelemetry } from './runtime-telemetry';
+import { observeRuntimeTelemetry, type RuntimeTelemetry } from './telemetry.js';
 
 function fixture() {
   let listener: ((event: MessageEvent) => void) | undefined;

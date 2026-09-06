@@ -1,5 +1,5 @@
-import { applicationPath, parseExecutableDescriptor } from './executable-descriptor';
-import type { ApplicationSource } from '../m0/release-view';
+import { applicationPath, parseExecutableDescriptor } from './descriptor.js';
+import type { ApplicationSource } from './capture.js';
 
 export interface ApplicationFiles {
   read(path: string): Promise<Uint8Array>;

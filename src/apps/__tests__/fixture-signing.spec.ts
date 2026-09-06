@@ -1,9 +1,9 @@
 import { expect, it } from 'vitest';
 import { exportJWK, FlattenedSign, generateKeyPair } from 'jose';
 import { writeFile } from 'node:fs/promises';
-import { fixtureFiles } from './fixtures';
-import { captureApplication } from './release-view';
-import { evidenceDigest, MAX_APPROVAL_MS, MAX_FRESHNESS_MS, STATEMENT_TYPES, verifyRelease } from './admission';
+import { fixtureFiles } from './fixtures.js';
+import { captureApplication } from '../capture.js';
+import { evidenceDigest, MAX_APPROVAL_MS, MAX_FRESHNESS_MS, STATEMENT_TYPES, verifyRelease } from '../admission.js';
 
 it('provisions test-only host identities and signed fixture evidence without exporting private keys', async () => {
   const keys = await Promise.all(['m0-human-publisher', 'm0-organization-publisher', 'm0-reviewer'].map(async (id) => {

@@ -16,7 +16,8 @@
     { "name": ".", "path": "dist/index.js", "maxGzipBytes": 670000, "maxImportMs": 700 },
     { "name": "./tools", "path": "dist/tools/index.js", "maxGzipBytes": 16000, "maxImportMs": 150 },
     { "name": "./sandbox", "path": "dist/sandbox/index.js", "maxGzipBytes": 610000, "maxImportMs": 500 },
-    { "name": "./oci", "path": "dist/oci/index.js", "maxGzipBytes": 410000, "maxImportMs": 500 }
+    { "name": "./oci", "path": "dist/oci/index.js", "maxGzipBytes": 410000, "maxImportMs": 500 },
+    { "name": "./apps", "path": "dist/apps/index.js", "maxGzipBytes": 120000, "maxImportMs": 300 }
   ],
   "commands": [
     { "name": "cli --help", "command": ["node", "dist/cli.js", "--help"], "maxMs": 800 }

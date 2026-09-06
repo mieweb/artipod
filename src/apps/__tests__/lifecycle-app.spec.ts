@@ -3,10 +3,11 @@ import { readFile, readdir, lstat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applicationSource } from '../lib/services/application-files';
-import { captureApplication } from '../lib/m0/release-view';
+import { applicationSource } from '../files.js';
+import { captureApplication } from '../capture.js';
 
-const source = readFileSync(new URL('../m0-preview/main.js', import.meta.url), 'utf8');
+const sampleRoot = new URL('../../../examples/lifecycle-app/', import.meta.url);
+const source = readFileSync(new URL('main.js', sampleRoot), 'utf8');
 function mount() {
   const nodes = new Map<string, { textContent: string; value: number; disabled?: boolean; onclick?: (() => void) | null }>();
   const reports: { elapsedMs: number; retainedBytes: number; limitBytes: number }[] = [];
@@ -39,7 +40,7 @@ function mount() {
 afterEach(() => vi.useRealTimers());
 describe('lifecycle sample', () => {
   it('captures the complete durable sample with its entrypoint and binary assets', async () => {
-    const root = fileURLToPath(new URL('../m0-preview', import.meta.url));
+    const root = fileURLToPath(sampleRoot);
     const files = await applicationSource({ read: async path => new Uint8Array(await readFile(path)), list: readdir, stat: lstat }, root);
     const captured = await captureApplication(files);
     expect(captured.entrypoint).toBe('index.html');

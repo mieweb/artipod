@@ -1,6 +1,5 @@
 import { createStore } from 'zustand/vanilla';
-import { parseExecutableDescriptor, type ExecutableDescriptor } from './executable-descriptor';
-import { inspectApplication, type ApplicationFiles } from './application-files';
+import { parseExecutableDescriptor, inspectApplication, type ApplicationFiles, type ExecutableDescriptor } from '@artipod/core/apps';
 import { catalogStore } from '../stores/catalog';
 import { registryStore } from '../stores/registry';
 
@@ -20,7 +19,7 @@ export async function workspaceFiles(): Promise<ApplicationFiles> {
 }
 
 export async function inspectPublishedApplication(manifestDigest: string): Promise<ExecutableDescriptor | null> {
-  const { boundedResponse } = await import('./browser-runtime');
+  const { boundedResponse } = await import('@artipod/core/apps');
   const { verifyDigest, indexTar, mergeLayerEntries, isGzip } = await import('@artipod/core/oci');
   const readBlob = async (digest: string, limit: number) => {
     if (!/^sha256:[a-f0-9]{64}$/.test(digest)) throw new Error('Invalid digest');

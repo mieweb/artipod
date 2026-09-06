@@ -3,7 +3,7 @@ import { exportJWK, FlattenedSign, generateKeyPair } from 'jose';
 import {
   evidenceDigest, MAX_APPROVAL_MS, MAX_FRESHNESS_MS, STATEMENT_TYPES, verifyRelease,
   type AdmissionPolicy, type ExecutionSubject, type ReleaseEvidence, type TestIdentity,
-} from './admission';
+} from './admission.js';
 
 const now = Date.UTC(2026, 8, 5, 12);
 const hash = (byte: string) => `sha256:${byte.repeat(64)}`;
