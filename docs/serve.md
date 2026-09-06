@@ -2,6 +2,10 @@
 
 One command, a sync server and a registry you can embed:
 
+`serve` is a quick POC and reference host for Artipod's storage, sync, and execution capabilities, not the prescribed production application deployment system. Production applications can embed the library APIs with their own routing, lifecycle, and access policy. See [Execution versus application hosting](containers.md#execution-versus-application-hosting).
+
+A local no-login demo is not a promise of unrestricted remote execution. The existing auth, key-lease, and non-local binding rules below still apply. The [planned browser-shell execution demo](https://github.com/mieweb/artipod/issues/56#issuecomment-5559394727) will demonstrate server isolate/container targets; its proposed flags and `ssh`-style syntax are not shipped behavior.
+
 ```bash
 npx artipod serve --publish ./my-notes
 ```

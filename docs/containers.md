@@ -33,6 +33,18 @@ Consequences:
 | registry | registry, manager, or relay | the on-disk store is an **OCI image-layout directory** — inspect it with `skopeo` or `crane` |
 | dockerd | no daemon required | browser pods run on a bash isolate: no daemon, no VM, no extension |
 
+## Execution versus application hosting
+
+| Need | Responsibility |
+|---|---|
+| Version, synchronize, and expose authorized pod state to command execution | Artipod |
+| Demonstrate those capabilities in a quick local POC | `artipod serve`, as a reference host |
+| Keep an arbitrary HTTP application container running, route requests, scale it, or emulate Cloudflare Durable Object lifecycle | Cloud or another application/runtime layer |
+
+The Docker backend's purpose is **commands against pod state**, not general application hosting. Sharing OCI formats or dockerode plumbing does not establish a service lifecycle API, complete skopeo replacement, or production deployment platform. Production embedders select library capabilities and supply application lifecycle and access policy.
+
+Browser-shell selection of server isolate/container execution is a [proposed reference demo](https://github.com/mieweb/artipod/issues/56#issuecomment-5559394727), not a shipped SSH service. See [serve.md](serve.md) for current behavior; any proposed flags or shell syntax remain unavailable until implemented and verified. Existing skopeo use is unchanged; no replacement is planned.
+
 ## Where Docker and Podman literally fit
 
 Docker/Podman is one of three execution backends a pod can attach to — the pod outlives whichever one you use:

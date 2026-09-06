@@ -26,6 +26,12 @@ Three consumer surfaces, one layer:
 
 > **Coming from Docker or Podman?** The muscle memory transfers (`artipod run -it alpine:3.22`, `artipod pods`), but the model inverts: in Docker the image is the artifact and the container's writable layer is scratch; here the writable state *is* the artifact — versioned, encrypted, pushable. And a pod is **not a Kubernetes Pod** — it's durable state that execution attaches to, not scheduled compute. Full orientation and concept map: [docs/containers.md](docs/containers.md).
 
+### What Artipod owns
+
+Artipod manages durable pod state and execution attached to that state. Its Docker backend runs commands against pod mounts; it is not a general HTTP application host or a Cloudflare Containers lifecycle adapter. Application routing, scaling, deployment, and production access policy belong to the embedding application, such as `mieweb/cloud`.
+
+[`artipod serve`](docs/serve.md) is a quick POC and reference host for Artipod capabilities, not the prescribed production deployment system. Reuse the library APIs in your own host where appropriate. See the [container orientation](docs/containers.md#execution-versus-application-hosting) for the ownership boundary.
+
 ## Quick starts
 
 ### The CLI: a pod in your terminal (✅)
