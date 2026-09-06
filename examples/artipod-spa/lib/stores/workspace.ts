@@ -5,7 +5,7 @@
  */
 import { createStore } from 'zustand/vanilla';
 
-export type ViewMode = 'tree' | 'editor' | 'settings' | 'agent' | 'layers';
+export type ViewMode = 'tree' | 'editor' | 'settings' | 'agent' | 'layers' | 'preview';
 
 export type SyncBadge =
   | { kind: 'idle' }

@@ -9,7 +9,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import dynamicImport from 'next/dynamic';
 import { useStore } from 'zustand';
-import { Terminal as LucideTerminal, Plus, Server, HardDrive } from 'lucide-react';
+import { Terminal as LucideTerminal, Plus, Server, HardDrive, Play } from 'lucide-react';
+import { executableStore, refreshExecutables } from '@/lib/services/executable-catalog';
 import type { Sandbox } from '@artipod/core/sandbox';
 import { catalogStore, refreshServer, E2E_MEDIA_TYPE } from '@/lib/stores/catalog';
 import { registryStore } from '@/lib/stores/registry';
@@ -25,12 +26,15 @@ const Terminal = dynamicImport(() => import('@/components/Terminal'), { ssr: fal
 export default function Catalog({ actorId }: { actorId: () => Promise<string> }) {
   const { serverRefs, localHeads, verdicts, changedRefs } = useStore(catalogStore);
   const local = useStore(registryStore, (s) => s.entries);
+  const applications = useStore(executableStore, (s) => s.applications);
   const brokerStatus = useStore(brokerStore, (s) => s.status);
   const [rootSandbox, setRootSandbox] = useState<Sandbox | null>(null);
   const [termOpen, setTermOpen] = useState(false);
   const [termHeight, setTermHeight] = useState(300);
   const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
   const [pub, setPub] = useState<{ id: string; mode: OpenMode; value: string } | null>(null);
+
+  useEffect(() => { void refreshExecutables(); }, [serverRefs, local, brokerStatus]);
 
   useEffect(() => {
     void refreshServer();
@@ -137,12 +141,12 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
     );
 
   const row = (id: string, badge: React.ReactNode, note: string, mode: OpenMode = 'rw', label?: string) => (
-    <li key={`${id}:${mode}`}>
+    <li key={`${id}:${mode}`} className="flex items-stretch gap-1">
       {/* U5: client-side navigation — the href stays for copy/new-tab */}
       <a
         href={workspaceUrl(id, mode)}
         onClick={(e) => navClick(e, id, mode)}
-        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded bg-[#333] px-3 py-2 text-sm hover:bg-[#3d3d3d]"
+        className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded bg-[#333] px-3 py-2 text-sm hover:bg-[#3d3d3d]"
       >
         <span className="min-w-0 flex-1 basis-40 truncate font-mono">{label ?? id}</span>
         <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-gray-400">
@@ -150,6 +154,11 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           {badge}
         </span>
       </a>
+      {applications[id] && <button
+        title={`Run ${applications[id].name}`} aria-label={`Run ${applications[id].name}`}
+        onClick={() => navigateTo(id, id.includes(':') ? 'cow' : mode, '&run=1')}
+        className="flex shrink-0 items-center gap-1 rounded border border-gray-600 px-3 text-sm hover:bg-gray-700"
+      ><Play size={16} />Run</button>}
     </li>
   );
 

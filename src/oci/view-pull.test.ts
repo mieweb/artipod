@@ -6,8 +6,9 @@
  * `artipod` command. Tamper rejection and --through are pinned here.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { configure, InMemory, fs as zfs, umount, mounts as zenMounts } from '@zenfs/core';
+import { configure, InMemory, fs as zfs, umount, mounts as zenMounts, bindContext } from '@zenfs/core';
 import { createSandbox, type Sandbox } from '../sandbox/index.js';
+import type { ZenFsLike } from '../sandbox/types.js';
 import { sha256, type Digest } from './digest.js';
 import { indexTar } from './tar.js';
 import { mergeLayerEntries, mountOciView } from './view.js';
@@ -230,8 +231,12 @@ describe('pullImage through the registry transport', () => {
 
     // syncRef walks manifest → config → layers → index artifacts; a pulled
     // ref must not dead-end (this is `run REF` teeing into the shared store).
-    const dest = new OciStore(zfs, '/repo/.artipod-dest');
+    await zfs.promises.mkdir('/repo/destination');
+    const destination = bindContext({ root: '/repo/destination' });
+    const dest = new OciStore(destination.fs as unknown as ZenFsLike);
     await dest.init();
+    expect(await dest.hasBlob(indexDigest)).toBe(false);
+    expect(await dest.getRef('fake.test/demo/app:1.0')).toBeNull();
     const result = await syncRef(store, dest, 'fake.test/demo/app:1.0');
     expect(result.complete).toBe(true);
     expect(await dest.hasBlob(indexDigest)).toBe(true);

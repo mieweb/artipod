@@ -19,6 +19,7 @@ import { workspaceStore, initialWorkspace } from '../stores/workspace';
 import { brokerStore } from '../stores/broker';
 import { navigateTo } from '../stores/route';
 import { nextDraftRef } from '../boot';
+import { createBrowserRuntime, type BrowserRuntime } from './browser-runtime';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
 
@@ -28,6 +29,7 @@ export interface PodSession {
   sandbox: Sandbox;
   events: PodEvents;
   scheduler: TaskScheduler;
+  runtime: BrowserRuntime;
   publish(target?: string): Promise<string>;
   /** Suggested publish target for the panel (fork → next free _ tag). */
   suggestPublishValue(): Promise<string>;
@@ -337,12 +339,21 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   (window as unknown as { __artipod?: unknown }).__artipod = pod;
   workspaceStore.setState({ phase: 'ready', root: pod.basis ? pod.basis.at : blankRoot });
 
+  const runtime = createBrowserRuntime({
+    read: async path => new Uint8Array(await pod.zfs.promises.readFile(path)),
+    list: async path => await pod.zfs.promises.readdir(path) as string[],
+    stat: async path => await pod.zfs.promises.lstat(path),
+  }, pod.basis ? pod.basis.at : blankRoot);
+  const stopPreview = () => runtime.stop();
+  window.addEventListener('pagehide', stopPreview);
+
   const session: PodSession = {
     route,
     pod,
     sandbox,
     events,
     scheduler,
+    runtime,
     publish: doPublish,
     async suggestPublishValue(): Promise<string> {
       if (!route.isRef) return `me/${route.id}:_1`;
@@ -355,6 +366,8 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       }
     },
     async close(): Promise<void> {
+      runtime.dispose();
+      window.removeEventListener('pagehide', stopPreview);
       const closing = (async () => {
         // Flush-on-close (U5): a mid-flight or pending push finishes BEFORE the
         // pod dies — the aborted-push residue from reload-navigation, fixed

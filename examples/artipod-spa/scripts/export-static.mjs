@@ -7,18 +7,26 @@
  * baked version literal, ui-buildinfo.json provenance.
  */
 import { spawnSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { rm, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(fileURLToPath(new URL('.', import.meta.url)));
 
+if (['public/execution-policy.json', 'public/execution-approvals'].some(path => existsSync(join(root, path)))) {
+  throw new Error('Remove local execution admission configuration before static export; host trust roots must not ship');
+}
+
 // The file:../.. dep is COPIED into node_modules at install time and goes
 // stale silently — refresh it every export.
 console.log('refreshing the copied @artipod/core from ../.. …');
 await rm(join(root, 'node_modules/@artipod/core'), { recursive: true, force: true });
-const install = spawnSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: root, stdio: 'inherit' });
+const install = spawnSync('npm', ['install', '--no-audit', '--no-fund'], {
+  cwd: root,
+  stdio: 'inherit',
+  env: { ...process.env, ARTIPOD_NO_DEVLINK: '1' },
+});
 if (install.status !== 0) process.exit(install.status ?? 1);
 
 const rootVersion = JSON.parse(await readFile(join(root, '../../package.json'), 'utf8')).version;
