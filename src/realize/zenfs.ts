@@ -160,6 +160,8 @@ export interface ZenFsPodOptions
   publish?: (target?: string) => Promise<string>;
   /** `artipod ps` rows — the app's background schedule (renewals, retries, delegations). */
   tasks?: () => import('../oci/command.js').PsTask[];
+  /** The session's process table: `ps` / `kill` in every shell, and a row per shell. */
+  processes?: import('../proc/processes.js').ProcessTable;
   /** Manager sync: the remote PodStore push/pull/clone talk to. */
   sync?: {
     remote?: import('../manager/pod-store.js').PodStore;
@@ -468,6 +470,7 @@ export async function createZenFsPod(
         zfs: shellZfs,
         events,
         proc: confineTo ? false : proc,
+        processes: options.processes,
         cwd: confineTo ? '/' : defaultCwd,
         onEdit: options.onEdit && confineTo
           ? (path) => options.onEdit!(`${confineTo}${path.startsWith('/') ? '' : '/'}${path}`)

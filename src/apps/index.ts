@@ -25,7 +25,7 @@ export {
 } from './admission.js';
 export type { AdmissionPolicy, ExecutionSubject, ReleaseEvidence, TestIdentity, VerifiedRelease } from './admission.js';
 export { boundedResponse, createBrowserRuntime, createSnapshotStore } from './runtime.js';
-export type { BrowserRuntime, RuntimeSnapshot, SnapshotStore } from './runtime.js';
+export type { BrowserRuntime, BrowserRuntimeOptions, RuntimeInstance, RuntimeSnapshot, SnapshotStore } from './runtime.js';
 export { observeRuntimeTelemetry, parseRuntimeTelemetry } from './telemetry.js';
 export type { RuntimeTelemetry } from './telemetry.js';
 export { controlRuntimeLifecycle } from './lifecycle.js';

@@ -4,6 +4,7 @@ import type { ApplicationFiles } from './files.js';
 import { exportJWK, FlattenedSign, generateKeyPair } from 'jose';
 import { captureApplication } from './capture.js';
 import { evidenceDigest, MAX_FRESHNESS_MS, STATEMENT_TYPES } from './admission.js';
+import { ProcessTable } from '../proc/processes.js';
 
 class Port {
   onmessage?: (event: { data: unknown }) => void;
@@ -18,6 +19,7 @@ class Port {
 describe('selected pod runtime', () => {
   let runtime: BrowserRuntime;
   let content: Map<string, string>;
+  let files: ApplicationFiles;
   let grants: Port[];
   let acknowledge: boolean;
   const descriptor = (capabilities: string[] = []) => JSON.stringify({
@@ -27,7 +29,7 @@ describe('selected pod runtime', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     content = new Map([['artipod.json', descriptor()], ['index.html', '<h1>Selected pod</h1>']]);
-    const files: ApplicationFiles = {
+    files = {
       list: async () => [...content.keys()],
       stat: async path => ({ size: content.get(path.slice(10))?.length ?? 0, isDirectory: () => path === '/selected', isSymbolicLink: () => false }),
       read: async path => new TextEncoder().encode(content.get(path.slice(10))),
@@ -78,6 +80,34 @@ describe('selected pod runtime', () => {
     grants[0].postMessage({ type: 'read', id: 'read1', path: '/app/index.html' });
     expect(new TextDecoder().decode((await response).bytes)).toBe('<h1>Selected pod</h1>');
     expect(runtime.store.getState().url).toMatch(/^\/_artipod\/run\/.+\/app\/index.html$/);
+  });
+
+  it('registers each instance as an app process and routes signals through the attached controller', async () => {
+    const table = new ProcessTable('session');
+    runtime.dispose();
+    runtime = createBrowserRuntime(files, '/selected', { processes: table, detail: { pod: 'demo:_1' } });
+    const controller = { suspend: vi.fn(), resume: vi.fn() };
+    await expect(table.signal(2, 'STOP')).rejects.toMatchObject({ code: 'ESRCH' });
+    await runtime.launch('development', true);
+    const { pid } = runtime.store.getState();
+    expect(pid).toBe(2);
+    expect(table.get(2)).toMatchObject({ kind: 'app', name: 'Selected application', state: 'running', detail: { pod: 'demo:_1', mode: 'development' }, signals: ['STOP', 'CONT', 'TERM', 'KILL'] });
+    await expect(table.signal(2, 'STOP')).rejects.toThrow('does not support suspend');
+    const detach = runtime.attach(controller);
+    await table.signal(2, 'STOP');
+    expect(controller.suspend).toHaveBeenCalledTimes(1);
+    runtime.report({ state: 'suspended', telemetry: { elapsedMs: 4200, retainedBytes: 65536, limitBytes: 8388608 } });
+    expect(table.get(2)).toMatchObject({ state: 'suspended', detail: { elapsed: '4s', retained: '64KiB' } });
+    expect(runtime.store.getState().lifecycle?.state).toBe('suspended');
+    await table.signal(2, 'CONT');
+    expect(controller.resume).toHaveBeenCalledTimes(1);
+    detach();
+    await expect(table.signal(2, 'STOP')).rejects.toThrow('does not support suspend');
+    await table.signal(2, 'TERM');
+    expect(runtime.store.getState()).toEqual({ phase: 'stopped' });
+    expect(table.get(2)).toBeUndefined();
+    await runtime.launch('development');
+    expect(runtime.store.getState().error).toContain('authorization required');
   });
 
   it('fails closed on missing host evidence without development fallback', async () => {

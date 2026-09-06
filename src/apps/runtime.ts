@@ -2,6 +2,8 @@ import { captureApplication } from './capture.js';
 import { MAX_APPROVAL_MS, verifyRelease, type AdmissionPolicy, type ReleaseEvidence } from './admission.js';
 import { applicationSource, type ApplicationFiles } from './files.js';
 import { parseExecutableDescriptor } from './descriptor.js';
+import type { LifecycleSnapshot, LifecycleState } from './lifecycle.js';
+import type { ProcessHandle, ProcessTable } from '../proc/processes.js';
 
 /** Minimal external store; shape-compatible with zustand's `useStore`. */
 export interface SnapshotStore<T> {
@@ -38,6 +40,23 @@ export interface RuntimeSnapshot {
   publisher?: string;
   approver?: string;
   validUntil?: number;
+  /** Cooperative lifecycle of the running instance, as last reported by the UI's controller. */
+  lifecycle?: LifecycleSnapshot;
+  /** pid in the session's process table, when one was supplied. */
+  pid?: number;
+}
+
+/** What the rendering side gives the runtime so shell signals can reach the iframe. */
+export interface RuntimeInstance {
+  suspend(): void;
+  resume(): void;
+}
+
+export interface BrowserRuntimeOptions {
+  /** Register each launched instance as an `app` process (ps / kill). */
+  processes?: ProcessTable;
+  /** Extra columns for the process row, e.g. the pod ref. */
+  detail?: Record<string, string>;
 }
 
 export async function boundedResponse(response: Response, limit: number): Promise<Uint8Array> {
@@ -73,7 +92,7 @@ const mime = (path: string) => ({
   jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', wasm: 'application/wasm', woff2: 'font/woff2',
 }[path.split('.').pop() ?? ''] ?? 'application/octet-stream');
 
-export function createBrowserRuntime(files: ApplicationFiles, root: string) {
+export function createBrowserRuntime(files: ApplicationFiles, root: string, options: BrowserRuntimeOptions = {}) {
   const store = createSnapshotStore<RuntimeSnapshot>({ phase: 'stopped' });
   let generation = 0;
   let session = '';
@@ -82,6 +101,9 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let development: string | undefined;
   let disposed = false;
+  let process: ProcessHandle | undefined;
+  let instance: RuntimeInstance | null = null;
+  const unsupported = (action: string) => () => { throw new Error(`Application does not support ${action}`); };
   const stop = () => {
     generation++;
     if (session) worker?.postMessage({ type: 'revoke', session });
@@ -89,6 +111,8 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string) {
     port?.close();
     port = undefined;
     clearTimeout(timer);
+    process?.exit();
+    process = undefined;
     store.setState({ phase: 'stopped' });
   };
   const revoke = () => { development = undefined; stop(); };
@@ -100,6 +124,30 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string) {
     store,
     stop: revoke,
     dispose() { disposed = true; revoke(); },
+    /**
+     * The rendering side attaches the live iframe's lifecycle controller so
+     * `kill -STOP/-CONT` reach the app. Returns the detach function.
+     */
+    attach(next: RuntimeInstance): () => void {
+      instance = next;
+      return () => { if (instance === next) instance = null; };
+    },
+    /** Mirror the controller's lifecycle into the snapshot and the process row. */
+    report(lifecycle: LifecycleSnapshot): void {
+      const current = store.getState();
+      if (current.phase !== 'running') return;
+      store.setState({ ...current, lifecycle });
+      const state: Record<LifecycleState, string> = {
+        unknown: 'running', unsupported: 'running', running: 'running', suspending: 'suspending',
+        suspended: 'suspended', resuming: 'resuming', error: 'running',
+      };
+      const detail: Record<string, string> = {};
+      if (lifecycle.telemetry) {
+        detail.elapsed = `${Math.floor(lifecycle.telemetry.elapsedMs / 1000)}s`;
+        detail.retained = `${Math.round(lifecycle.telemetry.retainedBytes / 1024)}KiB`;
+      }
+      process?.update({ state: state[lifecycle.state], detail });
+    },
     async launch(mode: 'release' | 'development', authorize = false) {
       if (disposed) throw new Error('Workspace closed');
       stop();
@@ -165,8 +213,18 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string) {
         if (current !== generation || disposed) throw new Error('Launch cancelled');
         if (mode === 'development') development = fingerprint;
         timer = setTimeout(revoke, Math.max(0, validUntil - Date.now()));
-        store.setState({ phase: 'running', mode, digest: captured.subject.digest, publisher, approver, validUntil,
-          url: `/_artipod/run/${admitted}/app/${captured.entrypoint}` });
+        const url = `/_artipod/run/${admitted}/app/${captured.entrypoint}`;
+        process = options.processes?.spawn({
+          kind: 'app', name: descriptor.name,
+          detail: { ...options.detail, mode, digest: captured.subject.digest.slice(0, 19), url },
+          signal: {
+            STOP: () => (instance ?? { suspend: unsupported('suspend') }).suspend(),
+            CONT: () => (instance ?? { resume: unsupported('resume') }).resume(),
+            TERM: revoke,
+            KILL: revoke,
+          },
+        });
+        store.setState({ phase: 'running', mode, digest: captured.subject.digest, publisher, approver, validUntil, url, pid: process?.pid });
       } catch (error) {
         if (current === generation) {
           stop();

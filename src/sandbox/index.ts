@@ -21,6 +21,8 @@ import { registerBuiltinProviders } from '../proc/storage-provider.js';
 import { makeEditCommand } from './edit-command.js';
 import { makeGitCommand } from './git-command.js';
 import { makeModuleCommands } from './module-command.js';
+import { makeProcessCommands } from './process-command.js';
+import type { ProcessHandle, ProcessTable } from '../proc/processes.js';
 import { makeNotesCommand } from './notes-command.js';
 import { makeStorageCommands } from './storage-command.js';
 import { makeSudoCommand } from './sudo-command.js';
@@ -66,6 +68,11 @@ export interface CreateSandboxOptions {
    */
   proc?: boolean;
   /**
+   * The session's process table: adds `ps` / `kill` and registers this shell
+   * as a `shell` row whose state tracks exec activity.
+   */
+  processes?: ProcessTable;
+  /**
    * Host work to run around each non-transient command, e.g. materializing
    * state into the filesystem. Returned messages are appended to stderr, so a
    * hook reports a problem without taking the command down.
@@ -96,8 +103,10 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     makeSudoCommand(opts.events, opts.sudo),
     ...makeStorageCommands(() => opts.zfs),
     ...(opts.proc ? makeModuleCommands() : []),
+    ...(opts.processes ? makeProcessCommands(opts.processes) : []),
     ...(opts.extraCommands ?? []),
   ];
+  const shellProcess: ProcessHandle | undefined = opts.processes?.spawn({ kind: 'shell', name: 'bash', state: 'idle', detail: { cwd: initialCwd } });
 
   const bash = new Bash({
     fs: adapter,
@@ -143,6 +152,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       const startedAt = Date.now();
       if (live) {
         opts.events?.emit('exec:start', { line });
+        shellProcess?.update({ state: 'running' });
         notices.push(...((await opts.hooks?.beforeExec?.()) ?? []));
         if (opts.proc) notices.push(...(await refreshProc(opts.zfs)));
         history.push(line);
@@ -154,6 +164,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
           carriedEnv = rest;
         }
         if (r.env?.PWD) cwd = r.env.PWD;
+        shellProcess?.update({ state: 'idle', detail: { cwd } });
         if (opts.proc) notices.push(...(await reconcileProc(opts.zfs)));
         notices.push(...((await opts.hooks?.afterExec?.()) ?? []));
         opts.events?.emit('exec:end', { line, exitCode: r.exitCode, durationMs: Date.now() - startedAt });

@@ -6,12 +6,12 @@ import { Play, Square, RotateCw, Maximize2, Minimize2, X } from 'lucide-react';
 import type { PodSession } from '@/lib/services/pod-session';
 import {
   controlRuntimeLifecycle, observeRuntimeTelemetry,
-  type LifecycleController, type LifecycleSnapshot, type RuntimeTelemetry,
+  type BrowserRuntime, type LifecycleController, type RuntimeTelemetry,
 } from '@artipod/core/apps';
 import styles from './ApplicationPreview.module.css';
 
-function PreviewInstance({ url, control, onLifecycle }: {
-  url: string; control: MutableRefObject<LifecycleController | null>; onLifecycle(value: LifecycleSnapshot): void;
+function PreviewInstance({ url, runtime, control }: {
+  url: string; runtime: BrowserRuntime; control: MutableRefObject<LifecycleController | null>;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [telemetry, setTelemetry] = useState<RuntimeTelemetry | null>(null);
@@ -22,11 +22,13 @@ function PreviewInstance({ url, control, onLifecycle }: {
     const controller = controlRuntimeLifecycle(window, location.origin, source, value => {
       setSuspended(value.state === 'suspended');
       if (value.telemetry) setTelemetry(value.telemetry);
-      onLifecycle(value);
+      runtime.report(value);
     });
     control.current = controller;
-    return () => { stopTelemetry(); controller.dispose(); control.current = null; onLifecycle({ state: 'unknown' }); };
-  }, [control, onLifecycle]);
+    // `kill -STOP/-CONT <pid>` in the shell lands here through the process table.
+    const detach = runtime.attach({ suspend: () => controller.suspend(), resume: () => controller.resume() });
+    return () => { detach(); stopTelemetry(); controller.dispose(); control.current = null; };
+  }, [control, runtime]);
   return <>
     {telemetry && <div className={styles.telemetry} aria-label="App-reported runtime metrics">
       <span>Elapsed: {Math.floor(telemetry.elapsedMs / 1000)} s</span>
@@ -45,7 +47,7 @@ export default function ApplicationPreview({ session, focused, onFocus }: {
 }) {
   const snapshot = useStore(session.runtime.store);
   const [confirm, setConfirm] = useState(false);
-  const [lifecycle, setLifecycle] = useState<LifecycleSnapshot>({ state: 'unknown' });
+  const lifecycle = snapshot.lifecycle ?? { state: 'unknown' as const };
   const control = useRef<LifecycleController | null>(null);
   const busy = snapshot.phase === 'opening';
   const launch = (mode: 'release' | 'development', authorize = false) => {
@@ -70,6 +72,7 @@ export default function ApplicationPreview({ session, focused, onFocus }: {
       {snapshot.phase === 'opening' ? 'Preparing application...' : snapshot.phase === 'running' ? snapshot.mode === 'development' ? 'Development (unapproved)' : 'Approved release' : snapshot.phase === 'error' ? snapshot.error : 'Closed'}
       {snapshot.digest && <span title={snapshot.digest}>{snapshot.digest.slice(0,23)}</span>}
       {snapshot.validUntil && <span>Until {new Date(snapshot.validUntil).toLocaleTimeString()}</span>}
+      {snapshot.phase === 'running' && snapshot.pid !== undefined && <span title="Process id in this session (ps / kill in the terminal)">pid {snapshot.pid}</span>}
       {snapshot.phase === 'running' && suspended && <span>Suspended by you</span>}
       {snapshot.phase === 'running' && lifecycle.state === 'error' && <span>{lifecycle.error}</span>}
     </div>
@@ -79,6 +82,6 @@ export default function ApplicationPreview({ session, focused, onFocus }: {
       <p>This unapproved application will share this origin&apos;s browser authority, including access to your other pods. Authorization lasts only for this workspace session.</p>
       <div><button onClick={() => launch('development', true)}><Play size={16} />Authorize and run</button><button onClick={() => setConfirm(false)}>Cancel</button></div>
     </div>}
-    {snapshot.url && <PreviewInstance key={snapshot.url} url={snapshot.url} control={control} onLifecycle={setLifecycle} />}
+    {snapshot.url && <PreviewInstance key={snapshot.url} url={snapshot.url} runtime={session.runtime} control={control} />}
   </section>;
 }
