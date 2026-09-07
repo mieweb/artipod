@@ -85,6 +85,7 @@ export class PodSessionHost {
             zfs: ctx.fs as unknown as ZenFsLike,
             executionLimitProfile: 'hardened',
             executionLimits: { maxFileSystemBytes: this.options.maxFsBytes },
+            identity: { kind: 'server', name: sessionId },
           }),
           lastUsed: Date.now(),
           busy: false,

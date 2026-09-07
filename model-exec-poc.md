@@ -669,6 +669,26 @@ Success means humans and agents share an explicitly authorized local development
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
 
+### 2026-09-06 - shells know what they are: identity, motd, `uname`, prompt
+
+- Owner could not tell the catalog console from a workspace shell — same
+  banner, same `/ $` prompt, `hostname` said `localhost`, no `uname`. Added
+  `SandboxIdentity { kind, name, mode?, version? }` on `createSandbox` /
+  `ZenFsPodOptions`; it drives `$HOSTNAME`/`$ARTIPOD_KIND`/`$ARTIPOD_NAME`/
+  `$ARTIPOD_MODE`, new `uname [-asnrom]` and `hostname` commands, the
+  `TerminalSession` prompt (`catalog:/ $`, `samples_lifecycle__3:/ $`) and a
+  motd line under the banner in the same words as `uname -o`. Wired: catalog
+  console (`catalog`), pod sessions (`workspace <ref> (<mode>)`), server exec
+  sessions (`server <sessionId>`). `hostname` shadows just-bash's stub that
+  always said `localhost` — an improvement, not a collision (D17 rule is
+  about *real* tools).
+- Live on 2784: catalog console shows
+  `catalog console — no pod open; the whole browser filesystem · uname -a for details`
+  then `catalog:/ $`; workspace shows `samples_lifecycle__3:/ $` and
+  `uname -a` → `artipod samples_lifecycle__3 0.10.1+20 (…) workspace
+  samples/lifecycle:_3 (cow) — a pod session browser`. Core 640 tests, SPA
+  gates, export PASS; bundle swapped; not pushed.
+
 ### 2026-09-06 - MB fix: `lsblk`/`mount` collision → `volumes`
 
 - Owner asked why `mount --help` did not explain mounting. Cause: my inventory

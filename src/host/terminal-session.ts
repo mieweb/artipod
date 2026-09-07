@@ -9,6 +9,8 @@
  * xterm-shaped satisfies it; tests use a fake. No DOM at module top level.
  */
 import type { Sandbox } from '../sandbox/types.js';
+import { hostnameOf } from '../sandbox/types.js';
+import { describeIdentity } from '../sandbox/uname-command.js';
 import type { PodEvents } from '../events.js';
 
 export interface TerminalIO {
@@ -68,10 +70,12 @@ export class TerminalSession {
   private disposed = false;
 
   constructor(private readonly opts: TerminalSessionOptions) {
-    const { io, banner, events } = opts;
+    const { io, banner, events, sandbox } = opts;
     if (banner?.length) {
       for (const line of banner) io.write(`${line}\r\n`);
     }
+    // motd: which shell this is, in the same words `uname -o` uses.
+    if (sandbox.identity) io.write(`${DIM}${describeIdentity(sandbox.identity)} · uname -a for details${RESET}\r\n`);
     if (events) {
       this.disposers.push(
         events.on('agent:tool-call', (e) => {
@@ -87,9 +91,11 @@ export class TerminalSession {
     this.prompt();
   }
 
-  /** The shell prompt string (cwd-derived, like the app's getPrompt). */
+  /** The shell prompt string: `<hostname>:<cwd> $` when the sandbox knows what it is, else `<cwd> $`. */
   private promptText(): string {
-    return `${this.opts.sandbox.getCwd()} $ `;
+    const { sandbox } = this.opts;
+    const host = sandbox.identity ? `${hostnameOf(sandbox.identity)}:` : '';
+    return `${host}${sandbox.getCwd()} $ `;
   }
 
   prompt(): void {

@@ -44,6 +44,7 @@ describe('inventory', () => {
     await zfs.promises.mkdir('/repo');
     registerProcProvider(makeInventoryProvider(inventory));
     sandbox = createSandbox({ zfs, proc: true, cwd: '/repo', inventory, processes: new ProcessTable('catalog'),
+      identity: { kind: 'catalog', name: 'catalog', version: '0.10.1+19' },
       extraCommands: [makeConsoleArtipodCommand(inventory, new ProcessTable('catalog'))] });
   });
 
@@ -111,6 +112,22 @@ describe('inventory', () => {
     expect(renderImageDetail(row, { ...base, parents: ['sha256:bb'], changed: [] })).toContain('changed nothing since bb   (same layer set');
     expect(renderImageDetail(row, { ...base, parents: ['sha256:bb'] })).toContain('changed (parent bb is not readable here');
     expect(renderImageDetail(row, { ...base, parents: [] })).toContain('changed (no parent — first head of this tag');
+  });
+
+  it('knows which shell it is: uname, hostname, env, prompt and motd', async () => {
+    expect((await sandbox.exec('uname')).stdout).toBe('artipod\n');
+    expect((await sandbox.exec('uname -a')).stdout).toBe('artipod catalog 0.10.1+19 catalog console — no pod open; the whole browser filesystem node\n');
+    expect((await sandbox.exec('uname -rn')).stdout).toBe('catalog 0.10.1+19\n');
+    expect((await sandbox.exec('hostname')).stdout).toBe('catalog\n');
+    expect((await sandbox.exec('echo $HOSTNAME $ARTIPOD_KIND')).stdout).toBe('catalog catalog\n');
+    const workspace = createSandbox({ zfs, cwd: '/repo', identity: { kind: 'workspace', name: 'samples/lifecycle:_3', mode: 'cow' } });
+    expect((await workspace.exec('hostname; uname -o; echo $ARTIPOD_MODE')).stdout).toBe('samples_lifecycle__3\nworkspace samples/lifecycle:_3 (cow) — a pod session\ncow\n');
+    const { TerminalSession } = await import('../host/terminal-session.js');
+    let screen = '';
+    new TerminalSession({ sandbox: workspace, io: { write: (t) => { screen += t; } } });
+    expect(screen).toContain('workspace samples/lifecycle:_3 (cow) — a pod session · uname -a for details');
+    expect(screen).toMatch(/samples_lifecycle__3:\/repo \$ $/);
+    workspace.dispose();
   });
 
   it('projects the raw OCI manifest for jq', async () => {

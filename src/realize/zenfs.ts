@@ -164,6 +164,8 @@ export interface ZenFsPodOptions
   processes?: import('../proc/processes.js').ProcessTable;
   /** `images` / `volumes` and `artipod images|volumes`: app-provided inventory. */
   inventory?: import('../proc/inventory.js').InventoryProviders;
+  /** Names every shell of this pod (`hostname`, `uname`, prompt, banner). */
+  identity?: import('../sandbox/types.js').SandboxIdentity;
   /** Manager sync: the remote PodStore push/pull/clone talk to. */
   sync?: {
     remote?: import('../manager/pod-store.js').PodStore;
@@ -474,6 +476,7 @@ export async function createZenFsPod(
         proc: confineTo ? false : proc,
         processes: options.processes,
         inventory: options.inventory,
+        identity: options.identity,
         cwd: confineTo ? '/' : defaultCwd,
         onEdit: options.onEdit && confineTo
           ? (path) => options.onEdit!(`${confineTo}${path.startsWith('/') ? '' : '/'}${path}`)

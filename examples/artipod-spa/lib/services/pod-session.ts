@@ -266,6 +266,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       tasks: () => scheduler.list(),
       processes,
       inventory,
+      identity: { kind: 'workspace', name: route.id, mode: route.mode, version: process.env.NEXT_PUBLIC_ARTIPOD_VERSION },
       extraCommands: [publishCmd],
     },
   );

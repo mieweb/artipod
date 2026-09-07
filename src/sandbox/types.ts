@@ -32,6 +32,26 @@ export const verbTree = (tree: Record<string, unknown>): Completer => (args) => 
   return node && typeof node === 'object' ? Object.keys(node as object) : [];
 };
 
+/**
+ * What this shell is a shell *of*. Drives `hostname`, `uname -a`, the prompt
+ * and the banner so a user can always tell a catalog console from a pod
+ * workspace from a server exec session.
+ */
+export interface SandboxIdentity {
+  /** `catalog` (no pod), `workspace` (a pod session), `server` (an exec session), … */
+  kind: string;
+  /** Human label: the ref, workspace id, or session id. */
+  name: string;
+  /** e.g. `cow` / `rw` / `ro` for workspaces. */
+  mode?: string;
+  /** The artipod version string shown by `uname -r` and the banner. */
+  version?: string;
+}
+
+/** `samples/lifecycle:_3` → `samples_lifecycle__3`: the hostname form of a name. */
+export const hostnameOf = (identity: SandboxIdentity): string =>
+  identity.kind === 'catalog' ? 'catalog' : identity.name.replace(/[^a-zA-Z0-9._-]+/g, '_');
+
 export interface SandboxExecResult {
   stdout: string;
   stderr: string;
@@ -74,4 +94,6 @@ export interface Sandbox {
   zfs: ZenFsLike;
   /** Retire this shell: removes its row from the process table. Idempotent. */
   dispose(): void;
+  /** What this shell is a shell of, when the host said. */
+  identity?: SandboxIdentity;
 }

@@ -96,6 +96,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
         const inventory = catalogInventory();
         const unregisterInventory = registerProcProvider(makeInventoryProvider(inventory));
         const rootSandbox = createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents, processes, inventory,
+          identity: { kind: 'catalog', name: 'catalog', version: process.env.NEXT_PUBLIC_ARTIPOD_VERSION },
           extraCommands: [factoryReset, makeConsoleArtipodCommand(inventory, processes)] });
         disposeConsole = () => { rootSandbox.dispose(); unregisterProcesses(); unregisterInventory(); void processes.dispose(); };
         setRootSandbox(rootSandbox);

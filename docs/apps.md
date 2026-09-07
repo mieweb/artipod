@@ -82,6 +82,12 @@ and expires after at most one hour or when stopped/closed.
 
 ## Processes: `ps`, `kill`, `/proc/<pid>`
 
+Every shell announces what it is a shell *of*: the banner ends with a motd
+line, the prompt is `<hostname>:<cwd> $` (`catalog:/ $` for the catalog
+console, `samples_lifecycle__3:/ $` for a workspace), and `uname -a` /
+`hostname` / `$ARTIPOD_KIND` say the same thing. Consumers set it with
+`createSandbox({ identity: { kind, name, mode, version } })`.
+
 A pod session is a PID namespace. pid 1 is the session; the terminal shell,
 each running app and each background task is a row. Visibility is downward
 only: a shell sees its session, never another tab or the server.

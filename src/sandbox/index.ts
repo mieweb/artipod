@@ -29,11 +29,14 @@ import { makeNotesCommand } from './notes-command.js';
 import { makeStorageCommands } from './storage-command.js';
 import { makeSudoCommand } from './sudo-command.js';
 import type { PodEvents } from '../events.js';
-import type { CompletableCommand, CompletionResult, Sandbox, SandboxExecOptions, ZenFsLike } from './types.js';
+import type { CompletableCommand, CompletionResult, Sandbox, SandboxExecOptions, SandboxIdentity, ZenFsLike } from './types.js';
+import { hostnameOf } from './types.js';
+import { makeUnameCommands } from './uname-command.js';
 import { ZenFsAdapter } from './zenfs-adapter.js';
 
-export type { CompletableCommand, Completer, CompletionResult, Sandbox, SandboxExecOptions, SandboxExecResult, ZenFsLike } from './types.js';
-export { verbTree, withCompletion } from './types.js';
+export type { CompletableCommand, Completer, CompletionResult, Sandbox, SandboxExecOptions, SandboxExecResult, SandboxIdentity, ZenFsLike } from './types.js';
+export { hostnameOf, verbTree, withCompletion } from './types.js';
+export { describeIdentity, makeUnameCommands } from './uname-command.js';
 export { SHELL_NOTES } from './notes-command.js';
 export { ZenFsAdapter } from './zenfs-adapter.js';
 export { SUDO_DENIED_MESSAGE } from './sudo-command.js';
@@ -79,6 +82,8 @@ export interface CreateSandboxOptions {
   processes?: ProcessTable;
   /** Server images + local workspaces: adds `images` and `volumes`. */
   inventory?: InventoryProviders;
+  /** Names this shell: `hostname`, `uname`, `$HOSTNAME`, `$ARTIPOD_KIND`, and the host's prompt/banner. */
+  identity?: SandboxIdentity;
   /**
    * Host work to run around each non-transient command, e.g. materializing
    * state into the filesystem. Returned messages are appended to stderr, so a
@@ -112,9 +117,13 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     ...(opts.proc ? makeModuleCommands() : []),
     ...(opts.processes ? makeProcessCommands(opts.processes) : []),
     ...(opts.inventory ? makeInventoryCommands(opts.inventory) : []),
+    ...(opts.identity ? makeUnameCommands(opts.identity) : []),
     ...(opts.extraCommands ?? []),
   ];
   const shellProcess: ProcessHandle | undefined = opts.processes?.spawn({ kind: 'shell', name: 'bash', state: 'idle', detail: { cwd: initialCwd } });
+  const identityEnv = opts.identity
+    ? { HOSTNAME: hostnameOf(opts.identity), ARTIPOD_KIND: opts.identity.kind, ARTIPOD_NAME: opts.identity.name, ...(opts.identity.mode ? { ARTIPOD_MODE: opts.identity.mode } : {}) }
+    : {};
 
   const bash = new Bash({
     fs: adapter,
@@ -123,6 +132,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       HOME: initialCwd,
       USER: 'user',
       TERM: 'xterm-256color',
+      ...identityEnv,
       // no TTY — pagers degrade to cat; ordinary aliases, so unalias/redefine work
       BASH_ALIAS_less: 'cat',
       BASH_ALIAS_more: 'cat',
@@ -229,6 +239,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     fs: adapter,
     zfs: opts.zfs,
     dispose: () => shellProcess?.exit(),
+    identity: opts.identity,
   };
   return sandbox;
 }
