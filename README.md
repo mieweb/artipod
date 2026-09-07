@@ -155,6 +155,8 @@ Built for real disconnection profiles: a 24-hour offline clinic visit, a light-m
 
 ## Documentation
 
+See the [FAQ](docs/faq.md) for comparisons with Zarf and Skopeo, offline-readiness requirements, and OCI interoperability limits.
+
 | Doc | Contents |
 |---|---|
 | [docs/containers.md](docs/containers.md) | Orientation for Docker/Podman/Kubernetes users: concept map, where each runtime fits, the pod-term collision |

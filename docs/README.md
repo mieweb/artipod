@@ -4,6 +4,7 @@ Design-and-status documentation for `@artipod/core`. Every doc carries a status 
 
 | Doc | Scope | Plan phases |
 |---|---|---|
+| [faq.md](faq.md) | Comparisons with Zarf and Skopeo, offline readiness, and OCI interoperability limits | - |
 | [containers.md](containers.md) | Orientation for Docker/Podman/Kubernetes users: concept map, runtime detection, the pod-term collision | — |
 | [on-disk-layout.md](on-disk-layout.md) | What lands on disk: `~/.artipod`, the per-pod `/.artipod` store, plaintext vs ciphertext | — |
 | [browser.md](browser.md) | ZenFS storage, ingest API, devices | 0–3, 7 |
