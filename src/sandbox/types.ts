@@ -49,4 +49,6 @@ export interface Sandbox {
   fs: import('./zenfs-adapter.js').ZenFsAdapter;
   /** The raw node-like fs backing the sandbox (same store as `fs`). */
   zfs: ZenFsLike;
+  /** Retire this shell: removes its row from the process table. Idempotent. */
+  dispose(): void;
 }

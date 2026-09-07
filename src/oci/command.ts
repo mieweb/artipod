@@ -14,6 +14,8 @@ import { defineCommand } from 'just-bash/browser';
 import type { ZenFsLike } from '../sandbox/types.js';
 import type { PodEvents } from '../events.js';
 import { renderTable } from '../sandbox/table.js';
+import { renderImages, renderVolumes } from '../sandbox/inventory-command.js';
+import type { InventoryProviders } from '../proc/inventory.js';
 import type { OciStore } from './store.js';
 import type { OciTransport } from './transport.js';
 import { parseImageRef, formatImageRef } from './transport.js';
@@ -54,6 +56,8 @@ export interface ArtipodCommandContext {
    * App-provided; absent = the verb explains there is no scheduler here.
    */
   tasks?: () => PsTask[];
+  /** `artipod images` / `artipod lsblk` — app-provided server refs and local workspaces. */
+  inventory?: InventoryProviders;
   /** Phase 6.5: login/lock/status against the pod's authority. */
   authority?: {
     /** App-provided authentication → lease + keys (raw, or device-unwrapped CryptoKeys). */
@@ -129,6 +133,8 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   lock [--all|<pod>]                   drop keys now (reads fail EACCES until login)
   status                               lease + capability expiries (also /proc/keys)
   ps                                   background tasks: sync retries, key renewal, schedules
+  images                               refs on the server (what this machine can open or run)
+  lsblk [-m]                           local workspaces; MOUNTPOINT set while a tab has one open
   image pull <ref> --index             index-level pull: metadata + placeholders only
   hydrate <ref> <path|glob>            fetch the lazy layers backing matching paths
   dehydrate <ref> <glob>               evict layer blobs; placeholders + indexes stay
@@ -186,6 +192,16 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
         if (entries.length === 0) return ok('locked — no live leases or capabilities (artipod login to restore)\n');
         const lines = entries.map((e) => `${e.kind.padEnd(10)} ${e.name.padEnd(32)} expires ${new Date(e.expiresAt).toISOString()}`);
         return ok(`${lines.join('\n')}\n`);
+      }
+
+      if (group === 'images') {
+        if (!podContext.inventory?.images) return fail('artipod images: no server catalog in this context');
+        return ok(renderImages(await podContext.inventory.images()));
+      }
+
+      if (group === 'lsblk') {
+        if (!podContext.inventory?.volumes) return fail('artipod lsblk: no workspace registry in this context');
+        return ok(renderVolumes(await podContext.inventory.volumes(), rest.includes('-m')));
       }
 
       if (group === 'ps') {

@@ -28,3 +28,7 @@ export type { ProcEntry } from './snapshot.js';
 export { reconcileProc } from './reconcile.js';
 export { registerBuiltinProviders, storageProvider } from './storage-provider.js';
 export { makePodManifestProvider, registerPodManifestProvider } from './pod-provider.js';
+export { PROCESS_SIGNALS, ProcessError, ProcessTable, registerProcessTable } from './processes.js';
+export type { ProcessHandle, ProcessInfo, ProcessKind, ProcessSignal, ProcessSpec } from './processes.js';
+export { makeInventoryProvider, mountSlug, shortDigest } from './inventory.js';
+export type { ImageRow, InventoryProviders, VolumeRow } from './inventory.js';

@@ -61,6 +61,11 @@
       "types": "./dist/docker/index.d.ts",
       "default": "./dist/docker/index.js"
     },
+    "./apps": {
+      "types": "./dist/apps/index.d.ts",
+      "default": "./dist/apps/index.js"
+    },
+    "./apps/runtime-sw.js": "./dist/apps/runtime-sw.js",
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -86,7 +91,7 @@
     "url": "https://github.com/mieweb/artipod/issues"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && cp src/apps/runtime-sw.js dist/apps/runtime-sw.js",
     "postbuild": "node scripts/buildinfo.mjs && node scripts/devlink.mjs",
     "build:ui": "cd examples/artipod-spa && npm run export:static && cd ../.. && rm -rf dist-ui && cp -R examples/artipod-spa/out dist-ui",
     "test": "vitest run",
@@ -144,6 +149,10 @@
     "dockerode": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "core-js": "3.49.0",
+    "jose": "6.2.12"
   },
   "overrides": {
     "minimatch@9": "^9.0.7",

@@ -16,6 +16,7 @@ export interface Route {
   id: string;
   isRef: boolean;
   mode: OpenMode;
+  runIntent?: boolean;
   /** ?publish=<name:tag> — publish right after the workspace boots. */
   publishIntent?: string;
 }
@@ -57,7 +58,7 @@ export function parseRoute(search: string): Route | null {
   if (!id) return null;
   const modeParam = params.get('mode');
   const mode: OpenMode = modeParam === 'cow' || modeParam === 'ro' ? modeParam : 'rw';
-  return { id, isRef: id.includes(':'), mode, publishIntent: params.get('publish') ?? undefined };
+  return { id, isRef: id.includes(':'), mode, runIntent: params.get('run') === '1', publishIntent: params.get('publish') ?? undefined };
 }
 
 // ── singletons ───────────────────────────────────────────────────────────────

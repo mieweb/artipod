@@ -19,6 +19,9 @@ import { workspaceStore, initialWorkspace } from '../stores/workspace';
 import { brokerStore } from '../stores/broker';
 import { navigateTo } from '../stores/route';
 import { nextDraftRef } from '../boot';
+import { createBrowserRuntime, type BrowserRuntime } from '@artipod/core/apps';
+import { ProcessTable, registerProcessTable, registerProcProvider, makeInventoryProvider } from '@artipod/core/proc';
+import { catalogInventory } from './inventory';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
 
@@ -28,6 +31,7 @@ export interface PodSession {
   sandbox: Sandbox;
   events: PodEvents;
   scheduler: TaskScheduler;
+  runtime: BrowserRuntime;
   publish(target?: string): Promise<string>;
   /** Suggested publish target for the panel (fork → next free _ tag). */
   suggestPublishValue(): Promise<string>;
@@ -211,6 +215,13 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     if (wantsPush(syncState, event) && event.type !== 'edit') void scheduler.run(PUSH_TASK);
   };
 
+  // The session is a PID namespace (D16): shells, running apps and tasks are
+  // its processes; `ps` / `kill` and /proc/<pid> read from this table.
+  const processes = new ProcessTable(`${route.id}:${route.mode}`);
+  const unregisterProcesses = registerProcessTable(processes);
+  const inventory = catalogInventory();
+  const unregisterInventory = registerProcProvider(makeInventoryProvider(inventory));
+
   const pod = await createZenFsPod(
     {
       mounts: [{ name: 'root', path: '/', source: { kind: 'backend', backend: info?.backend ?? 'indexeddb' }, mode: 'rw' }],
@@ -253,6 +264,8 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       publish: doPublish,
       // `artipod ps` in this shell shows the client's live schedule.
       tasks: () => scheduler.list(),
+      processes,
+      inventory,
       extraCommands: [publishCmd],
     },
   );
@@ -296,8 +309,10 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   });
   void scheduler.run(PUSH_TASK); // boot retry (offline session left work behind)
   scheduler.schedule(PUSH_TASK, 15_000); // slow interval; re-armed after each run
+  const pushProcess = processes.spawn({ kind: 'task', name: PUSH_TASK, state: 'idle', signal: { TERM: () => scheduler.cancel(PUSH_TASK) } });
   const rearm = scheduler.onChange(() => {
     const task = scheduler.list().find((t) => t.name === PUSH_TASK);
+    if (task) pushProcess.update({ state: task.state, detail: task.lastResult ? { last: task.lastResult } : undefined });
     if (task && task.state === 'idle' && task.nextRunAt === undefined) scheduler.schedule(PUSH_TASK, 15_000);
   });
   // Reconnect + lease renewal: broker snapshots drive both retry and re-key.
@@ -337,12 +352,21 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   (window as unknown as { __artipod?: unknown }).__artipod = pod;
   workspaceStore.setState({ phase: 'ready', root: pod.basis ? pod.basis.at : blankRoot });
 
+  const runtime = createBrowserRuntime({
+    read: async path => new Uint8Array(await pod.zfs.promises.readFile(path)),
+    list: async path => await pod.zfs.promises.readdir(path) as string[],
+    stat: async path => await pod.zfs.promises.lstat(path),
+  }, pod.basis ? pod.basis.at : blankRoot, { processes, detail: { pod: route.id } });
+  const stopPreview = () => runtime.stop();
+  window.addEventListener('pagehide', stopPreview);
+
   const session: PodSession = {
     route,
     pod,
     sandbox,
     events,
     scheduler,
+    runtime,
     publish: doPublish,
     async suggestPublishValue(): Promise<string> {
       if (!route.isRef) return `me/${route.id}:_1`;
@@ -355,6 +379,8 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       }
     },
     async close(): Promise<void> {
+      runtime.dispose();
+      window.removeEventListener('pagehide', stopPreview);
       const closing = (async () => {
         // Flush-on-close (U5): a mid-flight or pending push finishes BEFORE the
         // pod dies — the aborted-push residue from reload-navigation, fixed
@@ -375,6 +401,9 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         rearm();
         scheduler.cancel(PUSH_TASK);
         if (probeTimer) clearTimeout(probeTimer);
+        await processes.dispose();
+        unregisterProcesses();
+        unregisterInventory();
         // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
         // keys, hydration) unregister — the next session must not collide.
         pod.dispose();
