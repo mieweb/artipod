@@ -29,10 +29,11 @@ import { makeNotesCommand } from './notes-command.js';
 import { makeStorageCommands } from './storage-command.js';
 import { makeSudoCommand } from './sudo-command.js';
 import type { PodEvents } from '../events.js';
-import type { CompletionResult, Sandbox, SandboxExecOptions, ZenFsLike } from './types.js';
+import type { CompletableCommand, CompletionResult, Sandbox, SandboxExecOptions, ZenFsLike } from './types.js';
 import { ZenFsAdapter } from './zenfs-adapter.js';
 
-export type { CompletionResult, Sandbox, SandboxExecOptions, SandboxExecResult, ZenFsLike } from './types.js';
+export type { CompletableCommand, Completer, CompletionResult, Sandbox, SandboxExecOptions, SandboxExecResult, ZenFsLike } from './types.js';
+export { verbTree, withCompletion } from './types.js';
 export { SHELL_NOTES } from './notes-command.js';
 export { ZenFsAdapter } from './zenfs-adapter.js';
 export { SUDO_DENIED_MESSAGE } from './sudo-command.js';
@@ -189,11 +190,22 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       const tokenMatch = line.match(/[^\s]*$/);
       const token = tokenMatch ? tokenMatch[0] : '';
       const replaceStart = line.length - token.length;
-      if (!token) return { candidates: [], replaceStart };
 
       const before = line.slice(0, replaceStart).trimEnd();
       const isCommandPos =
         before === '' || /[|;&(]$|\$\($|&&$|\|\|$/.test(before) || before.endsWith('`');
+
+      // Inside a custom command: ask it for sub-verbs (`artipod im<Tab>`, `kill -<Tab>`).
+      if (!isCommandPos) {
+        const words = before.split(/[|;&(`]|\$\(/).pop()?.trim().split(/\s+/) ?? [];
+        const owner = (commands as CompletableCommand[]).find((c) => c.name === words[0] && c.complete);
+        if (owner?.complete) {
+          const all = await owner.complete(words.slice(1), token);
+          const candidates = Array.from(new Set(all.filter((c) => c.startsWith(token)))).sort();
+          if (candidates.length > 0 || !token.includes('/')) return { candidates, replaceStart };
+        }
+      }
+      if (!token) return { candidates: [], replaceStart };
 
       const q = shQuote(token);
       const script =
@@ -205,7 +217,9 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
       const dirCheck = await this.exec(`compgen -d ${q}`, { transient: true });
       const dirs = new Set(splitLines(dirCheck.stdout));
 
-      const candidates = Array.from(new Set(splitLines(r.stdout)))
+      // compgen knows nothing about the custom commands; add them at command position.
+      const custom = isCommandPos && !token.includes('/') ? commands.map((c) => c.name).filter((n) => n.startsWith(token)) : [];
+      const candidates = Array.from(new Set([...splitLines(r.stdout), ...custom]))
         .sort()
         .map((c) => (dirs.has(c) ? `${c}/` : c));
       return { candidates, replaceStart };

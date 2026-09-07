@@ -71,4 +71,16 @@ describe('inventory', () => {
     expect(r.stdout).toContain('Mountpoint:\t/open/samples_lifecycle__3');
     expect((await sandbox.exec('cat /proc/workspaces/ba772299/status')).stdout).toContain('Mounted:\tno');
   });
+
+  it('tab-completes custom commands and their sub-verbs', async () => {
+    expect((await sandbox.complete('art')).candidates).toEqual(['artipod']);
+    expect((await sandbox.complete('lsb')).candidates).toEqual(['lsblk']);
+    expect(await sandbox.complete('artipod ')).toEqual({ candidates: ['help', 'images', 'lsblk', 'ps'], replaceStart: 8 });
+    expect((await sandbox.complete('artipod im')).candidates).toEqual(['images']);
+    expect((await sandbox.complete('artipod lsblk ')).candidates).toEqual(['-m']);
+    expect((await sandbox.complete('artipod images ')).candidates).toEqual([]);
+    expect((await sandbox.complete('kill -')).candidates).toEqual(['-CONT', '-KILL', '-STOP', '-TERM']);
+    expect((await sandbox.complete('echo hi; kill -S')).candidates).toEqual(['-STOP']);
+    expect((await sandbox.complete('images ')).candidates).toEqual([]);
+  });
 });

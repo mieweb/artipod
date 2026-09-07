@@ -14,6 +14,7 @@ import { defineCommand } from 'just-bash/browser';
 import type { ZenFsLike } from '../sandbox/types.js';
 import type { PodEvents } from '../events.js';
 import { renderTable } from '../sandbox/table.js';
+import { verbTree, withCompletion } from '../sandbox/types.js';
 import { renderImages, renderVolumes } from '../sandbox/inventory-command.js';
 import type { InventoryProviders } from '../proc/inventory.js';
 import type { OciStore } from './store.js';
@@ -154,8 +155,18 @@ async function resolveStoredRef(store: OciStore, refArg: string): Promise<{ disp
   return stored ? { display: stored.ref, manifestDigest: stored.manifestDigest } : null;
 }
 
+/** `artipod <Tab>` — the verb tree, kept next to USAGE so they drift together. */
+const VERBS = {
+  image: { pull: {}, ls: {}, inspect: {}, history: {}, mount: {}, umount: {} },
+  layer: { inspect: {}, mount: {} },
+  snapshot: { create: {}, ls: {}, diff: {}, mount: {}, checkout: {} },
+  commit: {}, compact: {}, gc: {}, push: {}, pull: {}, clone: {}, open: {}, files: {},
+  hydrate: {}, dehydrate: {}, publish: {}, login: {}, lock: {}, status: {}, ps: {},
+  images: {}, lsblk: {}, offline: { on: {}, off: {} }, examples: {},
+};
+
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
-  defineCommand('artipod', async (args) => {
+  withCompletion(defineCommand('artipod', async (args) => {
     const { store, zfs, transport, events, snapshots, remote, authority, hydrator, pushBasis, publish } = podContext;
     const [group, sub, ...rest] = args;
 
@@ -559,4 +570,4 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
     } catch (error) {
       return fail(`artipod: ${(error as Error).message}`);
     }
-  });
+  }), verbTree(VERBS));

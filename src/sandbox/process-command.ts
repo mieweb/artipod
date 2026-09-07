@@ -9,6 +9,7 @@ import { defineCommand } from 'just-bash/browser';
 import type { ExecResult } from 'just-bash/browser';
 import { PROCESS_SIGNALS, ProcessError, type ProcessSignal, type ProcessTable } from '../proc/processes.js';
 import { renderTable } from './table.js';
+import { withCompletion } from './types.js';
 
 const USAGE = {
   ps: `usage: ps [-l]
@@ -33,7 +34,7 @@ const age = (startedAt: number, now: number): string => {
 };
 
 export function makeProcessCommands(table: ProcessTable) {
-  const ps = defineCommand('ps', async (args) => {
+  const ps = withCompletion(defineCommand('ps', async (args) => {
     if (args.includes('--help') || args.includes('-h')) return ok(USAGE.ps);
     const long = args.includes('-l');
     const now = Date.now();
@@ -46,9 +47,9 @@ export function makeProcessCommands(table: ProcessTable) {
     });
     const header = ['PID', 'PPID', 'KIND', 'STATE', 'TIME', 'NAME', ...(long ? ['DETAIL'] : [])];
     return ok(renderTable(header, rows, [0, 1]));
-  });
+  }), () => ['-l']);
 
-  const kill = defineCommand('kill', async (args) => {
+  const kill = withCompletion(defineCommand('kill', async (args) => {
     if (args.includes('--help') || args.includes('-h')) return ok(USAGE.kill);
     let signal: ProcessSignal = 'TERM';
     const pids: number[] = [];
@@ -75,7 +76,9 @@ export function makeProcessCommands(table: ProcessTable) {
       }
     }
     return errors.length ? fail(`${errors.join('\n')}\n`) : ok('');
-  });
+  }), (_args, token) => token.startsWith('-')
+    ? PROCESS_SIGNALS.map((s) => `-${s}`)
+    : table.list().filter((p) => p.kind !== 'init').map((p) => String(p.pid)));
 
   return [ps, kill];
 }

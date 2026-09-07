@@ -9,6 +9,29 @@
 /** The node-like ZenFS `fs` object (or a bound context with the same shape). */
 export type ZenFsLike = (typeof import('@zenfs/core'))['fs'];
 
+/**
+ * Sub-verb completion for a custom command: `args` are the words already
+ * typed after the command name, `token` the (possibly empty) word being
+ * completed. Return every candidate; the sandbox filters by prefix.
+ */
+export type Completer = (args: string[], token: string) => string[] | Promise<string[]>;
+
+export type CompletableCommand = import('just-bash/browser').CustomCommand & { complete?: Completer };
+
+/** Attach sub-verb completion to a just-bash custom command. */
+export const withCompletion = <C extends import('just-bash/browser').CustomCommand>(command: C, complete: Completer): C & { complete: Completer } =>
+  Object.assign(command, { complete });
+
+/** A completer for a fixed verb tree: `{ image: { pull: {}, ls: {} }, ps: {} }`. */
+export const verbTree = (tree: Record<string, unknown>): Completer => (args) => {
+  let node: unknown = tree;
+  for (const word of args) {
+    if (!node || typeof node !== 'object' || !(word in (node as object))) return [];
+    node = (node as Record<string, unknown>)[word];
+  }
+  return node && typeof node === 'object' ? Object.keys(node as object) : [];
+};
+
 export interface SandboxExecResult {
   stdout: string;
   stderr: string;

@@ -8,6 +8,7 @@ import type { ExecResult } from 'just-bash/browser';
 import { shortDigest, type ImageRow, type InventoryProviders, type VolumeRow } from '../proc/inventory.js';
 import type { ProcessTable } from '../proc/processes.js';
 import { renderTable } from './table.js';
+import { verbTree, withCompletion } from './types.js';
 
 const ok = (stdout: string): ExecResult => ({ stdout, stderr: '', exitCode: 0 });
 const fail = (stderr: string, exitCode = 1): ExecResult => ({ stdout: '', stderr, exitCode });
@@ -56,11 +57,11 @@ export function makeInventoryCommands(providers: InventoryProviders) {
     if (!providers.images) return fail('images: no server catalog in this context\n');
     return ok(renderImages(await providers.images()));
   });
-  const lsblk = defineCommand('lsblk', async (args) => {
+  const lsblk = withCompletion(defineCommand('lsblk', async (args) => {
     const h = help('lsblk', args); if (h) return h;
     if (!providers.volumes) return fail('lsblk: no workspace registry in this context\n');
     return ok(renderVolumes(await providers.volumes(), args.includes('-m')));
-  });
+  }), () => ['-m']);
   const mount = defineCommand('mount', async (args) => {
     const h = help('lsblk', args); if (h) return h;
     if (!providers.volumes) return fail('mount: no workspace registry in this context\n');
@@ -80,7 +81,7 @@ publish, login, …) live in a workspace shell — open one from the catalog.
 
 /** `artipod` for consoles without a pod: inventory + processes only. */
 export function makeConsoleArtipodCommand(providers: InventoryProviders, processes?: ProcessTable) {
-  return defineCommand('artipod', async (args) => {
+  return withCompletion(defineCommand('artipod', async (args) => {
     const [group] = args;
     if (!group || group === '--help' || group === '-h' || group === 'help') return ok(CONSOLE_USAGE);
     if (group === 'images') {
@@ -96,5 +97,5 @@ export function makeConsoleArtipodCommand(providers: InventoryProviders, process
       return ok(renderTable(['PID', 'KIND', 'STATE', 'NAME'], processes.list().map((p) => [String(p.pid), p.kind, p.state, p.name]), [0]));
     }
     return fail(`artipod: '${group}' needs an open pod — this console has none\n${CONSOLE_USAGE}`);
-  });
+  }), verbTree({ images: {}, lsblk: { '-m': {} }, ps: {}, help: {} }));
 }
