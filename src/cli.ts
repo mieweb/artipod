@@ -18,6 +18,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { stdin, stdout, exit, argv, env } from 'node:process';
 import { createZenFsPod, type ZenFsPod } from './realize/zenfs.js';
+import { describeIdentity, hostnameOf } from './sandbox/index.js';
+import { ProcessTable, registerProcessTable } from './proc/processes.js';
 import type { PodManifest } from './manifest.js';
 import { OciLayoutPodStore } from './manager/pod-store.js';
 import { newSuperblock, OCI_ROOT, SUPERBLOCK_PATH, type PodSuperblock } from './oci/store.js';
@@ -446,12 +448,24 @@ async function bootPod(args: RunArgs, dir?: string): Promise<ZenFsPod> {
   await mkdir(resolve(args.store), { recursive: true });
   const store = new OciLayoutPodStore(nodePodFs(), resolve(args.store));
   await store.init();
+  // The shell's identity: `uname -a`, `hostname`, prompt and banner all read it.
+  const identity = {
+    kind: 'pod',
+    name: args.ref ?? (dir ? basename(dir) : 'ephemeral'),
+    mode: dir ? (args.dir ? 'kept, --dir' : 'kept') : '--rm',
+    version: (await versionLine()).replace(/^artipod /, ''),
+  };
+  // One process namespace per boot: `ps` / `kill` and /proc/<pid> read from it.
+  const processes = new ProcessTable(identity.name);
+  registerProcessTable(processes);
   return createZenFsPod(manifest, {
     proc: true,
     cwd: '/',
     sync: { remote: store },
     oci: { transport: new DirectRegistryTransport() },
     hydration: {},
+    processes,
+    identity,
   });
 }
 
@@ -805,12 +819,14 @@ async function repl(pod: ZenFsPod, note?: string): Promise<number> {
   });
 
   const prompt = () => {
-    rl.setPrompt(`${sandbox.getCwd()} $ `);
+    const host = sandbox.identity ? `${hostnameOf(sandbox.identity)}:` : '';
+    rl.setPrompt(`${host}${sandbox.getCwd()} $ `);
     rl.prompt();
   };
 
   const banner = [
     `artipod ${pod.oci.store.getSuperblock().podId} — type \`artipod\` for pod verbs, \`exit\` to leave`,
+    ...(sandbox.identity ? [`${describeIdentity(sandbox.identity)} · uname -a for details`] : []),
     `mounts: ${pod.mountTable.map((m) => `${m.path}${m.readonly ? ':ro' : ''}`).join(', ')}`,
     'to see it in action, type: examples',
     ...(note ? [note] : []),

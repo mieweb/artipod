@@ -63,6 +63,14 @@ describe('artipod CLI', () => {
     expect(gone.code).not.toBe(0);
   });
 
+  it('the pod shell knows what it is: uname/hostname/ps carry the pod identity', async () => {
+    const r = await run(['run', '--rm', '-c', 'uname -a; hostname; ps']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^artipod ephemeral \S+ .*pod ephemeral \(--rm\) — artipod run on this machine node\n/);
+    expect(r.stdout).toContain('\nephemeral\n');
+    expect(r.stdout).toMatch(/\n\s+1\s+0 init\s+running .* ephemeral\n\s+2\s+1 shell running .* bash\n/);
+  });
+
   it('keeps pods by default: `artipod pods` lists them and a pod-id prefix resumes', async () => {
     const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
     try {

@@ -669,6 +669,31 @@ Success means humans and agents share an explicitly authorized local development
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
 
+### 2026-09-07 - `artipod run` is a pod too: identity + process table on the CLI
+
+- Owner: "`./dist/cli.js run` does not show uname, shouldn't this be the
+  catalog?" It is not the catalog — `run` boots one pod (kept under
+  `$ARTIPOD_PODS`, or `--rm`), so it gets identity kind `pod`:
+  `uname -a` → `artipod <podId|ref> <version> pod <name> (kept|--rm) — artipod
+  run on this machine node`, prompt `<podId>:/ $`, motd under the banner.
+  There is no pod-less interactive console on the CLI (the browser catalog
+  console has no equivalent); `artipod pods` is the closest thing.
+- Owner then compared `ps` between a browser workspace and a CLI pod: the CLI
+  said `ps: command not found`. Same gap the catalog console had earlier —
+  `bootPod` never created a `ProcessTable`, so `ps`/`kill`/`/proc/<pid>` were
+  never registered. Fixed: one table per boot (pid 1 = the pod, pid 2 = the
+  shell); `-c` runs show it too. New `cli.test.ts` case covers
+  uname/hostname/ps in `run --rm -c`.
+- On "three shells": there is one shell (just-bash via `createSandbox()`),
+  two line disciplines — `node:readline` in `cli.ts repl()` and
+  `TerminalSession` (xterm byte stream; shared by browser and server). The
+  prompt/motd strings are the only duplication; a `sandbox.promptText()`
+  helper would remove it — noted, not done in #57.
+- Gates: lint, build, tsc PASS; vitest 610 passed / 28 failed — all 28 are
+  the Docker-backed suites (`containerExecution`, `manifestDocker`,
+  `northStar` 4–5, `tools` RunTerminal) because Docker Desktop was not
+  running; they passed earlier today with it up. No SPA change. Not pushed.
+
 ### 2026-09-06 - shells know what they are: identity, motd, `uname`, prompt
 
 - Owner could not tell the catalog console from a workspace shell — same

@@ -25,6 +25,7 @@ export function describeIdentity(identity: SandboxIdentity): string {
   switch (identity.kind) {
     case 'catalog': return 'catalog console — no pod open; the whole browser filesystem';
     case 'workspace': return `workspace ${identity.name}${identity.mode ? ` (${identity.mode})` : ''} — a pod session`;
+    case 'pod': return `pod ${identity.name}${identity.mode ? ` (${identity.mode})` : ''} — artipod run on this machine`;
     case 'server': return `server exec session ${identity.name}`;
     default: return `${identity.kind} ${identity.name}${identity.mode ? ` (${identity.mode})` : ''}`;
   }
