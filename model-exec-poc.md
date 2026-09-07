@@ -53,6 +53,7 @@ All phases run on `main`.
 |---|---|---|
 | M0 - admission and browser runtime | in progress; MVP committed `0f3fcf6`: catalog Run, signed/dev admission, worker projection, preview lifecycle, telemetry. Open: CasePod mount selection, D4 record + bypass audit, offline cache/revocation port, mapped Sources replay, full-gate run | pending |
 | MA - apps layer, process namespaces, `ps`/`kill` | owner-requested 2026-09-06; implemented in PR #57 (`2f35fa7`, `ed56df7`, follow-up): `@artipod/core/apps`, `ProcessTable` + `/proc/<pid>`, `ps`/`kill`, sample at `examples/lifecycle-app`, runbook `docs/apps.md`; live-verified on 2784 | earned pending PR review; not an M0 gate |
+| MB - inventory depth: `-v`/`-vv`, hydration, `--json`, `/proc` manifests, glossary | owner-approved 2026-09-06 ("lets do it"); runs inside PR #57 | pending |
 | M1 - semantic discovery and composition | narrow catalog discovery/UI overlap authorized 2026-09-06 and shipped in `0f3fcf6` (SPAPod descriptor + Run); full phase depends on M0 | pending |
 | M2 - submission, review, and approved distribution | not started; depends on M1 | pending |
 | M3 - agent-driven edits | not started; depends on M2 and provider confirmation | pending |
@@ -80,6 +81,7 @@ The execution-admission direction was approved by the owner on 2026-09-05. Imple
 | D14 | Preview lifecycle: Stop is a cooperative, acknowledged in-place suspend (`artipod:runtime-lifecycle/v1`); Close revokes and tears down; Reload starts a fresh instance | Owner-selected 2026-09-06, shipped in `0f3fcf6`. Not a generic iframe freeze; unsupported/unresponsive apps are shown as such. Telemetry is app-reported, informational only. |
 | D15 | The browser app runtime ships as the core subpath `@artipod/core/apps` (browser-safe, adapter-injected, imports only dependency-free core leaf modules such as `oci/digest` and `oci/tar`, never the `/oci` barrel), not an SPA-private `lib/m0` and not yet a separate package | Owner-selected 2026-09-06 after pros/cons review. Lift to `@artipod/apps` later if a second consumer appears; a lifted package would need core to expose those leaves as a light subpath. `jose` moves to core deps. The service worker ships as a dist asset consumers copy to their site root. Weighbridge `./apps` budget 30 KB gzip (measured 19.2 KB). |
 | D16 | Processes are namespaced per supervisor ("turtles all the way down"): a pod session owns a `ProcessTable`; shells, running apps and background tasks are its processes; a process that launches things owns a child table. Visibility is downward only; lifecycle cascades down; pids are namespace-local, identity is a uuid | Owner-selected 2026-09-06. Browser tabs and the server are separate namespaces — no implicit merge; cross-namespace views are explicit future commands. Signals map per kind (`STOP/CONT` = cooperative suspend/resume, `TERM/KILL` = close); unsupported → `ENOTSUP`, never a fake state. `/proc/<pid>/*` mirrors Linux layout. |
+| D17 | Glossary vs OCI/Docker: **image** = OCI image (manifest + config + layers), **ref** = repository:tag, **file layer** = an ordinary OCI layer that artipod's publish/import path emits per file (granularity, not a new type), **lazy** = a layer whose blob is not fetched (hydration state, never granularity), **parents** (`org.artipod.parents`) = the tag's history across manifests. A workspace/cow fork is the "container" (upper over a basis). | Owner-discussed 2026-09-06. Do not call file layers "lazy layers". Known inconsistencies to fix later: `artipod commit` emits one whole-tree layer without parents (Docker-style) while `import`/`publish` emit file layers; `artipod image history` shows the layer stack, not the parents chain — rename to `image layers` and give `history` the parents DAG. Docker overlay2 cannot run a >128-layer artipod image as a rootfs; artipod volume images are not meant to be. "pod" collides with Kubernetes harder than "layer" with Docker; noted, not renamed. |
 
 ### Reference map
 
@@ -509,6 +511,35 @@ it does not relax any M0 admission requirement or earn the M0 gate.
   table per pod session; apps that launch sub-apps are a later phase.
   *(Remaining `m0` strings are synthetic test identity/fixture names.)*
 
+### MB: Inventory depth — `-v`/`-vv`, hydration, `--json`, `/proc` manifests (owner-approved, in PR #57)
+
+Follows the D17 glossary discussion. Per-file layers are a strength (per-file
+attribution, CAS dedup, LWW merge) but must not be shoved at Docker-fluent
+users by default; hydration state is shown, not hidden; machine output uses
+the real artifact where one exists. Each commit updates this plan.
+
+- [ ] `images -v` becomes summary-first: paths/alias/remote/parents plus one
+  line `N file layers · size · K local / M lazy · by actor`, then **what
+  changed since the parent** (layers in head not in parent, via
+  `org.artipod.parents`) — the `git show --stat` of an image. `-vv` (or
+  `-v <ref>`) shows the full stack, each row marked `●` local / `☁︎` lazy
+  using the local store's `hasBlob`. Same for `artipod images`.
+- [ ] `--json` on `images`, `lsblk`, `ps` (and `artipod images|lsblk|ps`):
+  JSON Lines, one object per row, shaped exactly like the exported
+  `ImageRow` / `VolumeRow` / `ProcessInfo`; `images -v <ref> --json` emits one
+  `ImageDetail`. No separate schema document; the TS types are the schema.
+- [ ] `/proc/images/<slug>/manifest.json` = the raw OCI manifest bytes (the
+  honest machine view; `jq '.layers[].annotations["org.artipod.path"]'` works
+  with the shell's existing `jq`). `status` stays the human view.
+- [ ] Docs: `docs/apps.md` inventory section gains the flags, a jq example,
+  the D17 glossary table, and the plaintext-server / encrypted-local
+  `.alias` note. Worklog records live output.
+- [ ] **Done when:** the four items above are live-verified on 2784 against
+  real refs (a pulled encrypted fork, an unpulled plaintext pod, a >100-layer
+  pod), core/SPA gates pass, and the glossary is in the docs. Renaming
+  `image history` → `image layers` and fixing `commit` granularity are
+  recorded in D17 as follow-ups, not done here.
+
 ### M1: Semantic discovery and simple composition
 
 - [ ] Finalize D3 and implement descriptor validation/discovery for the required profiles without breaking the existing mount API or creating duplicate metadata authorities.
@@ -632,6 +663,32 @@ Success means humans and agents share an explicitly authorized local development
 ## Worklog
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
+
+### 2026-09-06 - MA follow-ups: catalog console, fork labels, inventory, completion, `images -v`
+
+- `af7f817` catalog root console gets its own `catalog` namespace (pid 1 +
+  itself) so `ps`/`kill` exist there too. `a1594f6` cow fork rows are named
+  by basis (`<ref> (fork)`), not by the suggested publish tag — three forks
+  had all rendered as `samples/lifecycle:_4`.
+- `e64fa03` inventory: `InventoryProviders` → `images` (server refs) /
+  `lsblk` (local workspaces, MOUNTPOINT set only while a tab holds the
+  workspace Web Lock) / `mount`; `/proc/images/<slug>` + `/proc/workspaces/<slug>`;
+  pod `artipod` gains `images`/`lsblk`; a pod-less `artipod` (images/lsblk/ps
+  + help) for consoles without a pod. SPA `lib/services/inventory.ts` derives
+  rows exactly as `Catalog.tsx` does and reads the registry file directly.
+- `dbe239d` tab completion: `compgen` never knew the custom commands;
+  `Sandbox.complete()` adds them and honours per-command completers
+  (`withCompletion`, `verbTree`): `art⇥`, `artipod ⇥`, `artipod image ⇥`,
+  `kill -⇥`, live pids, flags. `0e93d2c` `images -v`: local blob path,
+  `.alias` twin, remote URL, parents, layer stack with path/mtime/actor/
+  overlay; listing caps at the top 8, `images -v <ref>` in full.
+- Live on 2784: `images -v ghcr.io/…/case:latest` showed 13 file layers by
+  `examples-builder` with story dates; `doug:_1` 308 overlay layers from four
+  browser actors; `samples/lifecycle:_3` plaintext on the server but with a
+  local `.alias` (this tab's store encrypts everything it writes) — recorded
+  as a doc note for MB. `parents` arrived as a JSON array, not CSV; fixed.
+- Gates at `0e93d2c`: core 636 tests, lint, tsc, build; SPA lint/typecheck/
+  29 tests/export. Not pushed since `e64fa03` per owner instruction.
 
 ### 2026-09-06 - MA: apps subpath, process namespaces, `ps`/`kill`
 
