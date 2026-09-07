@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`dockerode` peer range widened to `^4.0.9 || ^5.0.0`**: dockerode 5 has no API
+  changes — it drops the `uuid` dependency (the one the root `overrides` block used to
+  patch) and raises its Node floor. The override is gone; dev builds now use 5.x.
+- Added `.github/dependabot.yml` (weekly, grouped updates for every npm manifest;
+  major bumps of peer deps are ignored so they stay deliberate).
+
 ## [0.10.1] - 2026-09-03
 
 ### Fixed
