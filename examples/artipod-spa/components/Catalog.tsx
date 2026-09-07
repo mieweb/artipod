@@ -39,6 +39,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
   useEffect(() => {
     void refreshServer();
     let disposeEvents: (() => void) | null = null;
+    let disposeConsole: (() => void) | null = null;
     (async () => {
       await refreshLocal();
       // root console over the raw fs — /proc, every workspace, pod internals;
@@ -47,6 +48,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
         const { fs } = await import('@/lib/filesystem');
         const { createSandbox } = await import('@artipod/core/sandbox');
         const { PodEvents: Events } = await import('@artipod/core/host');
+        const { ProcessTable, registerProcessTable } = await import('@artipod/core/proc');
         const { defineCommand } = await import('just-bash/browser');
         // The safe alternative to rm -rf: erases ONLY artipod state and
         // reloads a factory-fresh machine. Server pods are untouched.
@@ -85,12 +87,18 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           if (timer) clearTimeout(timer);
           timer = setTimeout(() => void refreshLocal().then(refreshVerdicts), 300);
         });
-        setRootSandbox(createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents, extraCommands: [factoryReset] }));
+        // The catalog is its own (small) PID namespace: nothing runs here but
+        // this console, so `ps` is honest about it and `kill` has no targets.
+        const processes = new ProcessTable('catalog');
+        const unregisterProcesses = registerProcessTable(processes);
+        const rootSandbox = createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents, processes, extraCommands: [factoryReset] });
+        disposeConsole = () => { rootSandbox.dispose(); unregisterProcesses(); void processes.dispose(); };
+        setRootSandbox(rootSandbox);
       } catch {
         // fs init failed — no console
       }
     })();
-    return () => disposeEvents?.();
+    return () => { disposeEvents?.(); disposeConsole?.(); };
   }, []);
 
   // Ancestry verdicts follow server refs + local heads.
