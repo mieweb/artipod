@@ -46,9 +46,10 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
       // its commands rescan the lists (fs:changed after every exec)
       try {
         const { fs } = await import('@/lib/filesystem');
-        const { createSandbox } = await import('@artipod/core/sandbox');
+        const { createSandbox, makeConsoleArtipodCommand } = await import('@artipod/core/sandbox');
         const { PodEvents: Events } = await import('@artipod/core/host');
-        const { ProcessTable, registerProcessTable } = await import('@artipod/core/proc');
+        const { ProcessTable, registerProcessTable, registerProcProvider, makeInventoryProvider } = await import('@artipod/core/proc');
+        const { catalogInventory } = await import('@/lib/services/inventory');
         const { defineCommand } = await import('just-bash/browser');
         // The safe alternative to rm -rf: erases ONLY artipod state and
         // reloads a factory-fresh machine. Server pods are untouched.
@@ -91,8 +92,12 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
         // this console, so `ps` is honest about it and `kill` has no targets.
         const processes = new ProcessTable('catalog');
         const unregisterProcesses = registerProcessTable(processes);
-        const rootSandbox = createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents, processes, extraCommands: [factoryReset] });
-        disposeConsole = () => { rootSandbox.dispose(); unregisterProcesses(); void processes.dispose(); };
+        // images / lsblk / artipod images: the page's own rows, in the shell and under /proc
+        const inventory = catalogInventory();
+        const unregisterInventory = registerProcProvider(makeInventoryProvider(inventory));
+        const rootSandbox = createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents, processes, inventory,
+          extraCommands: [factoryReset, makeConsoleArtipodCommand(inventory, processes)] });
+        disposeConsole = () => { rootSandbox.dispose(); unregisterProcesses(); unregisterInventory(); void processes.dispose(); };
         setRootSandbox(rootSandbox);
       } catch {
         // fs init failed — no console

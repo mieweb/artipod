@@ -162,6 +162,8 @@ export interface ZenFsPodOptions
   tasks?: () => import('../oci/command.js').PsTask[];
   /** The session's process table: `ps` / `kill` in every shell, and a row per shell. */
   processes?: import('../proc/processes.js').ProcessTable;
+  /** `images` / `lsblk` / `mount` and `artipod images|lsblk`: app-provided inventory. */
+  inventory?: import('../proc/inventory.js').InventoryProviders;
   /** Manager sync: the remote PodStore push/pull/clone talk to. */
   sync?: {
     remote?: import('../manager/pod-store.js').PodStore;
@@ -471,6 +473,7 @@ export async function createZenFsPod(
         events,
         proc: confineTo ? false : proc,
         processes: options.processes,
+        inventory: options.inventory,
         cwd: confineTo ? '/' : defaultCwd,
         onEdit: options.onEdit && confineTo
           ? (path) => options.onEdit!(`${confineTo}${path.startsWith('/') ? '' : '/'}${path}`)
@@ -495,6 +498,7 @@ export async function createZenFsPod(
             pushBasis,
             publish: options.publish,
             tasks: options.tasks,
+            inventory: options.inventory,
           }),
           ...(options.extraCommands ?? []),
         ],

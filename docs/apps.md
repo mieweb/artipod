@@ -105,6 +105,34 @@ supported` — an app that never implemented the lifecycle protocol cannot be
 frozen, and `ps` will keep saying `running`. `artipod ps` remains the detailed
 view of scheduler tasks.
 
+## Inventory: `images`, `lsblk`, `mount`
+
+Processes are what runs; inventory is what exists. Both consoles (the
+catalog's root console and every workspace shell) read the same rows the
+catalog page renders:
+
+```text
+$ images                      # "On this server" — also: artipod images
+REPOSITORY         TAG  DIGEST    ENCRYPTION LOCKED STATUS
+samples/lifecycle  _3   e92582b6  plaintext  -      forked
+doug               _1   23eb8c12  encrypted  -      update available
+$ lsblk                       # "On this machine" — also: artipod lsblk
+NAME                  TYPE   MODE  ENCRYPTION  STATE        MOUNTPOINT
+ba772299              blank  rw    plaintext   has files
+samples/lifecycle:_3  fork   cow   encrypted   unpublished  /open/samples_lifecycle__3
+$ mount                       # lsblk -m: only what some tab has open right now
+$ cat /proc/workspaces/samples_lifecycle__3/status
+$ cat /proc/images/doug__1/status
+```
+
+A workspace is a block device: it exists in OPFS whether or not a tab has it
+open, and `MOUNTPOINT` is set only while one does (each open tab holds a Web
+Lock, so this is observed, not guessed). The catalog console's `artipod`
+supports `images`, `lsblk` and `ps` only; pod verbs need an open workspace.
+Consumers supply the rows through `InventoryProviders` on
+`createSandbox({ inventory })` / `createZenFsPod({ inventory })` and
+`registerProcProvider(makeInventoryProvider(inventory))`.
+
 ## Lifecycle Sample
 
 The durable [sample pod](../examples/lifecycle-app/artipod.json) lives in

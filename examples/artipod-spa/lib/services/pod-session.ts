@@ -20,7 +20,8 @@ import { brokerStore } from '../stores/broker';
 import { navigateTo } from '../stores/route';
 import { nextDraftRef } from '../boot';
 import { createBrowserRuntime, type BrowserRuntime } from '@artipod/core/apps';
-import { ProcessTable, registerProcessTable } from '@artipod/core/proc';
+import { ProcessTable, registerProcessTable, registerProcProvider, makeInventoryProvider } from '@artipod/core/proc';
+import { catalogInventory } from './inventory';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
 
@@ -218,6 +219,8 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   // its processes; `ps` / `kill` and /proc/<pid> read from this table.
   const processes = new ProcessTable(`${route.id}:${route.mode}`);
   const unregisterProcesses = registerProcessTable(processes);
+  const inventory = catalogInventory();
+  const unregisterInventory = registerProcProvider(makeInventoryProvider(inventory));
 
   const pod = await createZenFsPod(
     {
@@ -262,6 +265,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       // `artipod ps` in this shell shows the client's live schedule.
       tasks: () => scheduler.list(),
       processes,
+      inventory,
       extraCommands: [publishCmd],
     },
   );
@@ -399,6 +403,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         if (probeTimer) clearTimeout(probeTimer);
         await processes.dispose();
         unregisterProcesses();
+        unregisterInventory();
         // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
         // keys, hydration) unregister — the next session must not collide.
         pod.dispose();

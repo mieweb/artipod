@@ -22,6 +22,8 @@ import { makeEditCommand } from './edit-command.js';
 import { makeGitCommand } from './git-command.js';
 import { makeModuleCommands } from './module-command.js';
 import { makeProcessCommands } from './process-command.js';
+import { makeInventoryCommands } from './inventory-command.js';
+import type { InventoryProviders } from '../proc/inventory.js';
 import type { ProcessHandle, ProcessTable } from '../proc/processes.js';
 import { makeNotesCommand } from './notes-command.js';
 import { makeStorageCommands } from './storage-command.js';
@@ -34,6 +36,8 @@ export type { CompletionResult, Sandbox, SandboxExecOptions, SandboxExecResult, 
 export { SHELL_NOTES } from './notes-command.js';
 export { ZenFsAdapter } from './zenfs-adapter.js';
 export { SUDO_DENIED_MESSAGE } from './sudo-command.js';
+export { makeConsoleArtipodCommand, makeInventoryCommands, renderImages, renderVolumes } from './inventory-command.js';
+export { makeProcessCommands } from './process-command.js';
 // App-facing sandbox infrastructure: storage backends, git ops + auth.
 export * from './storage.js';
 export { encryptedMount, type EncryptedFsOptions } from './encrypted-fs.js';
@@ -72,6 +76,8 @@ export interface CreateSandboxOptions {
    * as a `shell` row whose state tracks exec activity.
    */
   processes?: ProcessTable;
+  /** Server images + local workspaces: adds `images`, `lsblk`, `mount`. */
+  inventory?: InventoryProviders;
   /**
    * Host work to run around each non-transient command, e.g. materializing
    * state into the filesystem. Returned messages are appended to stderr, so a
@@ -104,6 +110,7 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     ...makeStorageCommands(() => opts.zfs),
     ...(opts.proc ? makeModuleCommands() : []),
     ...(opts.processes ? makeProcessCommands(opts.processes) : []),
+    ...(opts.inventory ? makeInventoryCommands(opts.inventory) : []),
     ...(opts.extraCommands ?? []),
   ];
   const shellProcess: ProcessHandle | undefined = opts.processes?.spawn({ kind: 'shell', name: 'bash', state: 'idle', detail: { cwd: initialCwd } });
