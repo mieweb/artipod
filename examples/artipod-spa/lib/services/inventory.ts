@@ -1,6 +1,6 @@
 /**
  * Inventory providers for the shells: the SAME derivations Catalog.tsx
- * renders, so `images` / `lsblk` / /proc line up with the page.
+ * renders, so `images` / `volumes` / /proc line up with the page.
  */
 import type { ImageDetail, ImageRow, InventoryProviders, VolumeRow } from '@artipod/core/proc';
 import { mountSlug } from '@artipod/core/proc';

@@ -1,10 +1,12 @@
 /**
  * Inventory: what this machine knows about, whether or not it is running.
  *
- *   images  — refs on the server (docker-speak: things you can instantiate)
- *   lsblk   — local workspaces (block devices: they exist whether mounted;
- *             MOUNTPOINT is set only while a tab has one open)
- *   mount   — lsblk filtered to mounted rows
+ *   images   — refs on the server (docker-speak: things you can instantiate)
+ *   volumes  — local workspaces (docker-speak: what instantiation produced;
+ *              MOUNTPOINT is set only while a tab has one open)
+ *
+ * `mount` / `lsblk` / `df` already exist and describe this shell's ZenFS
+ * backends and mount points — a different, narrower thing.
  *
  * Data is app-provided (the catalog already computes it); this module only
  * renders it and projects it into /proc so `tree` and the page line up.
@@ -84,7 +86,7 @@ const kv = (rows: [string, string | undefined][]): string =>
 export function makeInventoryProvider(providers: InventoryProviders): ProcProvider {
   return {
     name: 'inventory',
-    description: 'Server images and local workspaces (images / lsblk)',
+    description: 'Server images and local workspaces (images / volumes)',
     mode: 'ro',
     root: '',
     async read(): Promise<ProcTree> {

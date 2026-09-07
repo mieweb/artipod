@@ -57,7 +57,7 @@ export interface ArtipodCommandContext {
    * App-provided; absent = the verb explains there is no scheduler here.
    */
   tasks?: () => PsTask[];
-  /** `artipod images` / `artipod lsblk` — app-provided server refs and local workspaces. */
+  /** `artipod images` / `artipod volumes` — app-provided server refs and local workspaces. */
   inventory?: InventoryProviders;
   /** Phase 6.5: login/lock/status against the pod's authority. */
   authority?: {
@@ -135,7 +135,7 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   status                               lease + capability expiries (also /proc/keys)
   ps                                   background tasks: sync retries, key renewal, schedules
   images [-v|-vv] [<ref>] [--json]     refs on the server (-v: paths + what changed; -vv: full layer stack)
-  lsblk [-m] [--json]                  local workspaces; MOUNTPOINT set while a tab has one open
+  volumes [-m] [--json]                local workspaces; MOUNTPOINT set while a tab has one open
   image pull <ref> --index             index-level pull: metadata + placeholders only
   hydrate <ref> <path|glob>            fetch the lazy layers backing matching paths
   dehydrate <ref> <glob>               evict layer blobs; placeholders + indexes stay
@@ -162,7 +162,7 @@ const VERBS = {
   snapshot: { create: {}, ls: {}, diff: {}, mount: {}, checkout: {} },
   commit: {}, compact: {}, gc: {}, push: {}, pull: {}, clone: {}, open: {}, files: {},
   hydrate: {}, dehydrate: {}, publish: {}, login: {}, lock: {}, status: {}, ps: {},
-  images: { '-v': {}, '-vv': {}, '--json': {} }, lsblk: { '-m': {}, '--json': {} }, offline: { on: {}, off: {} }, examples: {},
+  images: { '-v': {}, '-vv': {}, '--json': {} }, volumes: { '-m': {}, '--json': {} }, offline: { on: {}, off: {} }, examples: {},
 };
 
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
@@ -210,9 +210,9 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
         return runImages(podContext.inventory, [sub, ...rest].filter((a): a is string => !!a), 'artipod images');
       }
 
-      if (group === 'lsblk') {
-        if (!podContext.inventory) return fail('artipod lsblk: no workspace registry in this context');
-        return runVolumes(podContext.inventory, [sub, ...rest].filter((a): a is string => !!a), 'artipod lsblk');
+      if (group === 'volumes') {
+        if (!podContext.inventory) return fail('artipod volumes: no workspace registry in this context');
+        return runVolumes(podContext.inventory, [sub, ...rest].filter((a): a is string => !!a), 'artipod volumes');
       }
 
       if (group === 'ps') {

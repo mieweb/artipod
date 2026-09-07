@@ -162,7 +162,7 @@ export interface ZenFsPodOptions
   tasks?: () => import('../oci/command.js').PsTask[];
   /** The session's process table: `ps` / `kill` in every shell, and a row per shell. */
   processes?: import('../proc/processes.js').ProcessTable;
-  /** `images` / `lsblk` / `mount` and `artipod images|lsblk`: app-provided inventory. */
+  /** `images` / `volumes` and `artipod images|volumes`: app-provided inventory. */
   inventory?: import('../proc/inventory.js').InventoryProviders;
   /** Manager sync: the remote PodStore push/pull/clone talk to. */
   sync?: {

@@ -77,7 +77,7 @@ export interface CreateSandboxOptions {
    * as a `shell` row whose state tracks exec activity.
    */
   processes?: ProcessTable;
-  /** Server images + local workspaces: adds `images`, `lsblk`, `mount`. */
+  /** Server images + local workspaces: adds `images` and `volumes`. */
   inventory?: InventoryProviders;
   /**
    * Host work to run around each non-transient command, e.g. materializing

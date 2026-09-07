@@ -1,5 +1,5 @@
 /**
- * Inventory surfaces: `images`, `lsblk`, `mount`, pod-less `artipod`, and
+ * Inventory surfaces: `images`, `volumes`, pod-less `artipod`, and
  * the /proc/images + /proc/workspaces projection.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -96,9 +96,9 @@ describe('inventory', () => {
     expect(one.changed).toHaveLength(1);
     expect(one.layers[0].local).toBe(true);
     expect((await sandbox.exec('artipod images --json')).stdout).toBe((await sandbox.exec('images --json')).stdout);
-    const vols = (await sandbox.exec('lsblk --json')).stdout.trimEnd().split('\n').map((l) => JSON.parse(l));
+    const vols = (await sandbox.exec('volumes --json')).stdout.trimEnd().split('\n').map((l) => JSON.parse(l));
     expect(vols.map((v) => v.name)).toEqual(['ba772299', 'samples/lifecycle:_3']);
-    expect((await sandbox.exec('mount --json')).stdout.trimEnd().split('\n')).toHaveLength(1);
+    expect((await sandbox.exec('volumes -m --json')).stdout.trimEnd().split('\n')).toHaveLength(1);
     const procs = (await sandbox.exec('ps --json')).stdout.trimEnd().split('\n').map((l) => JSON.parse(l));
     expect(procs[0]).toMatchObject({ pid: 1, kind: 'init' });
     expect((await sandbox.exec('images -v nope:1 --json')).stderr).toContain('no such image');
@@ -120,16 +120,19 @@ describe('inventory', () => {
     expect((await sandbox.exec('ls /proc/images/ghcr.io_mieweb_artipod-examples_case_latest/')).stdout).toBe('status\n');
   });
 
-  it('lsblk lists every workspace; mount and -m only the mounted ones', async () => {
-    const all = (await sandbox.exec('lsblk')).stdout.trimEnd().split('\n');
+  it('volumes lists every workspace; -m only the mounted ones; mount/lsblk stay the ZenFS commands', async () => {
+    const all = (await sandbox.exec('volumes')).stdout.trimEnd().split('\n');
     expect(all[0]).toMatch(/^NAME\s+TYPE\s+MODE\s+ENCRYPTION\s+STATE\s+MOUNTPOINT$/);
     expect(all[1]).toMatch(/^ba772299\s+blank\s+rw\s+plaintext\s+-$/);
     expect(all[2]).toMatch(/^samples\/lifecycle:_3\s+fork\s+cow\s+encrypted\s+unpublished\s+\/open\/samples_lifecycle__3$/);
-    const mounted = (await sandbox.exec('mount')).stdout.trimEnd().split('\n');
+    const mounted = (await sandbox.exec('volumes -m')).stdout.trimEnd().split('\n');
     expect(mounted).toHaveLength(2);
     expect(mounted[1]).toContain('/open/samples_lifecycle__3');
-    expect((await sandbox.exec('lsblk -m')).stdout).toBe(`${mounted.join('\n')}\n`);
-    expect((await sandbox.exec('artipod lsblk -m')).stdout).toBe(`${mounted.join('\n')}\n`);
+    expect((await sandbox.exec('artipod volumes -m')).stdout).toBe(`${mounted.join('\n')}\n`);
+    // The storage commands are untouched: `mount` is the ZenFS mtab, `lsblk` the origin quota.
+    expect((await sandbox.exec('mount')).stdout).toMatch(/ on \/ type /);
+    expect((await sandbox.exec('mount --help')).stdout).toContain('artipod image mount <ref>');
+    expect((await sandbox.exec('lsblk')).stdout).toMatch(/^NAME\s+SIZE\s+TYPE\s+MOUNTPOINTS/);
   });
 
   it('pod-less artipod explains itself and refuses pod verbs', async () => {
@@ -150,10 +153,10 @@ describe('inventory', () => {
 
   it('tab-completes custom commands and their sub-verbs', async () => {
     expect((await sandbox.complete('art')).candidates).toEqual(['artipod']);
-    expect((await sandbox.complete('lsb')).candidates).toEqual(['lsblk']);
-    expect(await sandbox.complete('artipod ')).toEqual({ candidates: ['help', 'images', 'lsblk', 'ps'], replaceStart: 8 });
+    expect((await sandbox.complete('vol')).candidates).toEqual(['volumes']);
+    expect(await sandbox.complete('artipod ')).toEqual({ candidates: ['help', 'images', 'ps', 'volumes'], replaceStart: 8 });
     expect((await sandbox.complete('artipod im')).candidates).toEqual(['images']);
-    expect((await sandbox.complete('artipod lsblk ')).candidates).toEqual(['--json', '-m']);
+    expect((await sandbox.complete('artipod volumes ')).candidates).toEqual(['--json', '-m']);
     expect((await sandbox.complete('artipod images ')).candidates).toEqual(['--json', '-v', '-vv']);
     expect((await sandbox.complete('kill -')).candidates).toEqual(['-CONT', '-KILL', '-STOP', '-TERM']);
     expect((await sandbox.complete('echo hi; kill -S')).candidates).toEqual(['-STOP']);

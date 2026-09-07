@@ -1,7 +1,11 @@
 /**
- * `images`, `lsblk`, `mount` — and a pod-less `artipod` dispatcher for
- * consoles that have no pod (the catalog). Inside a pod shell the real
- * `artipod` verb gains `images` / `lsblk` through the same renderers.
+ * `images`, `volumes` — and a pod-less `artipod` dispatcher for consoles
+ * that have no pod (the catalog). Inside a pod shell the real `artipod` verb
+ * gains `images` / `volumes` through the same renderers.
+ *
+ * Not `lsblk`/`mount`: those exist already (storage-command.ts) and mean
+ * ZenFS backends and mount points. Images and volumes are inventory — what
+ * you *could* mount — in docker's vocabulary.
  */
 import { defineCommand } from 'just-bash/browser';
 import type { ExecResult } from 'just-bash/browser';
@@ -28,12 +32,16 @@ catalog's "On this server" list. Also: artipod images.
           reads as who wrote which file, when. -v <ref> implies -vv.
   --json  JSON Lines, one ImageRow per line; with -v/-vv <ref>, one ImageDetail.
 `,
-  lsblk: `usage: lsblk [-m] [--json]
+  volumes: `usage: volumes [-m] [--json]
 
-Local workspaces: blank scratch trees, copy-on-write forks and opened refs.
-They exist whether or not a tab has them open; MOUNTPOINT is set only while
-one does (-m: mounted only; \`mount\` is the same). --json: JSON Lines, one
-VolumeRow per line. Also: artipod lsblk.
+Local workspaces: blank scratch trees, copy-on-write forks and opened refs
+(docker-speak: volumes — what "On this machine" lists). They exist whether or
+not a tab has them open; MOUNTPOINT is set only while one does (-m: mounted
+only). --json: JSON Lines, one VolumeRow per line. Also: artipod volumes.
+
+To see the ZenFS mount table of THIS shell use \`mount\` / \`findmnt\`; to
+mount an image from the server open a workspace and use
+\`artipod image mount <ref> [path]\` (read-only) or \`artipod open <ref>\`.
 `,
 };
 
@@ -63,10 +71,10 @@ export async function runImages(providers: InventoryProviders, args: string[], p
   }
 }
 
-export async function runVolumes(providers: InventoryProviders, args: string[], prefix = 'lsblk', mountedOnly = false): Promise<ExecResult> {
+export async function runVolumes(providers: InventoryProviders, args: string[], prefix = 'volumes'): Promise<ExecResult> {
   if (!providers.volumes) return fail(`${prefix}: no workspace registry in this context\n`);
   const rows = await providers.volumes();
-  const only = mountedOnly || args.includes('-m');
+  const only = args.includes('-m');
   if (args.includes('--json')) return ok(jsonLines(only ? rows.filter((r) => r.mountpoint) : rows));
   return ok(renderVolumes(rows, only));
 }
@@ -165,24 +173,20 @@ export function makeInventoryCommands(providers: InventoryProviders) {
     const h = help('images', args); if (h) return h;
     return runImages(providers, args);
   }), imageCompleter);
-  const lsblk = withCompletion(defineCommand('lsblk', async (args) => {
-    const h = help('lsblk', args); if (h) return h;
+  const volumes = withCompletion(defineCommand('volumes', async (args) => {
+    const h = help('volumes', args); if (h) return h;
     return runVolumes(providers, args);
   }), () => ['-m', '--json']);
-  const mount = withCompletion(defineCommand('mount', async (args) => {
-    const h = help('lsblk', args); if (h) return h;
-    return runVolumes(providers, args, 'mount', true);
-  }), () => ['--json']);
-  return [images, lsblk, mount];
+  return [images, volumes];
 }
 
-const CONSOLE_USAGE = `usage: artipod <images|lsblk|ps> …
+const CONSOLE_USAGE = `usage: artipod <images|volumes|ps> …
   images [-v|-vv] [<ref>] [--json]   refs on the server (same as the bare \`images\`)
-  lsblk [-m] [--json]                local workspaces and whether a tab has them mounted
+  volumes [-m] [--json]              local workspaces and whether a tab has them mounted
   ps [--json]                        processes in this console's namespace
 
-This console has no pod open. Pod verbs (image, snapshot, commit, push,
-publish, login, …) live in a workspace shell — open one from the catalog.
+This console has no pod open. Pod verbs (image mount, open, snapshot, commit,
+push, publish, login, …) live in a workspace shell — open one from the catalog.
 `;
 
 /** `artipod` for consoles without a pod: inventory + processes only. */
@@ -191,7 +195,7 @@ export function makeConsoleArtipodCommand(providers: InventoryProviders, process
     const [group, ...rest] = args;
     if (!group || group === '--help' || group === '-h' || group === 'help') return ok(CONSOLE_USAGE);
     if (group === 'images') return runImages(providers, rest, 'artipod images');
-    if (group === 'lsblk') return runVolumes(providers, rest, 'artipod lsblk');
+    if (group === 'volumes') return runVolumes(providers, rest, 'artipod volumes');
     if (group === 'ps') {
       if (!processes) return fail('artipod ps: no process table in this context\n');
       if (rest.includes('--json')) return ok(jsonLines(processes.list()));
@@ -199,9 +203,9 @@ export function makeConsoleArtipodCommand(providers: InventoryProviders, process
     }
     return fail(`artipod: '${group}' needs an open pod — this console has none\n${CONSOLE_USAGE}`);
   }), async (args, token) => {
-    if (args.length === 0) return ['help', 'images', 'lsblk', 'ps'];
+    if (args.length === 0) return ['help', 'images', 'ps', 'volumes'];
     if (args[0] === 'images') return token.startsWith('-') || args.length === 1 ? ['-v', '-vv', '--json'] : ((await providers.images?.()) ?? []).map((r) => r.ref);
-    if (args[0] === 'lsblk') return ['-m', '--json'];
+    if (args[0] === 'volumes') return ['-m', '--json'];
     if (args[0] === 'ps') return ['--json'];
     return [];
   });

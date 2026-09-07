@@ -105,7 +105,7 @@ supported` — an app that never implemented the lifecycle protocol cannot be
 frozen, and `ps` will keep saying `running`. `artipod ps` remains the detailed
 view of scheduler tasks.
 
-## Inventory: `images`, `lsblk`, `mount`
+## Inventory: `images`, `volumes`
 
 Processes are what runs; inventory is what exists. Both consoles (the
 catalog's root console and every workspace shell) read the same rows the
@@ -116,20 +116,32 @@ $ images                      # "On this server" — also: artipod images
 REPOSITORY         TAG  DIGEST    ENCRYPTION LOCKED STATUS
 samples/lifecycle  _3   e92582b6  plaintext  -      forked
 doug               _1   23eb8c12  encrypted  -      update available
-$ lsblk                       # "On this machine" — also: artipod lsblk
+$ volumes                     # "On this machine" — also: artipod volumes
 NAME                  TYPE   MODE  ENCRYPTION  STATE        MOUNTPOINT
 ba772299              blank  rw    plaintext   has files
 samples/lifecycle:_3  fork   cow   encrypted   unpublished  /open/samples_lifecycle__3
-$ mount                       # lsblk -m: only what some tab has open right now
+$ volumes -m                  # only what some tab has open right now
 $ cat /proc/workspaces/samples_lifecycle__3/status
 $ cat /proc/images/doug__1/status
 ```
 
-A workspace is a block device: it exists in OPFS whether or not a tab has it
-open, and `MOUNTPOINT` is set only while one does (each open tab holds a Web
-Lock, so this is observed, not guessed). The catalog console's `artipod`
-supports `images`, `lsblk` and `ps` only; pod verbs need an open workspace.
-Consumers supply the rows through `InventoryProviders` on
+A workspace is a volume in docker's sense: it exists in OPFS whether or not a
+tab has it open, and `MOUNTPOINT` is set only while one does (each open tab
+holds a Web Lock, so this is observed, not guessed). `mount`, `lsblk`, `df`
+and `findmnt` keep their Unix meaning — *this shell's* ZenFS backends and
+mount points — and `mount --help` points at the image verbs. The catalog
+console's `artipod` supports `images`, `volumes` and `ps` only; pod verbs
+need an open workspace.
+
+To mount an image from the server, open a workspace and use the pod verb:
+
+```sh
+artipod image mount <ref> [path] [--through N]   # read-only lazy view; N = only the first N layers
+artipod open <ref> [path]                        # writable copy-on-write overlay on a lazy basis
+artipod image umount <path>
+```
+
+Consumers supply the inventory rows through `InventoryProviders` on
 `createSandbox({ inventory })` / `createZenFsPod({ inventory })` and
 `registerProcProvider(makeInventoryProvider(inventory))`.
 
@@ -153,7 +165,7 @@ ghcr.io/mieweb/artipod-examples/case:latest  @c8209ca3  plaintext
   this head that the parent did not carry) — the `git show --stat` of an image.
 - `images -vv` (or `-v <ref>`) prints the whole stack; `●` = blob in this
   browser's store, `☁︎` = lazy (not fetched yet).
-- `--json` on `images`, `lsblk`, `mount`, `ps` emits JSON Lines shaped like
+- `--json` on `images`, `volumes`, `ps` emits JSON Lines shaped like
   the exported `ImageRow` / `VolumeRow` / `ProcessInfo`; `images -v <ref> --json`
   emits one `ImageDetail`.
 - `/proc/images/<slug>/manifest.json` is the raw OCI manifest (present only

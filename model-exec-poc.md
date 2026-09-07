@@ -81,7 +81,7 @@ The execution-admission direction was approved by the owner on 2026-09-05. Imple
 | D14 | Preview lifecycle: Stop is a cooperative, acknowledged in-place suspend (`artipod:runtime-lifecycle/v1`); Close revokes and tears down; Reload starts a fresh instance | Owner-selected 2026-09-06, shipped in `0f3fcf6`. Not a generic iframe freeze; unsupported/unresponsive apps are shown as such. Telemetry is app-reported, informational only. |
 | D15 | The browser app runtime ships as the core subpath `@artipod/core/apps` (browser-safe, adapter-injected, imports only dependency-free core leaf modules such as `oci/digest` and `oci/tar`, never the `/oci` barrel), not an SPA-private `lib/m0` and not yet a separate package | Owner-selected 2026-09-06 after pros/cons review. Lift to `@artipod/apps` later if a second consumer appears; a lifted package would need core to expose those leaves as a light subpath. `jose` moves to core deps. The service worker ships as a dist asset consumers copy to their site root. Weighbridge `./apps` budget 30 KB gzip (measured 19.2 KB). |
 | D16 | Processes are namespaced per supervisor ("turtles all the way down"): a pod session owns a `ProcessTable`; shells, running apps and background tasks are its processes; a process that launches things owns a child table. Visibility is downward only; lifecycle cascades down; pids are namespace-local, identity is a uuid | Owner-selected 2026-09-06. Browser tabs and the server are separate namespaces — no implicit merge; cross-namespace views are explicit future commands. Signals map per kind (`STOP/CONT` = cooperative suspend/resume, `TERM/KILL` = close); unsupported → `ENOTSUP`, never a fake state. `/proc/<pid>/*` mirrors Linux layout. |
-| D17 | Glossary vs OCI/Docker: **image** = OCI image (manifest + config + layers), **ref** = repository:tag, **file layer** = an ordinary OCI layer that artipod's publish/import path emits per file (granularity, not a new type), **lazy** = a layer whose blob is not fetched (hydration state, never granularity), **parents** (`org.artipod.parents`) = the tag's history across manifests. A workspace/cow fork is the "container" (upper over a basis). | Owner-discussed 2026-09-06. Do not call file layers "lazy layers". Known inconsistencies to fix later: `artipod commit` emits one whole-tree layer without parents (Docker-style) while `import`/`publish` emit file layers; `artipod image history` shows the layer stack, not the parents chain — rename to `image layers` and give `history` the parents DAG. Docker overlay2 cannot run a >128-layer artipod image as a rootfs; artipod volume images are not meant to be. "pod" collides with Kubernetes harder than "layer" with Docker; noted, not renamed. |
+| D17 | Glossary vs OCI/Docker: **image** = OCI image (manifest + config + layers), **ref** = repository:tag, **file layer** = an ordinary OCI layer that artipod's publish/import path emits per file (granularity, not a new type), **lazy** = a layer whose blob is not fetched (hydration state, never granularity), **parents** (`org.artipod.parents`) = the tag's history across manifests. A workspace/cow fork is the "container" (upper over a basis). | Owner-discussed 2026-09-06. Do not call file layers "lazy layers". Known inconsistencies to fix later: `artipod commit` emits one whole-tree layer without parents (Docker-style) while `import`/`publish` emit file layers; `artipod image history` shows the layer stack, not the parents chain — rename to `image layers` and give `history` the parents DAG. Docker overlay2 cannot run a >128-layer artipod image as a rootfs; artipod volume images are not meant to be. "pod" collides with Kubernetes harder than "layer" with Docker; noted, not renamed. **Command names must not shadow Unix tools the shell already has:** the sandbox ships real `mount`/`umount`/`lsblk`/`df`/`findmnt` for ZenFS backends (storage-command.ts); the inventory listing of local workspaces is therefore `volumes` (docker's word), not `lsblk`, and `mount --help` points at `artipod image mount` / `artipod open`. |
 
 ### Reference map
 
@@ -525,11 +525,11 @@ the real artifact where one exists. Each commit updates this plan.
   `-v <ref>`) shows the full stack, each row marked `●` local / `☁︎` lazy
   using the local store's `hasBlob`. Same for `artipod images`. *(This
   commit; an unreadable parent says so rather than hiding the line.)*
-- [x] `--json` on `images`, `lsblk`, `ps` (and `artipod images|lsblk|ps`):
+- [x] `--json` on `images`, `volumes`, `ps` (and `artipod images|volumes|ps`):
   JSON Lines, one object per row, shaped exactly like the exported
   `ImageRow` / `VolumeRow` / `ProcessInfo`; `images -v <ref> --json` emits one
   `ImageDetail`. No separate schema document; the TS types are the schema.
-  *(This commit; `mount --json` too.)*
+  *(This commit. Renamed from `lsblk` after finding the shell's real `lsblk`/`mount`.)*
 - [x] `/proc/images/<slug>/manifest.json` = the raw OCI manifest bytes (the
   honest machine view; `jq '.layers[].annotations["org.artipod.path"]'` works
   with the shell's existing `jq`). `status` stays the human view. *(This
@@ -668,6 +668,22 @@ Success means humans and agents share an explicitly authorized local development
 ## Worklog
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
+
+### 2026-09-06 - MB fix: `lsblk`/`mount` collision → `volumes`
+
+- Owner asked why `mount --help` did not explain mounting. Cause: my inventory
+  `lsblk`/`mount` had **shadowed** the sandbox's existing storage commands
+  (`mount -t memory|idb|opfs`, `umount`, `lsblk`, `df`, `findmnt` over ZenFS
+  backends; `src/sandbox/storage-command.ts`, covered by `proc.test.ts`).
+  Removed the shadowing commands; the workspace listing is now `volumes`
+  (`-m`, `--json`; `artipod volumes`). The real `mount --help` gained a
+  pointer to `artipod image mount <ref> [path] [--through N]` (read-only lazy
+  view) and `artipod open <ref>` (writable cow overlay). Test asserts `mount`
+  prints the mtab and `lsblk` the origin-quota table. D17 records the rule.
+- Answer to "can we mount containers / see what the server offers": `images`
+  lists the server; mounting happens inside a workspace shell via the pod
+  verbs above. There is no server-side container mount from the browser —
+  images materialize into ZenFS (lazy layers, hydrated on read).
 
 ### 2026-09-06 - MB: `-v` summary + parent diff, `-vv` hydration marks, `--json`, `/proc` manifests
 
