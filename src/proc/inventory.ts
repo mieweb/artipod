@@ -29,6 +29,8 @@ export interface LayerRow {
   mtimeMs?: number;
   actor?: string;
   overlay?: boolean;
+  /** Hydration: the blob is in the local store (`●`) or still lazy (`☁︎`). Unknown when undefined. */
+  local?: boolean;
 }
 
 /** `images -v`: where the bytes are and what the layers hold. */
@@ -45,7 +47,11 @@ export interface ImageDetail {
   layers: LayerRow[];
   /** org.artipod.parents — the previous head(s) this manifest was built on. */
   parents: string[];
+  /** Layers present in this manifest but not in its first parent — what this tag changed. */
+  changed?: LayerRow[];
   actor?: string;
+  /** The manifest exactly as stored (JSON text), for /proc/images/<slug>/manifest.json. */
+  manifest?: string;
   /** Set when the manifest could not be read (not pulled, or locked without a key). */
   unavailable?: string;
 }
@@ -85,13 +91,17 @@ export function makeInventoryProvider(providers: InventoryProviders): ProcProvid
       const tree: ProcTree = {};
       for (const image of (await providers.images?.()) ?? []) {
         const detail = await providers.imageDetail?.(image.ref);
-        tree[`images/${mountSlug(image.ref)}/status`] = kv([
+        const slug = mountSlug(image.ref);
+        tree[`images/${slug}/status`] = kv([
           ['Ref', image.ref], ['Digest', image.digest], ['Encryption', image.encryption],
           ['Locked', image.locked ? 'yes' : 'no'], ['Status', image.status],
           ['Local', detail ? `${detail.localPath}${detail.localPresent ? '' : ' (not pulled)'}` : undefined],
           ['Alias', detail?.aliasPath], ['Remote', detail?.remoteUrl],
           ['Layers', detail && !detail.unavailable ? String(detail.layers.length) : undefined],
+          ['Hydrated', detail && !detail.unavailable ? `${detail.layers.filter((l) => l.local).length}/${detail.layers.length}` : undefined],
         ]);
+        // The real artifact, for jq. Absent when the manifest is not readable here.
+        if (detail?.manifest) tree[`images/${slug}/manifest.json`] = detail.manifest;
       }
       for (const volume of (await providers.volumes?.()) ?? []) {
         tree[`workspaces/${mountSlug(volume.name)}/status`] = kv([

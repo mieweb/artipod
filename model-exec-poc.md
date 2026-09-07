@@ -518,27 +518,32 @@ attribution, CAS dedup, LWW merge) but must not be shoved at Docker-fluent
 users by default; hydration state is shown, not hidden; machine output uses
 the real artifact where one exists. Each commit updates this plan.
 
-- [ ] `images -v` becomes summary-first: paths/alias/remote/parents plus one
+- [x] `images -v` becomes summary-first: paths/alias/remote/parents plus one
   line `N file layers · size · K local / M lazy · by actor`, then **what
   changed since the parent** (layers in head not in parent, via
   `org.artipod.parents`) — the `git show --stat` of an image. `-vv` (or
   `-v <ref>`) shows the full stack, each row marked `●` local / `☁︎` lazy
-  using the local store's `hasBlob`. Same for `artipod images`.
-- [ ] `--json` on `images`, `lsblk`, `ps` (and `artipod images|lsblk|ps`):
+  using the local store's `hasBlob`. Same for `artipod images`. *(This
+  commit; an unreadable parent says so rather than hiding the line.)*
+- [x] `--json` on `images`, `lsblk`, `ps` (and `artipod images|lsblk|ps`):
   JSON Lines, one object per row, shaped exactly like the exported
   `ImageRow` / `VolumeRow` / `ProcessInfo`; `images -v <ref> --json` emits one
   `ImageDetail`. No separate schema document; the TS types are the schema.
-- [ ] `/proc/images/<slug>/manifest.json` = the raw OCI manifest bytes (the
+  *(This commit; `mount --json` too.)*
+- [x] `/proc/images/<slug>/manifest.json` = the raw OCI manifest bytes (the
   honest machine view; `jq '.layers[].annotations["org.artipod.path"]'` works
-  with the shell's existing `jq`). `status` stays the human view.
-- [ ] Docs: `docs/apps.md` inventory section gains the flags, a jq example,
+  with the shell's existing `jq`). `status` stays the human view. *(This
+  commit; `status` also gains `Hydrated: k/n`. just-bash ships `jq` — verified
+  on 2784 via `/api/exec`.)*
+- [x] Docs: `docs/apps.md` inventory section gains the flags, a jq example,
   the D17 glossary table, and the plaintext-server / encrypted-local
   `.alias` note. Worklog records live output.
 - [ ] **Done when:** the four items above are live-verified on 2784 against
   real refs (a pulled encrypted fork, an unpulled plaintext pod, a >100-layer
   pod), core/SPA gates pass, and the glossary is in the docs. Renaming
   `image history` → `image layers` and fixing `commit` granularity are
-  recorded in D17 as follow-ups, not done here.
+  recorded in D17 as follow-ups, not done here. *(Live verification recorded
+  below; awaiting owner review of the output shape before checking.)*
 
 ### M1: Semantic discovery and simple composition
 
@@ -663,6 +668,29 @@ Success means humans and agents share an explicitly authorized local development
 ## Worklog
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
+
+### 2026-09-06 - MB: `-v` summary + parent diff, `-vv` hydration marks, `--json`, `/proc` manifests
+
+- `ImageDetail` gains per-layer `local` (store `hasBlob`), `changed` (layers
+  not in the first parent's manifest), and `manifest` (raw text). `images -v`
+  prints paths/alias/remote/parents, one summary line with hydration counts,
+  then the parent diff; `-vv` / `-v <ref>` the full stack with `●`/`☁︎`.
+  `--json` JSONL on `images`/`lsblk`/`mount`/`ps` and `artipod images|lsblk|ps`;
+  `images -v <ref> --json` = one `ImageDetail`. `/proc/images/<slug>/manifest.json`
+  projects the raw manifest when readable; `status` adds `Hydrated`.
+  Completers list `-v -vv --json` and refs. Shared `runImages`/`runVolumes`
+  so the three entry points cannot drift.
+- Live on 2784 (workspace shell over `samples/lifecycle:_3` cow): case pod
+  `13 file layers · 826.2 kB · 0 local ● 13 lazy ☁︎ · by examples-builder`;
+  `doug:_1` `308 file layers · 1.6 MB · 0 local ● 308 lazy ☁︎`, parent diff
+  first rendered as an empty `changed nothing` because the parent manifest was
+  not readable (404 on the server, not pulled) — fixed to say so explicitly;
+  `samples/lifecycle:_3` `9 file layers · 1 local ● 8 lazy ☁︎` with the
+  `.alias` line and "no parent — first head". `jq -r '.layers[-2:][].annotations["org.artipod.path"]'
+  /proc/images/doug__1/manifest.json` → `/u7-parity.md`, `/secret-note.md`.
+  `images --json` and `ps --json` rows parse as `ImageRow`/`ProcessInfo`.
+- Gates: core lint/tsc/build, 638 tests (10 inventory); SPA typecheck/lint/
+  export PASS; bundle swapped. Not pushed.
 
 ### 2026-09-06 - MA follow-ups: catalog console, fork labels, inventory, completion, `images -v`
 

@@ -15,7 +15,7 @@ import type { ZenFsLike } from '../sandbox/types.js';
 import type { PodEvents } from '../events.js';
 import { renderTable } from '../sandbox/table.js';
 import { verbTree, withCompletion } from '../sandbox/types.js';
-import { renderImages, renderImagesVerbose, renderVolumes } from '../sandbox/inventory-command.js';
+import { runImages, runVolumes } from '../sandbox/inventory-command.js';
 import type { InventoryProviders } from '../proc/inventory.js';
 import type { OciStore } from './store.js';
 import type { OciTransport } from './transport.js';
@@ -134,8 +134,8 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   lock [--all|<pod>]                   drop keys now (reads fail EACCES until login)
   status                               lease + capability expiries (also /proc/keys)
   ps                                   background tasks: sync retries, key renewal, schedules
-  images [-v]                          refs on the server (-v: where the bytes live + layer tree)
-  lsblk [-m]                           local workspaces; MOUNTPOINT set while a tab has one open
+  images [-v|-vv] [<ref>] [--json]     refs on the server (-v: paths + what changed; -vv: full layer stack)
+  lsblk [-m] [--json]                  local workspaces; MOUNTPOINT set while a tab has one open
   image pull <ref> --index             index-level pull: metadata + placeholders only
   hydrate <ref> <path|glob>            fetch the lazy layers backing matching paths
   dehydrate <ref> <glob>               evict layer blobs; placeholders + indexes stay
@@ -162,7 +162,7 @@ const VERBS = {
   snapshot: { create: {}, ls: {}, diff: {}, mount: {}, checkout: {} },
   commit: {}, compact: {}, gc: {}, push: {}, pull: {}, clone: {}, open: {}, files: {},
   hydrate: {}, dehydrate: {}, publish: {}, login: {}, lock: {}, status: {}, ps: {},
-  images: { '-v': {} }, lsblk: { '-m': {} }, offline: { on: {}, off: {} }, examples: {},
+  images: { '-v': {}, '-vv': {}, '--json': {} }, lsblk: { '-m': {}, '--json': {} }, offline: { on: {}, off: {} }, examples: {},
 };
 
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
@@ -206,14 +206,13 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
       }
 
       if (group === 'images') {
-        if (!podContext.inventory?.images) return fail('artipod images: no server catalog in this context');
-        if (args.includes('-v')) return ok(await renderImagesVerbose(podContext.inventory, [sub, ...rest].find((a) => a && !a.startsWith('-'))));
-        return ok(renderImages(await podContext.inventory.images()));
+        if (!podContext.inventory) return fail('artipod images: no server catalog in this context');
+        return runImages(podContext.inventory, [sub, ...rest].filter((a): a is string => !!a), 'artipod images');
       }
 
       if (group === 'lsblk') {
-        if (!podContext.inventory?.volumes) return fail('artipod lsblk: no workspace registry in this context');
-        return ok(renderVolumes(await podContext.inventory.volumes(), rest.includes('-m')));
+        if (!podContext.inventory) return fail('artipod lsblk: no workspace registry in this context');
+        return runVolumes(podContext.inventory, [sub, ...rest].filter((a): a is string => !!a), 'artipod lsblk');
       }
 
       if (group === 'ps') {

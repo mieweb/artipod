@@ -5,12 +5,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { configure, InMemory, fs as zfs, umount } from '@zenfs/core';
 import { createSandbox, type Sandbox } from '../sandbox/index.js';
-import { makeConsoleArtipodCommand, renderImagesVerbose } from '../sandbox/inventory-command.js';
+import { makeConsoleArtipodCommand } from '../sandbox/inventory-command.js';
 import { clearProcProviders, registerProcProvider } from './registry.js';
 import { unmountProc } from './snapshot.js';
 import { makeInventoryProvider, mountSlug, type InventoryProviders } from './inventory.js';
 import { ProcessTable } from './processes.js';
 
+const sampleLayers = [
+  { digest: 'sha256:1111111111', size: 512, path: 'artipod.json', mtimeMs: Date.UTC(2026, 8, 6, 17, 0), actor: 'examples-builder', local: true },
+  { digest: 'sha256:2222222222', size: 3 * 1024, path: 'main.js', mtimeMs: Date.UTC(2026, 8, 6, 18, 30), actor: 'browser:bfe8aff6', overlay: true, local: false },
+];
+const sampleManifest = JSON.stringify({ schemaVersion: 2, layers: sampleLayers.map((l) => ({ digest: l.digest, size: l.size, annotations: { 'org.artipod.path': l.path } })), annotations: { 'org.artipod.parents': '["sha256:b7e00e00aaaa"]' } });
 const inventory: InventoryProviders = {
   images: () => [
     { ref: 'samples/lifecycle:_3', digest: 'sha256:e92582b61eb3f23e', encryption: 'plaintext', status: 'forked' },
@@ -21,10 +26,7 @@ const inventory: InventoryProviders = {
     localPath: '/.artipod/oci/blobs/sha256/e92582b6', localPresent: true, aliasPath: '/.artipod/oci/blobs/sha256/e92582b6.alias',
     remoteUrl: 'https://host.test/api/pods/blobs/sha256:e92582b6',
     parents: ['sha256:b7e00e00aaaa'], actor: 'browser:bfe8aff6',
-    layers: [
-      { digest: 'sha256:1111111111', size: 512, path: 'artipod.json', mtimeMs: Date.UTC(2026, 8, 6, 17, 0), actor: 'examples-builder' },
-      { digest: 'sha256:2222222222', size: 3 * 1024, path: 'main.js', mtimeMs: Date.UTC(2026, 8, 6, 18, 30), actor: 'browser:bfe8aff6', overlay: true },
-    ],
+    layers: sampleLayers, changed: [sampleLayers[1]], manifest: sampleManifest,
   },
   volumes: async () => [
     { name: 'ba772299', type: 'blank', mode: 'rw', encryption: 'plaintext' },
@@ -54,7 +56,7 @@ describe('inventory', () => {
     expect((await sandbox.exec('artipod images')).stdout).toBe(r.stdout);
   });
 
-  it('images -v shows where the bytes live and the layer tree', async () => {
+  it('images -v is summary-first: paths, hydration counts, what changed since the parent', async () => {
     const r = await sandbox.exec('images -v');
     expect(r.exitCode).toBe(0);
     const text = r.stdout;
@@ -63,34 +65,59 @@ describe('inventory', () => {
     expect(text).toContain('    alias   /.artipod/oci/blobs/sha256/e92582b6.alias');
     expect(text).toContain('    remote  https://host.test/api/pods/blobs/sha256:e92582b6');
     expect(text).toContain('    parents b7e00e00');
-    expect(text).toContain('    layers  2 · 3.5 kB · by browser:bfe8aff6');
-    expect(text).toMatch(/├─ 1 {2}11111111 {5}512 B {2}artipod\.json {2}2026-09-06 17:00 {2}examples-builder/);
-    expect(text).toMatch(/└─ 2 {2}22222222 {4}3\.0 kB {2}main\.js {7}2026-09-06 18:30 {2}browser:bfe8aff6 {2}\(overlay\)/);
+    expect(text).toContain('    layers  2 file layers · 3.5 kB · 1 local ● 1 lazy ☁︎ · by browser:bfe8aff6');
+    expect(text).toContain('    changed 1 file layer since b7e00e00:');
+    expect(text).toMatch(/└─ 1 ☁︎ 22222222 {4}3\.0 kB {2}main\.js {2}2026-09-06 18:30 {2}browser:bfe8aff6 {2}\(overlay\)/);
+    expect(text).not.toContain('11111111');
     expect(text).toContain('local   /.artipod/oci/blobs/sha256/c8209ca3   (not pulled');
     expect(text).toContain('layers  locked — no key');
     expect((await sandbox.exec('artipod images -v')).stdout).toBe(text);
-    expect((await sandbox.exec('cat /proc/images/samples_lifecycle__3/status')).stdout).toContain('Alias:\t/.artipod/oci/blobs/sha256/e92582b6.alias');
-    const one = await sandbox.exec('images -v samples/lifecycle:_3');
-    expect(one.stdout.split('\n').filter((l) => l.startsWith('    ├─') || l.startsWith('    └─'))).toHaveLength(2);
-    expect(one.stdout).not.toContain('ghcr.io');
     expect((await sandbox.exec('images -v nope:1')).stderr).toContain('no such image');
     expect((await sandbox.complete('images -v sam')).candidates).toEqual(['samples/lifecycle:_3']);
   });
 
-  it('images -v caps long layer stacks in the listing, not in the single-image view', async () => {
-    const many: InventoryProviders = {
-      images: () => [{ ref: 'big:_1', digest: 'sha256:abcdef0123456789' }],
-      imageDetail: () => ({ manifestDigest: 'sha256:abcdef0123456789', localPath: '/x', localPresent: true, parents: [],
-        layers: Array.from({ length: 30 }, (_, i) => ({ digest: `sha256:${String(i).padStart(8, '0')}`, size: 100, path: `/f${i}` })) }),
-    };
-    const listing = await renderImagesVerbose(many);
-    expect(listing).toContain('… 22 older layers (images -v big:_1 shows all)');
-    expect(listing.split('\n').filter((l) => /^ {4}[├└]─/.test(l))).toHaveLength(8);
-    expect(listing).toMatch(/├─ 23 {2}00000022/);
-    expect(listing).toMatch(/└─ 30 {2}00000029/);
-    const full = await renderImagesVerbose(many, 'big:_1');
-    expect(full.split('\n').filter((l) => /^ {4}[├└]─/.test(l))).toHaveLength(30);
-    expect(full).not.toContain('older layers');
+  it('images -vv (or -v <ref>) shows the full stack with hydration marks', async () => {
+    const full = (await sandbox.exec('images -vv samples/lifecycle:_3')).stdout;
+    expect(full).toContain('    │   bottom → top; later layers win');
+    expect(full).toMatch(/├─ 1 ● 11111111 {5}512 B {2}artipod\.json {2}2026-09-06 17:00 {2}examples-builder/);
+    expect(full).toMatch(/└─ 2 ☁︎ 22222222 {4}3\.0 kB {2}main\.js {7}2026-09-06 18:30 {2}browser:bfe8aff6 {2}\(overlay\)/);
+    expect(full).not.toContain('changed');
+    expect(full).not.toContain('ghcr.io');
+    expect((await sandbox.exec('images -v samples/lifecycle:_3')).stdout).toBe(full);
+    const all = (await sandbox.exec('images -vv')).stdout;
+    expect(all).toContain('ghcr.io');
+    expect(all.split('\n').filter((l) => /^ {4}[├└]─/.test(l))).toHaveLength(2);
+  });
+
+  it('--json emits JSON Lines shaped like the exported types', async () => {
+    const rows = (await sandbox.exec('images --json')).stdout.trimEnd().split('\n').map((l) => JSON.parse(l));
+    expect(rows).toEqual(await inventory.images!());
+    const one = JSON.parse((await sandbox.exec('images -v samples/lifecycle:_3 --json')).stdout);
+    expect(one.changed).toHaveLength(1);
+    expect(one.layers[0].local).toBe(true);
+    expect((await sandbox.exec('artipod images --json')).stdout).toBe((await sandbox.exec('images --json')).stdout);
+    const vols = (await sandbox.exec('lsblk --json')).stdout.trimEnd().split('\n').map((l) => JSON.parse(l));
+    expect(vols.map((v) => v.name)).toEqual(['ba772299', 'samples/lifecycle:_3']);
+    expect((await sandbox.exec('mount --json')).stdout.trimEnd().split('\n')).toHaveLength(1);
+    const procs = (await sandbox.exec('ps --json')).stdout.trimEnd().split('\n').map((l) => JSON.parse(l));
+    expect(procs[0]).toMatchObject({ pid: 1, kind: 'init' });
+    expect((await sandbox.exec('images -v nope:1 --json')).stderr).toContain('no such image');
+  });
+
+  it('images -v explains an empty, missing, or unreadable parent diff', async () => {
+    const { renderImageDetail } = await import('../sandbox/inventory-command.js');
+    const base = { manifestDigest: 'sha256:aa', localPath: '/x', localPresent: true, layers: sampleLayers };
+    const row = { ref: 'r:_1', digest: 'sha256:aa' };
+    expect(renderImageDetail(row, { ...base, parents: ['sha256:bb'], changed: [] })).toContain('changed nothing since bb   (same layer set');
+    expect(renderImageDetail(row, { ...base, parents: ['sha256:bb'] })).toContain('changed (parent bb is not readable here');
+    expect(renderImageDetail(row, { ...base, parents: [] })).toContain('changed (no parent — first head of this tag');
+  });
+
+  it('projects the raw OCI manifest for jq', async () => {
+    const r = await sandbox.exec(`jq -r '.layers[].annotations["org.artipod.path"]' /proc/images/samples_lifecycle__3/manifest.json`);
+    expect(r.stdout).toBe('artipod.json\nmain.js\n');
+    expect((await sandbox.exec('cat /proc/images/samples_lifecycle__3/status')).stdout).toContain('Hydrated:\t1/2');
+    expect((await sandbox.exec('ls /proc/images/ghcr.io_mieweb_artipod-examples_case_latest/')).stdout).toBe('status\n');
   });
 
   it('lsblk lists every workspace; mount and -m only the mounted ones', async () => {
@@ -126,10 +153,10 @@ describe('inventory', () => {
     expect((await sandbox.complete('lsb')).candidates).toEqual(['lsblk']);
     expect(await sandbox.complete('artipod ')).toEqual({ candidates: ['help', 'images', 'lsblk', 'ps'], replaceStart: 8 });
     expect((await sandbox.complete('artipod im')).candidates).toEqual(['images']);
-    expect((await sandbox.complete('artipod lsblk ')).candidates).toEqual(['-m']);
-    expect((await sandbox.complete('artipod images ')).candidates).toEqual(['-v']);
+    expect((await sandbox.complete('artipod lsblk ')).candidates).toEqual(['--json', '-m']);
+    expect((await sandbox.complete('artipod images ')).candidates).toEqual(['--json', '-v', '-vv']);
     expect((await sandbox.complete('kill -')).candidates).toEqual(['-CONT', '-KILL', '-STOP', '-TERM']);
     expect((await sandbox.complete('echo hi; kill -S')).candidates).toEqual(['-STOP']);
-    expect((await sandbox.complete('images ')).candidates).toEqual(['-v']);
+    expect((await sandbox.complete('images ')).candidates).toEqual(['--json', '-v', '-vv']);
   });
 });

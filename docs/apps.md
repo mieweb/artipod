@@ -133,6 +133,56 @@ Consumers supply the rows through `InventoryProviders` on
 `createSandbox({ inventory })` / `createZenFsPod({ inventory })` and
 `registerProcProvider(makeInventoryProvider(inventory))`.
 
+### Looking inside an image: `-v`, `-vv`, `--json`, `/proc`
+
+```text
+$ images -v ghcr.io/mieweb/artipod-examples/case:latest   # (-v <ref> implies -vv)
+ghcr.io/mieweb/artipod-examples/case:latest  @c8209ca3  plaintext
+    local   /.artipod/oci/blobs/sha256/c8209ca3…   (not pulled — open the workspace to fetch it)
+    remote  http://127.0.0.1:2784/api/pods/blobs/sha256:c8209ca3…
+    parents f96e225b   (previous head — the tag's history)
+    layers  13 file layers · 826.2 kB · 0 local ● 13 lazy ☁︎ · by examples-builder
+    │   bottom → top; later layers win
+    ├─  1 ☁︎ f3aa878a     587 B  /DISCLAIMER.md                 2026-01-12 15:15  examples-builder
+    …
+    └─ 13 ☁︎ 688dd481     561 B  /visits/2026-01-21/report.mdy  2026-01-21 20:20  examples-builder
+```
+
+- `images -v` is summary-first: where the bytes live, the parents, one layer
+  line with hydration counts, and **what changed since the parent** (layers in
+  this head that the parent did not carry) — the `git show --stat` of an image.
+- `images -vv` (or `-v <ref>`) prints the whole stack; `●` = blob in this
+  browser's store, `☁︎` = lazy (not fetched yet).
+- `--json` on `images`, `lsblk`, `mount`, `ps` emits JSON Lines shaped like
+  the exported `ImageRow` / `VolumeRow` / `ProcessInfo`; `images -v <ref> --json`
+  emits one `ImageDetail`.
+- `/proc/images/<slug>/manifest.json` is the raw OCI manifest (present only
+  when it is readable here), so the real artifact is one `jq` away:
+
+  ```sh
+  jq -r '.layers[].annotations["org.artipod.path"]' /proc/images/doug__1/manifest.json
+  jq -r '.annotations["org.artipod.parents"]'        /proc/images/doug__1/manifest.json
+  ```
+
+A note on `ENCRYPTION` vs `alias`: the column is the **server's** state. A
+tab that holds a key lease encrypts everything it writes to its own store, so
+a plaintext server image you pulled shows an `alias` line locally — that is
+your copy being ciphertext, not the server's.
+
+### Glossary (vs OCI / Docker)
+
+| Term | Means here | OCI / Docker |
+|---|---|---|
+| image | manifest + config + layers | same |
+| ref | `repository:tag` | same |
+| file layer | an ordinary OCI layer that artipod's publish/import path emits **per file**, annotated with path, mtime, actor | a layer; Docker just happens to make one per build step |
+| lazy | a layer whose blob is not fetched yet (hydration state) | no equivalent; never means "per-file" |
+| parents | `org.artipod.parents`: the previous head(s) of the tag — the image's history | no equivalent (`docker history` shows layers, not lineage) |
+| workspace / fork | a copy-on-write upper over a basis image | container |
+
+Docker's overlay2 cannot run a >128-layer image as a rootfs; artipod volume
+images are not meant to be run that way.
+
 ## Lifecycle Sample
 
 The durable [sample pod](../examples/lifecycle-app/artipod.json) lives in

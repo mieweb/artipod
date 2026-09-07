@@ -49,39 +49,53 @@ export function catalogInventory(): InventoryProviders {
         aliasPath: aliasPresent ? aliasPath : undefined, remoteUrl: `${location.origin}/api/pods/blobs/${row.manifestDigest}`,
         layers: [], parents: [],
       };
-      // Read locally (decrypting with the leased key) and fall back to the server.
-      type Manifest = { layers: { digest: string; size: number; annotations?: Record<string, string> }[]; annotations?: Record<string, string> };
-      const decode = (bytes: Uint8Array) => JSON.parse(new TextDecoder().decode(bytes)) as Manifest;
-      let manifest: Manifest | undefined;
-      try {
-        const store = new OciStore(fs as ConstructorParameters<typeof OciStore>[0]);
-        await store.init();
-        const key = keys().getKey();
-        if (key) await store.enableEncryption(() => key);
-        if (detail.localPresent) manifest = decode(await store.getBlob(row.manifestDigest as never));
-      } catch { /* locked or missing: try the server */ }
-      if (!manifest) {
-        try {
-          const { HttpPodStore } = await import('@artipod/core/manager');
-          manifest = decode(await new HttpPodStore('/api/pods').getBlob(row.manifestDigest as never));
-        } catch (e) {
-          detail.unavailable = row.encrypted && !keys().getKey()
-            ? 'locked — this tab holds no key lease; log in to read the manifest'
-            : `unavailable (${(e as Error).message})`;
-          return detail;
+      type Layer = { digest: string; size: number; annotations?: Record<string, string> };
+      type Manifest = { layers: Layer[]; annotations?: Record<string, string> };
+      const store = new OciStore(fs as ConstructorParameters<typeof OciStore>[0]);
+      await store.init();
+      const key = keys().getKey();
+      if (key) await store.enableEncryption(() => key);
+      // A manifest by digest: local store first (decrypting with the leased key), then the server.
+      const readManifest = async (digest: string): Promise<{ text: string; manifest: Manifest } | undefined> => {
+        let bytes: Uint8Array | undefined;
+        try { if (await store.hasBlob(digest as never)) bytes = await store.getBlob(digest as never); } catch { /* locked or missing */ }
+        if (!bytes) {
+          try {
+            const { HttpPodStore } = await import('@artipod/core/manager');
+            bytes = await new HttpPodStore('/api/pods').getBlob(digest as never);
+          } catch { return undefined; }
         }
+        const text = new TextDecoder().decode(bytes);
+        return { text, manifest: JSON.parse(text) as Manifest };
+      };
+      const head = await readManifest(row.manifestDigest);
+      if (!head) {
+        detail.unavailable = row.encrypted && !key
+          ? 'locked — this tab holds no key lease; log in to read the manifest'
+          : 'unavailable — neither the local store nor the server returned the manifest';
+        return detail;
       }
-      const found: Manifest = manifest;
-      detail.layers = found.layers.map((l) => ({
+      const toRow = async (l: Layer) => ({
         digest: l.digest, size: l.size, path: l.annotations?.['org.artipod.path'],
         mtimeMs: l.annotations?.['org.artipod.mtime'] ? Number(l.annotations['org.artipod.mtime']) : undefined,
         actor: l.annotations?.['org.artipod.actor'], overlay: !!l.annotations?.['org.artipod.overlay'],
-      }));
-      const rawParents = found.annotations?.['org.artipod.parents'] ?? '';
+        local: await store.hasBlob(l.digest as never).catch(() => false),
+      });
+      detail.manifest = head.text;
+      detail.layers = await Promise.all(head.manifest.layers.map(toRow));
+      const rawParents = head.manifest.annotations?.['org.artipod.parents'] ?? '';
       detail.parents = rawParents.trim().startsWith('[')
         ? (JSON.parse(rawParents) as string[])
         : rawParents.split(',').map((s) => s.trim()).filter(Boolean);
-      detail.actor = found.annotations?.['org.artipod.actor'];
+      detail.actor = head.manifest.annotations?.['org.artipod.actor'];
+      // What this head changed: layers not carried by the first parent (per-file layers make this exact).
+      if (detail.parents[0]) {
+        const parent = await readManifest(detail.parents[0]);
+        if (parent) {
+          const inherited = new Set(parent.manifest.layers.map((l) => l.digest));
+          detail.changed = detail.layers.filter((l) => !inherited.has(l.digest));
+        }
+      }
       return detail;
     },
     async images(): Promise<ImageRow[]> {

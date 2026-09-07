@@ -12,10 +12,11 @@ import { renderTable } from './table.js';
 import { withCompletion } from './types.js';
 
 const USAGE = {
-  ps: `usage: ps [-l]
+  ps: `usage: ps [-l] [--json]
 
 List the processes in this pod session: the supervisor (pid 1), shells,
-running applications and background tasks. -l adds kind-specific detail.
+running applications and background tasks. -l adds kind-specific detail;
+--json emits JSON Lines, one ProcessInfo per line.
 `,
   kill: `usage: kill [-STOP|-CONT|-TERM|-KILL] <pid>...
 
@@ -36,6 +37,7 @@ const age = (startedAt: number, now: number): string => {
 export function makeProcessCommands(table: ProcessTable) {
   const ps = withCompletion(defineCommand('ps', async (args) => {
     if (args.includes('--help') || args.includes('-h')) return ok(USAGE.ps);
+    if (args.includes('--json')) return ok(table.list().map((p) => JSON.stringify(p)).join('\n') + '\n');
     const long = args.includes('-l');
     const now = Date.now();
     const rows = table.list().map((p) => {
@@ -47,7 +49,7 @@ export function makeProcessCommands(table: ProcessTable) {
     });
     const header = ['PID', 'PPID', 'KIND', 'STATE', 'TIME', 'NAME', ...(long ? ['DETAIL'] : [])];
     return ok(renderTable(header, rows, [0, 1]));
-  }), () => ['-l']);
+  }), () => ['-l', '--json']);
 
   const kill = withCompletion(defineCommand('kill', async (args) => {
     if (args.includes('--help') || args.includes('-h')) return ok(USAGE.kill);
