@@ -684,6 +684,11 @@ M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. Fo
   lists the server; mounting happens inside a workspace shell via the pod
   verbs above. There is no server-side container mount from the browser —
   images materialize into ZenFS (lazy layers, hydrated on read).
+- Owner then hit the catalog console's `artipod` help, which listed only
+  `images|volumes|ps` — the mount verbs I had described live in the workspace
+  shell's `artipod`. Same command name, two contexts; the help now says so
+  and lists the workspace verbs under "in a workspace shell" so nobody has
+  to guess where `image mount` / `open` went.
 
 ### 2026-09-06 - MB: `-v` summary + parent diff, `-vv` hydration marks, `--json`, `/proc` manifests
 

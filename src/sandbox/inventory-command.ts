@@ -180,13 +180,21 @@ export function makeInventoryCommands(providers: InventoryProviders) {
   return [images, volumes];
 }
 
-const CONSOLE_USAGE = `usage: artipod <images|volumes|ps> …
+const CONSOLE_USAGE = `usage: artipod <images|volumes|ps> …   (catalog console — no pod open)
+
+here:
   images [-v|-vv] [<ref>] [--json]   refs on the server (same as the bare \`images\`)
   volumes [-m] [--json]              local workspaces and whether a tab has them mounted
   ps [--json]                        processes in this console's namespace
 
-This console has no pod open. Pod verbs (image mount, open, snapshot, commit,
-push, publish, login, …) live in a workspace shell — open one from the catalog.
+in a workspace shell (open one from the catalog, or click a ref):
+  image mount <ref> [path] [--through N]   read-only lazy view of a server image
+  open <ref> [path]                        writable copy-on-write overlay on an image
+  image pull|ls|inspect|history, layer, snapshot, commit, push, pull, clone,
+  publish, login, lock, status, offline, hydrate, dehydrate, files, examples
+
+The same \`artipod\` command grows those verbs once a pod is open; here they
+would have nothing to act on.
 `;
 
 /** `artipod` for consoles without a pod: inventory + processes only. */

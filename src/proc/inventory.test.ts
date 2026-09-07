@@ -136,7 +136,8 @@ describe('inventory', () => {
   });
 
   it('pod-less artipod explains itself and refuses pod verbs', async () => {
-    expect((await sandbox.exec('artipod')).stdout).toContain('This console has no pod open');
+    expect((await sandbox.exec('artipod')).stdout).toContain('catalog console — no pod open');
+    expect((await sandbox.exec('artipod')).stdout).toContain('image mount <ref> [path] [--through N]');
     const r = await sandbox.exec('artipod snapshot ls');
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toContain("'snapshot' needs an open pod");
