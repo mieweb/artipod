@@ -374,7 +374,8 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           ) : (
             <ul className="mb-6 space-y-2">
               {localOnly.map((e) => {
-                // a cow fork IS a pending draft — show it under the _ name it will publish as
+                // a cow fork IS a pending draft; the _ name it would publish as is a
+                // suggestion, so it goes in the meta — the row is named by its basis
                 const draftName =
                   e.kind === 'pod' && e.mode === 'cow' ? nextDraftRef(e.id, new Set((serverRefs ?? []).map((r) => r.ref))) : null;
                 return row(
@@ -392,7 +393,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
                         });
                       }}
                       className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] uppercase text-gray-400 hover:border-gray-400 hover:text-white"
-                      title="Publish to the server"
+                      title={draftName ? `Publish to the server as ${draftName}` : 'Publish to the server'}
                     >
                       publish
                     </button>
@@ -400,9 +401,9 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
                       {e.kind === 'blank' ? 'blank' : e.mode === 'cow' ? 'unpublished fork' : 'local'}
                     </span>
                   </>,
-                  draftName ? `fork of ${e.id}` : e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
+                  draftName ? `fork · publishes as ${draftName}` : e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
                   e.mode ?? 'rw',
-                  draftName ?? e.id,
+                  draftName ? `${e.id} (fork)` : e.id,
                 );
               })}
             </ul>
