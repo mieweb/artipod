@@ -17,7 +17,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "artipod": "file:../..",
-    "dotenv": "^16.4.5"
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.5",
