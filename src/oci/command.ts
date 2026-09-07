@@ -15,7 +15,7 @@ import type { ZenFsLike } from '../sandbox/types.js';
 import type { PodEvents } from '../events.js';
 import { renderTable } from '../sandbox/table.js';
 import { verbTree, withCompletion } from '../sandbox/types.js';
-import { renderImages, renderVolumes } from '../sandbox/inventory-command.js';
+import { renderImages, renderImagesVerbose, renderVolumes } from '../sandbox/inventory-command.js';
 import type { InventoryProviders } from '../proc/inventory.js';
 import type { OciStore } from './store.js';
 import type { OciTransport } from './transport.js';
@@ -134,7 +134,7 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   lock [--all|<pod>]                   drop keys now (reads fail EACCES until login)
   status                               lease + capability expiries (also /proc/keys)
   ps                                   background tasks: sync retries, key renewal, schedules
-  images                               refs on the server (what this machine can open or run)
+  images [-v]                          refs on the server (-v: where the bytes live + layer tree)
   lsblk [-m]                           local workspaces; MOUNTPOINT set while a tab has one open
   image pull <ref> --index             index-level pull: metadata + placeholders only
   hydrate <ref> <path|glob>            fetch the lazy layers backing matching paths
@@ -162,7 +162,7 @@ const VERBS = {
   snapshot: { create: {}, ls: {}, diff: {}, mount: {}, checkout: {} },
   commit: {}, compact: {}, gc: {}, push: {}, pull: {}, clone: {}, open: {}, files: {},
   hydrate: {}, dehydrate: {}, publish: {}, login: {}, lock: {}, status: {}, ps: {},
-  images: {}, lsblk: {}, offline: { on: {}, off: {} }, examples: {},
+  images: { '-v': {} }, lsblk: { '-m': {} }, offline: { on: {}, off: {} }, examples: {},
 };
 
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
@@ -207,6 +207,7 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
 
       if (group === 'images') {
         if (!podContext.inventory?.images) return fail('artipod images: no server catalog in this context');
+        if (args.includes('-v')) return ok(await renderImagesVerbose(podContext.inventory, [sub, ...rest].find((a) => a && !a.startsWith('-'))));
         return ok(renderImages(await podContext.inventory.images()));
       }
 

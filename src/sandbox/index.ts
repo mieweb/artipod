@@ -37,7 +37,7 @@ export { verbTree, withCompletion } from './types.js';
 export { SHELL_NOTES } from './notes-command.js';
 export { ZenFsAdapter } from './zenfs-adapter.js';
 export { SUDO_DENIED_MESSAGE } from './sudo-command.js';
-export { makeConsoleArtipodCommand, makeInventoryCommands, renderImages, renderVolumes } from './inventory-command.js';
+export { makeConsoleArtipodCommand, makeInventoryCommands, renderImageDetail, renderImages, renderImagesVerbose, renderVolumes } from './inventory-command.js';
 export { makeProcessCommands } from './process-command.js';
 // App-facing sandbox infrastructure: storage backends, git ops + auth.
 export * from './storage.js';

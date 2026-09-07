@@ -31,4 +31,4 @@ export { makePodManifestProvider, registerPodManifestProvider } from './pod-prov
 export { PROCESS_SIGNALS, ProcessError, ProcessTable, registerProcessTable } from './processes.js';
 export type { ProcessHandle, ProcessInfo, ProcessKind, ProcessSignal, ProcessSpec } from './processes.js';
 export { makeInventoryProvider, mountSlug, shortDigest } from './inventory.js';
-export type { ImageRow, InventoryProviders, VolumeRow } from './inventory.js';
+export type { ImageDetail, ImageRow, InventoryProviders, LayerRow, VolumeRow } from './inventory.js';

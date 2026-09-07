@@ -2,10 +2,10 @@
  * Inventory providers for the shells: the SAME derivations Catalog.tsx
  * renders, so `images` / `lsblk` / /proc line up with the page.
  */
-import type { ImageRow, InventoryProviders, VolumeRow } from '@artipod/core/proc';
+import type { ImageDetail, ImageRow, InventoryProviders, VolumeRow } from '@artipod/core/proc';
 import { mountSlug } from '@artipod/core/proc';
 import { catalogStore, refreshServer, E2E_MEDIA_TYPE } from '../stores/catalog';
-import { uiState } from '../boot';
+import { keys, uiState } from '../boot';
 
 /** Ids whose workspace tab is alive — each holds a Web Lock for its lifetime. */
 export async function liveWorkspaceIds(): Promise<Set<string>> {
@@ -33,6 +33,57 @@ async function localEntries() {
 
 export function catalogInventory(): InventoryProviders {
   return {
+    async imageDetail(ref): Promise<ImageDetail | null> {
+      const { serverRefs } = await serverState();
+      const row = serverRefs?.find((r) => r.ref === ref);
+      if (!row?.manifestDigest) return null;
+      const { OciStore, OCI_ROOT, digestHex } = await import('@artipod/core/oci');
+      const { fs } = await import('../filesystem');
+      const hex = digestHex(row.manifestDigest as never);
+      const localPath = `${OCI_ROOT}/blobs/sha256/${hex}`;
+      const aliasPath = `${localPath}.alias`;
+      const stat = async (p: string) => fs.promises.stat(p).then(() => true, () => false);
+      const [blobPresent, aliasPresent] = await Promise.all([stat(localPath), stat(aliasPath)]);
+      const detail: ImageDetail = {
+        manifestDigest: row.manifestDigest, localPath, localPresent: blobPresent || aliasPresent,
+        aliasPath: aliasPresent ? aliasPath : undefined, remoteUrl: `${location.origin}/api/pods/blobs/${row.manifestDigest}`,
+        layers: [], parents: [],
+      };
+      // Read locally (decrypting with the leased key) and fall back to the server.
+      type Manifest = { layers: { digest: string; size: number; annotations?: Record<string, string> }[]; annotations?: Record<string, string> };
+      const decode = (bytes: Uint8Array) => JSON.parse(new TextDecoder().decode(bytes)) as Manifest;
+      let manifest: Manifest | undefined;
+      try {
+        const store = new OciStore(fs as ConstructorParameters<typeof OciStore>[0]);
+        await store.init();
+        const key = keys().getKey();
+        if (key) await store.enableEncryption(() => key);
+        if (detail.localPresent) manifest = decode(await store.getBlob(row.manifestDigest as never));
+      } catch { /* locked or missing: try the server */ }
+      if (!manifest) {
+        try {
+          const { HttpPodStore } = await import('@artipod/core/manager');
+          manifest = decode(await new HttpPodStore('/api/pods').getBlob(row.manifestDigest as never));
+        } catch (e) {
+          detail.unavailable = row.encrypted && !keys().getKey()
+            ? 'locked — this tab holds no key lease; log in to read the manifest'
+            : `unavailable (${(e as Error).message})`;
+          return detail;
+        }
+      }
+      const found: Manifest = manifest;
+      detail.layers = found.layers.map((l) => ({
+        digest: l.digest, size: l.size, path: l.annotations?.['org.artipod.path'],
+        mtimeMs: l.annotations?.['org.artipod.mtime'] ? Number(l.annotations['org.artipod.mtime']) : undefined,
+        actor: l.annotations?.['org.artipod.actor'], overlay: !!l.annotations?.['org.artipod.overlay'],
+      }));
+      const rawParents = found.annotations?.['org.artipod.parents'] ?? '';
+      detail.parents = rawParents.trim().startsWith('[')
+        ? (JSON.parse(rawParents) as string[])
+        : rawParents.split(',').map((s) => s.trim()).filter(Boolean);
+      detail.actor = found.annotations?.['org.artipod.actor'];
+      return detail;
+    },
     async images(): Promise<ImageRow[]> {
       const { serverRefs, verdicts, changedRefs } = await serverState();
       const local = await localEntries();
