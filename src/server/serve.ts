@@ -23,7 +23,7 @@ import { serveApp } from './node.js';
 import { publishDirectory, materializeRef } from './folder.js';
 import { PublishMap, withinRoots } from './publish-map.js';
 import { ENCRYPTED_REF_MEDIA_TYPE } from '../manager/encrypted-sync.js';
-import { loadOrCreateAuthority, ensurePodKek } from './authority-dir.js';
+import { loadOrCreateAuthority, loadStoreAuthority, ensurePodKek } from './authority-dir.js';
 import { DEFAULT_KEY_TTL_MS } from './keys-handler.js';
 import { UI_REF } from './ui-ref.js';
 
@@ -51,6 +51,7 @@ export interface ServeCliOptions {
   ui: boolean;
   /** Broker mode (S5.5): encrypt the store at rest + serve /api/keys. */
   encrypt?: boolean;
+  keyless?: boolean;
   /** Lease TTL cap for /api/keys logins: <n>(ms|s|m|h|d). Default 1h (V10). */
   keyTtl?: string;
   /** Authority home (signing key + raw pod KEKs, 0700). Default ~/.artipod/authority. */
@@ -83,18 +84,30 @@ export function parseKeyTtl(spec: string): number | null {
   return ms > 0 ? ms : null;
 }
 
-/** The served store's stable pod identity (lease scope): <store>/store-id.json. */
-async function loadOrCreateStoreId(storeDir: string): Promise<string> {
+interface StoreIdentity {
+  podId: string;
+  authority?: string;
+}
+
+async function readStoreIdentity(storeDir: string): Promise<StoreIdentity | null> {
   const file = join(storeDir, 'store-id.json');
+  let text: string;
   try {
-    const parsed = JSON.parse(await readFile(file, 'utf8')) as { podId?: string };
-    if (parsed.podId) return parsed.podId;
-  } catch {
-    // first --encrypt on this store
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new Error(`Cannot read encrypted store identity at ${file}; restore access or use --keyless.`);
   }
-  const podId = randomBytes(8).toString('hex');
-  await writeFile(file, `${JSON.stringify({ podId }, null, 2)}\n`);
-  return podId;
+  try {
+    const parsed = JSON.parse(text) as StoreIdentity;
+    if (typeof parsed.podId !== 'string' || !parsed.podId ||
+        (parsed.authority !== undefined && (typeof parsed.authority !== 'string' || !parsed.authority))) {
+      throw new Error('Invalid store identity');
+    }
+    return parsed;
+  } catch {
+    throw new Error(`Invalid encrypted store identity at ${file}; restore it or use --keyless.`);
+  }
 }
 
 /** Locked tags (tag immutability): <store>/locks.json, applied via --lock/--unlock. */
@@ -228,25 +241,38 @@ async function resolveUiDirInner(store: OciLayoutPodStore): Promise<{ dir: strin
 }
 
 export async function runServe(opts: ServeCliOptions): Promise<void> {
+  if (opts.encrypt && opts.keyless) throw new Error('--encrypt and --keyless cannot be combined');
   const storeDir = resolve(opts.store);
   const store = new OciLayoutPodStore(nodePodFs(), storeDir);
   await store.init();
 
-  // --encrypt (S5.5, V9 broker): load-or-create the authority + this store's
-  // KEK BEFORE anything writes blobs, so the first --publish already lands
-  // as ciphertext. The serve holds the key — it can decrypt what it brokers.
+  const identity = opts.keyless ? null : await readStoreIdentity(storeDir);
   let broker: { authority: Authority; podId: string; capTtlMs: number; dir: string; created: boolean } | null = null;
-  if (opts.encrypt) {
+  if (!opts.keyless && (opts.encrypt || identity)) {
     const capTtlMs = opts.keyTtl ? parseKeyTtl(opts.keyTtl) : DEFAULT_KEY_TTL_MS;
     if (capTtlMs === null) {
       stdout.write(`artipod serve: invalid --key-ttl '${opts.keyTtl}' — want <n>(ms|s|m|h|d), e.g. 1h\n`);
       process.exit(2);
     }
-    const dir = resolve(opts.authority ?? join(homedir(), '.artipod/authority'));
-    const { authority, created } = await loadOrCreateAuthority(dir, `serve:${hostname()}`);
-    const podId = await loadOrCreateStoreId(storeDir);
-    const { kek } = await ensurePodKek(dir, authority, podId);
+    const dir = resolve(opts.authority ?? identity?.authority ?? join(homedir(), '.artipod/authority'));
+    const podId = identity?.podId ?? randomBytes(8).toString('hex');
+    let loaded: Awaited<ReturnType<typeof loadStoreAuthority>>;
+    if (identity) {
+      try {
+        loaded = await loadStoreAuthority(dir, podId);
+      } catch {
+        throw new Error(`Cannot resume encrypted store ${storeDir}: authority or matching key missing, unreadable, or invalid at ${dir}. Restore the keys, select --authority <dir>, or use --keyless for blind hosting. No replacement keys were created.`);
+      }
+    } else {
+      const authorityInfo = await loadOrCreateAuthority(dir, `serve:${hostname()}`);
+      const { kek } = await ensurePodKek(dir, authorityInfo.authority, podId);
+      loaded = { ...authorityInfo, kek };
+    }
+    const { authority, created, kek } = loaded;
     store.enableEncryption(await importBlobKey(kek));
+    if (identity?.authority !== dir) {
+      await writeFile(join(storeDir, 'store-id.json'), `${JSON.stringify({ podId, authority: dir }, null, 2)}\n`);
+    }
     broker = { authority, podId, capTtlMs, dir, created };
   }
 

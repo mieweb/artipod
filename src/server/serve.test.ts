@@ -5,7 +5,7 @@
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { sha256 } from '../oci/digest.js';
@@ -47,7 +47,10 @@ async function startServe(
       }
     };
     child.stdout!.on('data', probe);
-    void exited.then(() => rejectUrl(new Error(`serve exited early:\n${out}`)));
+    void exited.then(() => {
+      clearTimeout(timer);
+      rejectUrl(new Error(`serve exited early:\n${out}`));
+    });
   });
   return { url, child, exited, output: () => out };
 }
@@ -222,6 +225,67 @@ describe('artipod serve', () => {
     await exited;
   }, 60_000);
 
+  it('resumes a legacy encrypted store with the default authority but leaves fresh stores plaintext', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'apod-enc-home-'));
+    scratch.push(home);
+    const storeDir = join(home, 'store');
+    const opts = { storeDir, env: { HOME: home } };
+    const initial = await startServe(['--encrypt', '--no-ui'], opts);
+    initial.child.kill('SIGTERM');
+    await initial.exited;
+    const identityFile = join(storeDir, 'store-id.json');
+    const { podId } = JSON.parse(await readFile(identityFile, 'utf8')) as { podId: string };
+    await writeFile(identityFile, JSON.stringify({ podId }));
+
+    const resumed = await startServe(['--no-ui'], opts);
+    expect((await fetch(`${resumed.url}/api/keys`)).status).toBe(200);
+    expect((await fetch(`${resumed.url}/v2/`)).status).toBe(403);
+    resumed.child.kill('SIGTERM');
+    await resumed.exited;
+
+    const fresh = await startServe(['--no-ui'], { env: { HOME: home }, storeDir: join(home, 'fresh') });
+    expect((await fetch(`${fresh.url}/api/keys`)).status).toBe(404);
+    expect((await fetch(`${fresh.url}/v2/`)).status).toBe(200);
+    await expect(readFile(join(home, 'fresh/store-id.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    fresh.child.kill('SIGTERM');
+    await fresh.exited;
+  }, 30_000);
+
+  it.each([
+    { file: 'authority/authority.json', content: null },
+    { file: 'authority/authority.json', content: '{}' },
+    { file: 'authority/keks.json', content: null },
+    { file: 'authority/keks.json', content: '{' },
+    { file: 'authority/keks.json', content: '{}' },
+    { file: 'store/store-id.json', content: '{}' },
+  ])('refuses encrypted restart without replacing $file ($content)', async ({ file, content }) => {
+    const root = await mkdtemp(join(tmpdir(), 'apod-enc-failure-'));
+    scratch.push(root);
+    const storeDir = join(root, 'store');
+    const initial = await startServe(['--encrypt', '--authority', join(root, 'authority'), '--no-ui'], { storeDir });
+    initial.child.kill('SIGTERM');
+    await initial.exited;
+    const damaged = join(root, file);
+    if (content === null) await unlink(damaged);
+    else await writeFile(damaged, content);
+    const paths = ['authority/authority.json', 'authority/keks.json', 'store/store-id.json'].map((path) => join(root, path));
+    const before = await Promise.all(paths.map((path) => readFile(path, 'utf8').catch(() => null)));
+
+    for (const flags of [[], ['--encrypt']]) {
+      await expect(startServe([...flags, '--no-ui'], { storeDir })).rejects.toThrow(/restore.*--keyless/i);
+      expect(await Promise.all(paths.map((path) => readFile(path, 'utf8').catch(() => null)))).toEqual(before);
+    }
+    const blind = await startServe(['--keyless', '--no-ui'], { storeDir });
+    expect((await fetch(`${blind.url}/api/keys`)).status).toBe(404);
+    expect(await Promise.all(paths.map((path) => readFile(path, 'utf8').catch(() => null)))).toEqual(before);
+    blind.child.kill('SIGTERM');
+    await blind.exited;
+  }, 30_000);
+
+  it('rejects --encrypt together with --keyless', async () => {
+    await expect(startServe(['--encrypt', '--keyless'])).rejects.toThrow('--encrypt and --keyless cannot be combined');
+  });
+
   it('--encrypt: ciphertext at rest, /api/keys login, lease-gated reads, /v2 off; keyless reopen is a blind host', async () => {
     const scratchRoot = await mkdtemp(join(tmpdir(), 'apod-enc-'));
     scratch.push(scratchRoot);
@@ -282,9 +346,28 @@ describe('artipod serve', () => {
     broker.child.kill('SIGTERM');
     await broker.exited;
 
+    const resumed = await startServe([], { storeDir });
+    expect((await fetch(`${resumed.url}/v2/`)).status).toBe(403);
+    expect((await fetch(`${resumed.url}/api/pods/blobs/${head.manifestDigest}`)).status).toBe(401);
+    expect((await fetch(`${resumed.url}/api/pods/blobs/${head.manifestDigest}`, { headers: leaseHeader })).status).toBe(200);
+    const resumedPlain = await fetch(`${resumed.url}/api/pods/blobs/${layer.digest}`, { headers: leaseHeader });
+    expect(resumedPlain.status).toBe(200);
+    let resumedTar: Uint8Array = new Uint8Array(await resumedPlain.arrayBuffer());
+    if (isGzip(resumedTar)) resumedTar = await gunzip(resumedTar);
+    expect(resumedTar).toEqual(layerTar);
+    const newBytes = new TextEncoder().encode('RESTART-SECRET');
+    const newDigest = await sha256(newBytes);
+    expect((await fetch(`${resumed.url}/api/pods/blobs/${newDigest}`, {
+      method: 'PUT', headers: leaseHeader, body: newBytes,
+    })).ok).toBe(true);
+    const cipherDigest = (await readFile(join(blobDir, `${newDigest.slice(7)}.alias`), 'utf8')).trim();
+    expect((await readFile(join(blobDir, cipherDigest.slice(7)), 'latin1')).includes('RESTART-SECRET')).toBe(false);
+    resumed.child.kill('SIGTERM');
+    await resumed.exited;
+
     // keyless reopen of the SAME store: refs visible, plaintext digests 423,
     // and encrypted-envelope refs sync straight through (blind host)
-    const blind = await startServe(['--no-seal'], { storeDir });
+    const blind = await startServe(['--no-seal', '--keyless'], { storeDir });
     expect((await fetch(`${blind.url}/api/pods/refs`)).ok).toBe(true);
     expect((await fetch(`${blind.url}/api/pods/blobs/${head.manifestDigest}`)).status).toBe(423);
 

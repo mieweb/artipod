@@ -667,6 +667,19 @@ Success means humans and agents share an explicitly authorized local development
 
 ## Worklog
 
+### 2026-09-09 - automatic encrypted serve restart
+
+- Owner requested per-store automatic broker restart. `serve` now detects the
+  existing store identity, remembers its authority path, and requires the
+  original keys; fresh stores still need `--encrypt`.
+- Missing or invalid identity/key material fails startup without replacement.
+  Explicit `--keyless` preserves blind hosting without clearing broker settings.
+- Verification: lint and build passed; all 42 focused serve, CLI, and authority
+  tests passed, including restart reads/writes and missing-key failures.
+- Pre-commit: all 649 tests passed with `npm run test -- --maxWorkers=2`;
+  the initial default-concurrency run hit five-second timeouts in CLI prune
+  and exec concurrency tests. No timeout or assertion changes were needed.
+
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
 
 ### 2026-09-07 - `artipod run` is a pod too: identity + process table on the CLI

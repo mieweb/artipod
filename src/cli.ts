@@ -57,16 +57,20 @@ const SERVE_FLAGS = `  --port <n>         listen port (default 2784; 0 = OS-assi
   --encrypt          broker mode (key authority): store blobs as chunked-AEAD
                      ciphertext at rest and serve key leases at /api/keys — a
                      signing key + this store's KEK are created on first use.
+                     Encrypted stores automatically resume broker mode on restart.
                      Honest caveat: THE SERVE MACHINE CAN DECRYPT WHAT IT
                      BROKERS, and /v2 is off while encrypted (docker cannot
                      carry leases). Keyless serves of encrypted refs stay
                      blind hosts — ciphertext syncs, keys move out-of-band
+  --keyless          explicitly serve without keys (blind host); overrides automatic
+                     broker mode, does not decrypt data or erase encryption settings
   --key-ttl <dur>    lease TTL cap for /api/keys logins, <n>(ms|s|m|h|d)
                      (default 1h) — bounds an open session: client keyrings
                      evaporate the key at expiry and re-login restores; it is
                      NOT revocation of an already-leaked key
   --authority <dir>  key authority home (signing key + raw pod KEKs, 0700;
-                     default ~/.artipod/authority) — guard its backups
+                     remembered per store; initially ~/.artipod/authority)
+                     — guard its backups
   --no-ui            headless landing only (skip UI resolution); the UI resolves
                      local-first: ARTIPOD_UI_DIR (a static build), then the
                      ARTIPOD_UI_REF ref in the store (default artipod-ui:latest)
@@ -318,6 +322,7 @@ function parseArgs(
         }
       } else if (a === '--no-seal') serve.noSeal = true;
       else if (a === '--encrypt') serve.encrypt = true;
+      else if (a === '--keyless') serve.keyless = true;
       else if (a === '--key-ttl') {
         serve.keyTtl = rest[++i];
         if (!serve.keyTtl || !/^\d+(ms|s|m|h|d)?$/.test(serve.keyTtl.trim())) {
