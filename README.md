@@ -8,7 +8,22 @@
 
 ## What is an artipod?
 
-An **artipod** is a self-contained, portable workspace — a declarative set of mounts over a virtual filesystem, plus everything that operates on it:
+An **artipod** is portable artifact state, exposed as a workspace through a declarative set of filesystem mounts. The pod is the data; the software that mounts, synchronizes, or executes against it is separate.
+
+### Artifact format versus services
+
+| Layer | What it describes | What it does not imply |
+|---|---|---|
+| **Artipod artifact format** | Files and metadata, represented today by OCI manifests, content-addressed layers, refs, and optional encrypted storage | A running server, agent, or synchronization connection; this is an artifact layout, not a single-file extension |
+| **Mount and runtime libraries** | Concrete sources, mount paths, access modes, and execution through a shell, browser app, or container | That every pod contains executable code or can choose its own permissions |
+| **Synchronization services** | Transfer of blobs and refs between stores, lazy hydration, and reconciliation of saved changes | Remote execution or access to another pod merely because it lives on the same server |
+| **Authority and hosting services** | Key leases, authorization, and endpoints supplied by a trusted host | Permissions embedded in or self-granted by a downloaded artifact |
+
+The artifact can exist without any of these services running. OCI is the current snapshot and distribution representation, not a requirement that a live workspace use one particular storage backend. See the [on-disk format](docs/on-disk-layout.md).
+
+The synchronization capability is called **Artipod sync** here, with **encrypted sync** describing its use with encrypted pod content, not a separate product or file format. HTTPS protects transport; pod encryption protects stored content. A blind relay can synchronize ciphertext without decryption keys; server-side processing requires a separately authorized decryption grant. See [sync](docs/sync.md) and [encryption](docs/encryption.md).
+
+`@artipod/core` supplies the libraries for these capabilities. `artipod serve` assembles a reference host; applications can embed the APIs in their own services. The implementation includes:
 
 - a **bash isolate** (real bash semantics, browser and server) ✅
 - **AI agent tools** with VS Code-compatible schemas, an agent loop, and context/prompt building ✅
@@ -31,6 +46,61 @@ Three consumer surfaces, one layer:
 Artipod manages durable pod state and execution attached to that state. Its Docker backend runs commands against pod mounts; it is not a general HTTP application host or a Cloudflare Containers lifecycle adapter. Application routing, scaling, deployment, and production access policy belong to the embedding application, such as `mieweb/cloud`.
 
 [`artipod serve`](docs/serve.md) is a quick POC and reference host for Artipod capabilities, not the prescribed production deployment system. Reuse the library APIs in your own host where appropriate. See the [container orientation](docs/containers.md#execution-versus-application-hosting) for the ownership boundary.
+
+### Pod kinds: data, applications, and agents
+
+These names describe a pod's purpose, not different storage engines or a class inheritance hierarchy. All use the same underlying Artipod mechanisms.
+
+| Kind or convention | Contains | How it is used |
+|---|---|---|
+| **Artipod** | Any collection of artifacts, such as documents or generated drafts | Mounted as data; execution is optional |
+| **AppPod / SPAPod** | Application assets and an entrypoint | AppPod is a descriptive umbrella here; `SPAPod` is the currently supported browser executable kind |
+| **CasePod / PatientPod** | Subject data, such as visits, recordings, labs, and notes | Selected independently of its viewer; PatientPod is a domain convention, not a distinct runtime |
+| **AgentPod** | Agent instructions, skill references, and capability requests | Loaded by a host-owned harness; model credentials and actual tool grants stay outside the artifact |
+| **SkillPod** | Instructions for a particular task | Consumed by an agent harness; guidance does not grant permissions |
+
+A semantic descriptor says what a pod is and what it requests. The concrete `PodManifest` says where authorized sources are mounted and whether they are read-only, copy-on-write, or read-write. The host resolves the former into the latter; declaring a mount does not authorize it.
+
+**Status:** browser SPAPod launch is implemented, but compatible subject selection and AgentPod definition loading are not integrated end to end. PatientPod and SkillPod composition below are illustrative conventions. See the [composition design](plan/model-exec-poc.md#5-multiple-applications-and-composition) and [browser runtime limits](docs/apps.md#trust-and-current-limits).
+
+### Example: dictation with separate browser and server agents
+
+**Hypothetical workflow, not a shipped dictation application.** A clinician uploads a recording into a PatientPod in the browser, reviews spelling suggestions from a browser agent, and synchronizes saved patient files to the server. The clinician has no access to the server's AgentPod or general agent invocation API.
+
+```text
+CLINICIAN'S BROWSER                         SERVER
+
+Dictation App                              PatientPod store
+  | upload audio and save transcript          ^
+  v                                           |
+PatientPod working copy --- encrypted sync ------+
+  ^                                           |
+  | transcript only                           | authorized submitted snapshot
+Browser Spellcheck Agent                    Server Clinical Agent
+  |                                           |
+  +-- suggestions for clinician review        +-- private processing results
+```
+
+Each execution environment gets its own logical mount table. These paths are examples, not prescribed paths or launcher syntax:
+
+| Environment | Mount | Source and access |
+|---|---|---|
+| Browser dictation app | `/app` | Approved SPAPod assets, read-only |
+| Browser dictation app | `/patient` | Selected PatientPod working copy, read-write |
+| Browser spellchecking harness | `/agent` | Admitted spellchecking AgentPod, read-only |
+| Browser spellchecking harness | `/input` | Selected transcript only, read-only |
+| Browser spellchecking harness | `/suggestions` | Session-local proposed corrections, read-write |
+| Server processing harness | `/agent` | Server-private clinical AgentPod, read-only |
+| Server processing harness | `/input` | Submitted patient dictation snapshot, read-only |
+| Server processing harness | `/output` | Separate server-owned result storage, read-write |
+
+1. The app saves the recording under `/patient/dictations/visit-7/recording.webm`. A separately configured transcription step supplies `transcript.txt`; uploading audio alone does not produce text.
+2. The browser harness uses a local browser model to suggest spelling corrections. The clinician reviews them, and the app saves accepted text as `corrected.txt`. A browser harness using a remote model would instead disclose the supplied text to that provider and needs separate consent.
+3. Artipod sync transfers saved PatientPod content, including audio and transcripts. Neither AgentPod nor temporary suggestions are included in that patient artifact. Offline changes can synchronize when connectivity returns.
+4. Explicit submission identifies a complete, immutable snapshot for a server-owned job policy. Sync alone does not invoke an agent. The server must verify that the job's input is available before processing it.
+5. The server harness receives its own data authorization and decryption grant. The clinician's sync credentials do not permit listing, mounting, editing, or directly invoking the server agent. Results become clinician-visible only through an explicitly authorized publication step.
+
+**The boundary is authorization, not the sync connection.** A blind storage server cannot process plaintext. An authorized processing endpoint can, without exposing its agent definition or credentials to the browser. Browser apps currently execute as trusted same-origin code, so their logical mounts are not a hostile-JavaScript security boundary; server privacy must be enforced by server authorization. Agent tool scopes must also be enforced by the harness, not merely described in instructions.
 
 ## Quick starts
 
