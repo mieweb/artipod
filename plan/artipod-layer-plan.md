@@ -217,7 +217,7 @@ App-level concerns that stay out of the package entirely: Next SSR guards (`dyna
 
 ### Security & authority model (normative detail in docs/)
 
-Four rules, specified fully in [docs/encryption.md](docs/encryption.md) and [docs/security-model.md](docs/security-model.md):
+Four rules, specified fully in [../docs/encryption.md](../docs/encryption.md) and [../docs/security-model.md](../docs/security-model.md):
 
 1. **Ciphertext at rest, keys on lease.** Layers *and* the writable upper are chunked-AEAD encrypted; usable KEKs live only in a memory keyring under a TTL lease (`/proc/keys` shows expiries). Lock = key evaporates; login restores. Offline = signed device-wrapped grants (e.g. 24 h) with ceremony-gated unlock.
 2. **Authority is a certificate chain.** Home base can delegate scoped, offline-verifiable authority to site/ship/station managers (lease issuance, grant validation, policy enforcement) — this is what makes the rig/interplanetary/relay profiles work; relays can stay blind (ciphertext only, digests verify end-to-end).
@@ -442,7 +442,7 @@ Also verified live against the running app (dev server :3500): terminal `commit 
 
 ### Phase 6.5 — Encryption & authority
 
-> **Branch** `phase-6.5-authority` · **Status** _done_ (mieweb/artipod#45) · normative specs: [docs/encryption.md](docs/encryption.md), [docs/security-model.md](docs/security-model.md)
+> **Branch** `phase-6.5-authority` · **Status** _done_ (mieweb/artipod#45) · normative specs: [../docs/encryption.md](../docs/encryption.md), [../docs/security-model.md](../docs/security-model.md)
 
 - [x] **Keyring** in `/manager`: unwrapped KEKs with expiries, memory-only non-extractable CryptoKeys; `/proc/keys` provider (names + expiries, never material). `PodLockedError` = the POSIX-shaped `EACCES` + login hint every locked surface throws.
 - [x] **Leases**: `artipod login` → authority releases KEKs + issues a signed lease (ECDSA P-256 over canonical JSON); auto-lock on expiry (timer) + `visibilitychange`; `artipod lock [--all|<pod>]`; post-lock reads AND writes fail `EACCES` with a login hint; `lock` vs `purge` policy modes (purge = `store.purgeBlobs()`, kiosk restore = re-sync). `artipod status` reads the keyring.

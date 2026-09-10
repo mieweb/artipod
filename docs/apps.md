@@ -291,4 +291,4 @@ Stop any Next dev server using this app before export. Serve the export through
 `artipod serve`, using its bundled UI or `ARTIPOD_UI_DIR`; do not introduce a
 second UI origin. The standalone opaque-frame and admission probes were retired
 after catalog-path verification. Their findings remain historical evidence in
-[the model execution plan](../model-exec-poc.md).
+[the model execution plan](../plan/model-exec-poc.md).

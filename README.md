@@ -4,7 +4,7 @@
 
 **A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize — in the browser and on Linux.**
 
-> **Status: shipped through plan Phase 6.6.** Everything below marked ✅ ships in `@artipod/core` today — the Node/Docker core, the browser sandbox, OCI layering, encryption & authority, and sync (the browser app lives at [examples/artipod-spa](examples/artipod-spa)). 🔮 marks the remaining design work (Phase 7 live streams), tracked phase-by-phase in [artipod-layer-plan.md](artipod-layer-plan.md). Previous implementation-state READMEs are archived in `attic/` ([v0.1](attic/v0.1-node.README.md), [v0.3](attic/v0.3-node.README.md) — the v0.3 one documents the pre-merge Node/Docker API, including podman support, read-only mounts, and the main mount).
+> **Status: shipped through plan Phase 6.6.** Everything below marked ✅ ships in `@artipod/core` today — the Node/Docker core, the browser sandbox, OCI layering, encryption & authority, and sync (the browser app lives at [examples/artipod-spa](examples/artipod-spa)). 🔮 marks the remaining design work (Phase 7 live streams), tracked phase-by-phase in [plan/artipod-layer-plan.md](plan/artipod-layer-plan.md). Previous implementation-state READMEs are archived in `attic/` ([v0.1](attic/v0.1-node.README.md), [v0.3](attic/v0.3-node.README.md) — the v0.3 one documents the pre-merge Node/Docker API, including podman support, read-only mounts, and the main mount).
 
 ## What is an artipod?
 
@@ -167,7 +167,7 @@ Built for real disconnection profiles: a 24-hour offline clinic visit, a light-m
 | [docs/security-model.md](docs/security-model.md) | Agent confinement, `sudo`, approval flow, admin policy |
 | [docs/dossier.md](docs/dossier.md) | The dossier pattern: long-lived entities (patients, cases, customers, tickets) with open workstreams and sealed, immutable milestones |
 | [docs/console.md](docs/console.md) | The Ctrl+~ installable console module |
-| [artipod-layer-plan.md](artipod-layer-plan.md) | The living implementation plan (phases, decisions, worklogs) |
+| [plan/artipod-layer-plan.md](plan/artipod-layer-plan.md) | The living implementation plan (phases, decisions, worklogs) |
 
 ## License
 

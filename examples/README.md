@@ -80,7 +80,7 @@ See [mcp-server/README.md](./mcp-server/README.md) for VS Code integration setup
 
 ### web-demo (retired)
 
-The former full-stack web demo (React + Express + SQLite) is archived at [`attic/web-demo`](../attic/web-demo/). It is superseded by the Phase 6 north-star demo of the [artipod layer plan](../artipod-layer-plan.md): browser demo pod → clone → push/pull to a server → snapshot/compact.
+The former full-stack web demo (React + Express + SQLite) is archived at [`attic/web-demo`](../attic/web-demo/). It is superseded by the Phase 6 north-star demo of the [artipod layer plan](../plan/artipod-layer-plan.md): browser demo pod → clone → push/pull to a server → snapshot/compact.
 
 ## Creating New Examples
 

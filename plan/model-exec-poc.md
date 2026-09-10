@@ -87,17 +87,17 @@ The execution-admission direction was approved by the owner on 2026-09-05. Imple
 
 | You need | Where |
 |---|---|
-| Plan workflow and SPA constraints | [artipod-layer-plan.md](artipod-layer-plan.md), [spa-ui-plan.md](spa-ui-plan.md), [examples/artipod-spa/AGENTS.md](examples/artipod-spa/AGENTS.md) |
-| Current concrete mount declarations | [src/manifest.ts](src/manifest.ts) |
-| Existing shell runtime and trust split | [docs/bash-isolate.md](docs/bash-isolate.md) |
-| Browser storage and server execution | [docs/browser.md](docs/browser.md), [docs/linux.md](docs/linux.md) |
-| Grant, key, and threat-model constraints | [docs/security-model.md](docs/security-model.md), [docs/encryption.md](docs/encryption.md) |
-| Current workspace lifecycle | [examples/artipod-spa/lib/services/pod-session.ts](examples/artipod-spa/lib/services/pod-session.ts) |
-| Browser app runtime layer (descriptor, capture, admission, runtime, lifecycle, processes) | `src/apps/` → `@artipod/core/apps` (MA); consumer runbook [docs/apps.md](docs/apps.md) |
+| Plan workflow and SPA constraints | [artipod-layer-plan.md](artipod-layer-plan.md), [spa-ui-plan.md](spa-ui-plan.md), [../examples/artipod-spa/AGENTS.md](../examples/artipod-spa/AGENTS.md) |
+| Current concrete mount declarations | [../src/manifest.ts](../src/manifest.ts) |
+| Existing shell runtime and trust split | [../docs/bash-isolate.md](../docs/bash-isolate.md) |
+| Browser storage and server execution | [../docs/browser.md](../docs/browser.md), [../docs/linux.md](../docs/linux.md) |
+| Grant, key, and threat-model constraints | [../docs/security-model.md](../docs/security-model.md), [../docs/encryption.md](../docs/encryption.md) |
+| Current workspace lifecycle | [../examples/artipod-spa/lib/services/pod-session.ts](../examples/artipod-spa/lib/services/pod-session.ts) |
+| Browser app runtime layer (descriptor, capture, admission, runtime, lifecycle, processes) | `src/apps/` → `@artipod/core/apps` (MA); consumer runbook [../docs/apps.md](../docs/apps.md) |
 | Process table, `/proc/<pid>` provider, `ps`/`kill` | `src/proc/processes.ts`, `src/sandbox/process-command.ts` (MA) |
 | Lifecycle sample app | `examples/lifecycle-app/` (MA; was `examples/artipod-spa/m0-preview`) |
-| Current harness integration surface | [examples/artipod-spa/components/AgentPanel.tsx](examples/artipod-spa/components/AgentPanel.tsx) |
-| Publish/serve mechanisms and existing UI-artifact proof | [docs/sync.md](docs/sync.md), [docs/serve.md](docs/serve.md), [src/server/serve.test.ts](src/server/serve.test.ts) |
+| Current harness integration surface | [../examples/artipod-spa/components/AgentPanel.tsx](../examples/artipod-spa/components/AgentPanel.tsx) |
+| Publish/serve mechanisms and existing UI-artifact proof | [../docs/sync.md](../docs/sync.md), [../docs/serve.md](../docs/serve.md), [../src/server/serve.test.ts](../src/server/serve.test.ts) |
 
 ## 1. Recommendation and objective
 
@@ -975,7 +975,7 @@ M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. Fo
   PASS, all budgets unchanged; tarball 4.26 MB, unpacked 20.01 MB, UI 18.40 MB,
   core root gzip 594.2 KB. Temporary probe backend 2787 also stopped. Main
   server 2784 remains running; no commits, pushes, or releases performed.
-- Current runbook: [Browser Apps](docs/apps.md) (was `examples/artipod-spa/execution-preview.md`).
+- Current runbook: [Browser Apps](../docs/apps.md) (was `examples/artipod-spa/execution-preview.md`).
 
 ### 2026-09-05 - single-branch workflow
 
@@ -1014,9 +1014,9 @@ Owner requested all phases remain on `main`. Removed per-phase branches and PR/m
 ### 2026-09-05 - owner-authorized baseline repairs
 
 - **Authorization:** owner answered `yes` to repairing the three pre-existing baseline blockers. This authorizes the scoped repairs below, not relaxed gates, publication, deployment, or a phase transition.
-- **Core repair:** [src/oci/view-pull.test.ts](src/oci/view-pull.test.ts) now constructs the destination `OciStore` over a separate `bindContext` filesystem, following the existing manager tests. The ignored second constructor argument previously left source and destination using the same storage. Added assertions that the destination has neither the index blob nor the ref before sync. `npx vitest run src/oci/view-pull.test.ts && npx tsc --noEmit` passed (8 focused tests plus core typecheck).
+- **Core repair:** [../src/oci/view-pull.test.ts](../src/oci/view-pull.test.ts) now constructs the destination `OciStore` over a separate `bindContext` filesystem, following the existing manager tests. The ignored second constructor argument previously left source and destination using the same storage. Added assertions that the destination has neither the index blob nor the ref before sync. `npx vitest run src/oci/view-pull.test.ts && npx tsc --noEmit` passed (8 focused tests plus core typecheck).
 - **SPA diagnosis:** `npm --prefix examples/artipod-spa run typecheck -- --incremental false --traceResolution` showed service imports resolving through `lib/node_modules/@artipod/core -> ../../../../..`, while components used the installed copy. Moving that link out of resolution made the non-incremental typecheck pass. Export recreated the link and still failed. A process-local `uncaughtExceptionMonitor` exposed the raw stack in Webpack's `FileSystemInfo._resolveContextTsh` / `processAsyncTree` symlink traversal, rather than the minifier. Diagnostic logs: `/tmp/artipod-m0-spa-resolution.log`, `/tmp/artipod-m0-raw-build.log`.
-- **SPA repair:** [examples/artipod-spa/scripts/export-static.mjs](examples/artipod-spa/scripts/export-static.mjs) passes `ARTIPOD_NO_DEVLINK=1` only to its copied-core refresh install. Core's nested prepare/build otherwise runs `scripts/devlink.mjs` with the inherited npm prefix, creating an accidental SPA-local npm prefix and a recursive core link. The existing opt-out prevents that side effect without aliases, package upgrades, or weakening minification. Both the focused export and the final full baseline export passed the struct-minify and baked-version assertions.
+- **SPA repair:** [../examples/artipod-spa/scripts/export-static.mjs](../examples/artipod-spa/scripts/export-static.mjs) passes `ARTIPOD_NO_DEVLINK=1` only to its copied-core refresh install. Core's nested prepare/build otherwise runs `scripts/devlink.mjs` with the inherited npm prefix, creating an accidental SPA-local npm prefix and a recursive core link. The existing opt-out prevents that side effect without aliases, package upgrades, or weakening minification. Both the focused export and the final full baseline export passed the struct-minify and baked-version assertions.
 - **Preserved local artifacts:** moved only the verified accidental `lib/node_modules/@artipod/core` and `bin/artipod` symlinks into `/var/folders/n8/rxssgwbn241dk4twzmw811dc0000gp/T/artipod-m0-prefix-backup-ITedrZ/` as `core-link` / `artipod-bin-link`; the copies recreated during diagnosis were preserved as `recreated-core-link` / `recreated-artipod-bin-link`. They retain their original relative target strings for restoration to their original paths. No application/pod data was removed. An initial guarded attempt failed before mutation on a trailing-slash mismatch; the next hit cross-filesystem `EXDEV`, so the successful backup used `mv`.
 - **Final baseline:** all commands below exited 0. Logs are local at `/var/folders/n8/rxssgwbn241dk4twzmw811dc0000gp/T/artipod-m0-repaired-baseline-NcGH8e/`. The nested core link remained absent after the full export.
 
@@ -1130,7 +1130,7 @@ Owner requested all phases remain on `main`. Removed per-phase branches and PR/m
 - **Isolation observations:** evaluation inside the opaque 404 frame throws `SecurityError` for parent DOM, parent `__m0`, localStorage, and OPFS access. These do not establish a complete guest security boundary: the failed navigation receives Next's fallback page, not the projection's CSP, and its dev scripts attempt network traffic. External-network denial, malicious-app behavior, and comprehensive browser compatibility are not passed.
 - **UI verification:** light/mobile 390x844 and dark/desktop 1280x800 inspected with `screenshot_page`; no horizontal overflow. Fixed the foreground token after the first dark check; confirmed rgb(250,250,250) text on rgb(23,23,23). The visible 404 is the recorded experimental failure, not a successful viewer.
 - **Deviations / blockers:** baseline core typecheck/export failures and post-refresh SPA duplicate-core types prevent a full gate. No new core API, package dependency, release, production deployment, or permission relaxation. Full gates/struct-minify/weighbridge were not claimed after the no-go. Stop before M1; obtain owner review of a new D4 candidate. A dedicated unprivileged preview origin is a candidate to investigate, not a proven solution; it must separately address navigation-based exfiltration, worker scope, mount grants, and credential separation.
-- **Gate / PR:** no gate commit or PR; candidate rejected, not the overall Artipod concept. The standalone reproduction was retired on 2026-09-06; current workflow: [Browser Apps](docs/apps.md).
+- **Gate / PR:** no gate commit or PR; candidate rejected, not the overall Artipod concept. The standalone reproduction was retired on 2026-09-06; current workflow: [Browser Apps](../docs/apps.md).
 
 ### M1 - semantic discovery and composition
 
