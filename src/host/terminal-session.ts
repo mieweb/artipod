@@ -393,8 +393,14 @@ export class TerminalSession {
           if (result.stdout) io.write(toCrLf(result.stdout));
           if (result.stderr) io.write(`${RED}${toCrLf(result.stderr)}${RESET}`);
         } catch (e) {
-          this.lastExitCode = 1;
-          io.write(`${RED}${toCrLf(String(e))}${RESET}\r\n`);
+          if (this.abortController?.signal.aborted) {
+            // Ctrl+C: the shell way — 130, a ^C line, no exception text.
+            this.lastExitCode = 130;
+            io.write('^C\r\n');
+          } else {
+            this.lastExitCode = 1;
+            io.write(`${RED}${toCrLf(String(e))}${RESET}\r\n`);
+          }
         } finally {
           this.busy = false;
           this.abortController = null;

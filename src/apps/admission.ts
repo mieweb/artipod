@@ -1,6 +1,34 @@
-import 'core-js/actual/typed-array/to-base64.js';
-import 'core-js/actual/typed-array/from-base64.js';
 import { calculateJwkThumbprint, decodeProtectedHeader, flattenedVerify, importJWK, type JWK } from 'jose';
+
+/**
+ * jose 6 uses `Uint8Array.fromBase64` / `toBase64` when the platform has them.
+ * ZenFS installs PARTIAL versions that ignore `{ alphabet: 'base64url' }`, so
+ * a Node-signed JWS fails to verify in that browser. Load core-js's complete
+ * codecs only when the platform's are missing or wrong — hosts with a correct
+ * native implementation are never prototype-patched.
+ */
+let codecsReady: Promise<void> | null = null;
+function ensureBase64Codecs(): Promise<void> {
+  codecsReady ??= (async () => {
+    const U8 = Uint8Array as unknown as {
+      fromBase64?: (s: string, o?: { alphabet?: string }) => Uint8Array;
+      prototype: { toBase64?: (o?: { alphabet?: string; omitPadding?: boolean }) => string };
+    };
+    let ok = false;
+    try {
+      const decoded = U8.fromBase64?.('-_8', { alphabet: 'base64url' });
+      const encoded = U8.prototype.toBase64?.call(new Uint8Array([251, 255]), { alphabet: 'base64url', omitPadding: true });
+      ok = !!decoded && decoded.length === 2 && decoded[0] === 251 && decoded[1] === 255 && encoded === '-_8';
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      await import('core-js/actual/typed-array/to-base64.js');
+      await import('core-js/actual/typed-array/from-base64.js');
+    }
+  })();
+  return codecsReady;
+}
 
 export const STATEMENT_TYPES = {
   publisher: 'artipod-apps-publisher+jws',
@@ -121,6 +149,7 @@ export async function evidenceDigest(evidence: string): Promise<string> {
 }
 
 async function verifyStatement(wire: string, type: string, identities: readonly TestIdentity[]) {
+  await ensureBase64Codecs();
   if (typeof wire !== 'string' || new TextEncoder().encode(wire).byteLength > MAX_EVIDENCE_BYTES) denied('missing or oversized evidence');
   const envelope = record(JSON.parse(wire));
   if (Object.keys(envelope).some((key) => !['protected', 'payload', 'signature'].includes(key))) denied('unsupported envelope');

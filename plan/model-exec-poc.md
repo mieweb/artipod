@@ -805,6 +805,19 @@ M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. Fo
   Already fixed earlier: split escapes (14), slug collisions (15), cached
   detail (16); SPA `inventory.ts:66` is bounded by the core cache.
   Gates: 664 core tests, `./apps` 19.5 KB, SPA green.
+- Fourth pass (09-14, no inline comments; 4 suppressed), all done:
+  24. Ctrl+C printed the AbortError text with exit 1 → `TerminalSession`
+      reports 130 and a `^C` line when the abort signal fired.
+  25. Unbounded `imageDetail` cache → entries not in the current rows are
+      evicted on every refresh.
+  26. `core-js` side-effect imports patched every consumer's `Uint8Array` →
+      `ensureBase64Codecs()` probes the platform codec (`-_8` ↔ [251,255]
+      base64url) and dynamically imports core-js only when missing/partial
+      (the ZenFS case). Chrome 148 on 2784: native codecs pass the probe, no
+      patch. Ambient `core-js.d.ts` for the two module ids.
+  27. `cp` in the build script → `node -e copyFileSync` (Windows-safe).
+  Gates: 664 core tests, `./apps` 19.6 KB, SPA lint/typecheck/29 tests,
+  export + bundle swapped.
 
 ### 2026-09-13 - MC follow-up: the namespace is the common object
 

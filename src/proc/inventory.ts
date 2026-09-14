@@ -129,6 +129,9 @@ export function makeInventoryProvider(providers: InventoryProviders): ProcProvid
         return details.get(key) ?? null;
       };
       const loaded = await Promise.all(images.map(detailOf));
+      // Bounded: only the current rows' entries survive a refresh (moved tags drop their old digest).
+      const live = new Set(images.map((image) => `${image.ref}@${image.digest ?? ''}`));
+      for (const key of [...details.keys()]) if (!live.has(key)) details.delete(key);
       const imageSlugs = uniqueSlugs(images.map((i) => i.ref));
       images.forEach((image, i) => {
         const detail = loaded[i];
