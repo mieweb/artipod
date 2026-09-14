@@ -52,7 +52,7 @@ export interface ProcessHandle {
 }
 
 export class ProcessError extends Error {
-  constructor(readonly code: 'ESRCH' | 'ENOTSUP' | 'EPERM', message: string) {
+  constructor(readonly code: 'ESRCH' | 'ENOTSUP' | 'EPERM' | 'EBUSY', message: string) {
     super(message);
     this.name = 'ProcessError';
   }

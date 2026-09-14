@@ -110,10 +110,12 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string, opti
   let process: ProcessHandle | undefined;
   let instance: RuntimeInstance | null = null;
   // Honest signals (D16): no attached controller, or an app that answered
-  // the lifecycle probe with `unsupported`, is ENOTSUP — never a silent success.
-  const lifecycleSignal = (action: 'suspend' | 'resume') => () => {
-    const state = store.getState().lifecycle?.state;
+  // the lifecycle probe with `unsupported`, is ENOTSUP; a signal that does
+  // not apply to the current state is EBUSY — never a silent success.
+  const lifecycleSignal = (action: 'suspend' | 'resume', from: LifecycleState) => () => {
+    const state = store.getState().lifecycle?.state ?? 'unknown';
     if (!instance || state === 'unsupported') throw new ProcessError('ENOTSUP', `application does not support ${action}`);
+    if (state !== from) throw new ProcessError('EBUSY', `application is ${state}; ${action} needs ${from}`);
     instance[action]();
   };
   const stop = () => {
@@ -233,8 +235,8 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string, opti
           kind: 'app', name: descriptor.name,
           detail: { ...options.detail, mode, digest: captured.subject.digest.slice(0, 19), url },
           signal: {
-            STOP: lifecycleSignal('suspend'),
-            CONT: lifecycleSignal('resume'),
+            STOP: lifecycleSignal('suspend', 'running'),
+            CONT: lifecycleSignal('resume', 'suspended'),
             TERM: revoke,
             KILL: revoke,
           },

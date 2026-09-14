@@ -77,6 +77,10 @@ export function splitKeys(data: string): string[] {
   return keys;
 }
 
+/** A trailing `\x1b` or `\x1b[…` with no final byte: the rest of the sequence is in the next chunk. */
+export const isIncompleteEscape = (key: string): boolean =>
+  key === '\x1b' || (key.startsWith('\x1b[') && !/[@-~]$/.test(key.slice(2)));
+
 /** Longest common prefix of a non-empty candidate list. */
 export function commonPrefix(items: string[]): string {
   let prefix = items[0];
@@ -105,6 +109,8 @@ export class TerminalSession {
   private completing = false;
   private disposers: Array<() => void> = [];
   private disposed = false;
+  /** Escape sequence cut by a chunk boundary (raw stdin); completed by the next chunk. */
+  private partialEscape = '';
   /** Exit code of the last command run (0 before any). */
   lastExitCode = 0;
 
@@ -208,7 +214,10 @@ export class TerminalSession {
 
   /** Feed raw terminal input (keystrokes, paste, piped lines) — keys run in order. */
   async handleData(data: string): Promise<void> {
-    for (const key of splitKeys(data)) {
+    const keys = splitKeys(this.partialEscape + data);
+    this.partialEscape = '';
+    if (keys.length > 0 && isIncompleteEscape(keys[keys.length - 1])) this.partialEscape = keys.pop()!;
+    for (const key of keys) {
       if (this.disposed) return;
       await this.handleKey(key);
     }

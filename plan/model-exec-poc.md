@@ -764,6 +764,23 @@ M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. Fo
       restore/`--keyless` message.
 - Gates: core lint/tsc/build, 658 tests; weighbridge `./apps` 19.3 KB; SPA
   lint/typecheck/29 tests. Pushed; threads answered on the PR.
+- Second pass (09-14, six more), all fixed:
+  11. Preview's readiness query could beat the iframe's listener →
+      `LifecycleController.query()` re-sent on iframe `load` (re-arms the
+      unsupported probe; re-opens an `unsupported` verdict).
+  12. SW grant regex rejected dotted directories the descriptor allows →
+      same grammar as `applicationPath()`.
+  13. STOP/CONT while `unknown`/`suspending`/… resolved as a no-op →
+      `EBUSY` unless the state is the expected source (`running` /
+      `suspended`); new `ProcessError` code, `kill` prints "Device or
+      resource busy".
+  14. CSI split across stdin chunks → `TerminalSession` carries an
+      incomplete escape into the next chunk.
+  15. `mountSlug` collisions overwrote `/proc` entries → `uniqueSlugs()`
+      appends `~2`, `~3` in listing order.
+  16. `/proc` refresh did O(images) `imageDetail()` before every command →
+      cached per `ref@digest`, misses in parallel; `images -v` stays live.
+  Gates: 661 core tests, `./apps` 19.4 KB, SPA green.
 
 ### 2026-09-13 - MC follow-up: the namespace is the common object
 

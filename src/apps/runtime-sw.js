@@ -18,9 +18,11 @@ self.addEventListener('message', event => {
     sessions.delete(session);
     return;
   }
+  // Same grammar as descriptor.ts applicationPath(): word segments joined by
+  // `.` or `/` (dotted directories allowed), `/app/` prefix, `.html` leaf.
   if (type !== 'grant' || typeof session !== 'string' || !/^[a-f0-9-]{36}$/.test(session) ||
       !event.ports?.[0] || !Number.isSafeInteger(validUntil) || validUntil <= Date.now() || validUntil > Date.now() + 3600000 ||
-      typeof entrypoint !== 'string' || !/^\/app\/[a-zA-Z0-9_/-]+(?:\.[a-zA-Z0-9_-]+)*\.html$/.test(entrypoint) || /\/\.|\/\//.test(entrypoint) || sessions.has(session)) return;
+      typeof entrypoint !== 'string' || entrypoint.length > 517 || !/^\/app\/[a-zA-Z0-9_-]+(?:[./][a-zA-Z0-9_-]+)*\.html$/.test(entrypoint) || sessions.has(session)) return;
   const port = event.ports[0];
   sessions.set(session, { owner: owner.id, ownerUrl: owner.url, port, validUntil, entrypoint, guests: new Set() });
   port.postMessage({ type: 'ready' });

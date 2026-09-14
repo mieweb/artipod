@@ -23,7 +23,7 @@ function harness(ownerPin?: string) {
   });
   return {
     owner,
-    grant(source = owner, validUntil = Date.now() + 60000) { handlers.get('message')!({ source, data: { type: 'grant', session, entrypoint: '/app/index.html', validUntil }, ports: [port] }); },
+    grant(source = owner, validUntil = Date.now() + 60000, entrypoint = '/app/index.html') { handlers.get('message')!({ source, data: { type: 'grant', session, entrypoint, validUntil }, ports: [port] }); },
     revoke() { handlers.get('message')!({ source: owner, data: { type: 'revoke', session } }); },
     async fetch(path = '/app/index.html', destination = 'iframe', clientId = '', method = 'GET') {
       let response: Promise<Response> | undefined;
@@ -63,6 +63,14 @@ describe('main-origin runtime worker', () => {
       expect((await worker.fetch('/app/index.html', destination, 'owner')).status).toBe(403);
     }
     expect((await worker.fetch('/app/main.js', 'script', 'stranger')).status).toBe(403);
+  });
+  it('accepts every entrypoint the descriptor grammar accepts (dotted directories), rejects escapes', async () => {
+    const dotted = harness(); dotted.grant(undefined, undefined, '/app/assets.v1/pages/index.html');
+    expect((await dotted.fetch('/app/assets.v1/pages/index.html')).status).toBe(200);
+    for (const bad of ['/app/../x.html', '/app//x.html', '/app/.hidden/x.html', '/app/x.js', 'app/x.html']) {
+      const w = harness(); w.grant(undefined, undefined, bad);
+      expect((await w.fetch(bad.replace(/^app/, '/app'))).status).toBe(403);
+    }
   });
   it('denies expiry, writes, path escapes, revoked and navigated owners', async () => {
     const worker = harness(); worker.grant(undefined, Date.now() - 1);

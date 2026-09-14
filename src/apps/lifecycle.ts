@@ -11,6 +11,12 @@ export interface LifecycleSnapshot {
 export interface LifecycleController {
   suspend(): void;
   resume(): void;
+  /**
+   * Ask again whether the app speaks the protocol (call on the iframe's
+   * `load`): an app that installs its listener during load misses the first
+   * query. Restarts the unsupported-after-timeout probe while still unknown.
+   */
+  query(): void;
   dispose(): void;
 }
 
@@ -74,15 +80,25 @@ export function controlRuntimeLifecycle(
     }
   };
   target.addEventListener('message', receive);
-  const probe = timers.setTimeout(() => { if (snapshot.state === 'unknown') emit({ state: 'unsupported' }); }, REQUEST_TIMEOUT_MS);
-  post({ type: QUERY });
+  let probe: ReturnType<typeof setTimeout> | undefined;
+  const query = () => {
+    if (disposed) return;
+    if (snapshot.state === 'unknown' || snapshot.state === 'unsupported') {
+      if (snapshot.state === 'unsupported') emit({ state: 'unknown' });
+      if (probe) timers.clearTimeout(probe);
+      probe = timers.setTimeout(() => { if (snapshot.state === 'unknown') emit({ state: 'unsupported' }); }, REQUEST_TIMEOUT_MS);
+    }
+    post({ type: QUERY });
+  };
+  query();
   return {
     suspend: () => request('suspend'),
     resume: () => request('resume'),
+    query,
     dispose() {
       disposed = true;
       clearPending();
-      timers.clearTimeout(probe);
+      if (probe) timers.clearTimeout(probe);
       target.removeEventListener('message', receive);
     },
   };

@@ -57,6 +57,13 @@ describe('TerminalSession', () => {
     expect(io.out).toContain('/repo/sub\r\n');
     expect(io.out).toContain('/repo/sub $ ');
     expect(session.lastExitCode).toBe(1);
+    // an escape cut by a chunk boundary is completed by the next chunk (raw stdin)
+    await session.handleData('echo x\r');
+    await session.handleData('\x1b');
+    await session.handleData('[A'); // Up arrow → recalls `echo x`, not the text "[A"
+    await session.handleData('\r');
+    expect(io.out.split('echo x').length).toBeGreaterThanOrEqual(3);
+    expect(io.out).not.toContain('[A');
     session.dispose();
   });
 

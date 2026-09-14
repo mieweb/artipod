@@ -114,6 +114,10 @@ describe('selected pod runtime', () => {
     runtime.report({ state: 'running' });
     await table.signal(2, 'STOP');
     expect(controller.suspend).toHaveBeenCalledTimes(1);
+    // the app has not reported `suspended` yet: resume does not apply, and neither does a second suspend once it does
+    await expect(table.signal(2, 'CONT')).rejects.toMatchObject({ code: 'EBUSY' });
+    runtime.report({ state: 'suspending' });
+    await expect(table.signal(2, 'STOP')).rejects.toMatchObject({ code: 'EBUSY' });
     runtime.report({ state: 'suspended', telemetry: { elapsedMs: 4200, retainedBytes: 65536, limitBytes: 8388608 } });
     expect(table.get(2)).toMatchObject({ state: 'suspended', detail: { elapsed: '4s', retained: '64KiB' } });
     expect(runtime.store.getState().lifecycle?.state).toBe('suspended');

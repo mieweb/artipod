@@ -72,7 +72,7 @@ export function makeProcessCommands(table: ProcessTable) {
         await table.signal(pid, signal);
       } catch (e) {
         const reason = e instanceof ProcessError
-          ? { ESRCH: 'No such process', ENOTSUP: 'Operation not supported', EPERM: 'Operation not permitted' }[e.code]
+          ? { ESRCH: 'No such process', ENOTSUP: 'Operation not supported', EPERM: 'Operation not permitted', EBUSY: 'Device or resource busy' }[e.code]
           : (e as Error).message;
         errors.push(`kill: (${pid}) - ${reason}`);
       }

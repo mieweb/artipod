@@ -59,6 +59,28 @@ describe('controlRuntimeLifecycle', () => {
     app.controller.dispose();
     vi.useRealTimers();
   });
+  it('re-queries on demand (iframe load): an app that missed the first query is not marked unsupported', () => {
+    vi.useFakeTimers();
+    const app = harness();
+    vi.advanceTimersByTime(4000);
+    app.controller.query(); // the frame just finished loading
+    expect(app.sent.filter((m) => m.type === 'artipod:runtime-lifecycle/v1/query')).toHaveLength(2);
+    vi.advanceTimersByTime(2000); // 6s after the first query, 2s after the second
+    expect(app.states.at(-1)).toBeUndefined();
+    app.receive({ type: 'artipod:runtime-lifecycle/v1/ready', state: 'running' });
+    expect(app.states.at(-1)?.state).toBe('running');
+    // a query after `unsupported` re-opens the question
+    const late = harness();
+    vi.advanceTimersByTime(5000);
+    expect(late.states.at(-1)).toEqual({ state: 'unsupported' });
+    late.controller.query();
+    expect(late.states.at(-1)).toEqual({ state: 'unknown' });
+    late.receive({ type: 'artipod:runtime-lifecycle/v1/ready', state: 'running' });
+    expect(late.states.at(-1)?.state).toBe('running');
+    app.controller.dispose();
+    late.controller.dispose();
+    vi.useRealTimers();
+  });
   it('fails when the app refuses and when the frame disappears', () => {
     vi.useFakeTimers();
     const app = harness();

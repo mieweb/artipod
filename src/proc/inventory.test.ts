@@ -8,7 +8,7 @@ import { createSandbox, type Sandbox } from '../sandbox/index.js';
 import { makeConsoleArtipodCommand } from '../sandbox/inventory-command.js';
 import { clearProcProviders } from './registry.js';
 import { unmountProc } from './snapshot.js';
-import { mountSlug, type InventoryProviders } from './inventory.js';
+import { makeInventoryProvider, mountSlug, uniqueSlugs, type InventoryProviders } from './inventory.js';
 import { openNamespace } from './namespace.js';
 
 const sampleLayers = [
@@ -167,6 +167,25 @@ describe('inventory', () => {
     expect(r.stdout).toContain('Mounted:\tyes');
     expect(r.stdout).toContain('Mountpoint:\t/open/samples_lifecycle__3');
     expect((await sandbox.exec('cat /proc/workspaces/ba772299/status')).stdout).toContain('Mounted:\tno');
+  });
+
+  it('colliding slugs never overwrite each other under /proc, and detail is fetched once per ref@digest', async () => {
+    expect(uniqueSlugs(['a/b:tag', 'a_b:tag', 'a/b:tag2'])).toEqual(['a_b_tag', 'a_b_tag~2', 'a_b_tag2']);
+    let detailCalls = 0;
+    const providers: InventoryProviders = {
+      images: () => [{ ref: 'a/b:tag', digest: 'sha256:aaaa' }, { ref: 'a_b:tag', digest: 'sha256:bbbb' }],
+      imageDetail: (ref) => { detailCalls++; return { manifestDigest: ref, localPath: `/blobs/${ref}`, localPresent: true, layers: [], parents: [] }; },
+    };
+    const provider = makeInventoryProvider(providers);
+    const first = await provider.read();
+    expect(first['images/a_b_tag/status']).toContain('Ref:\ta/b:tag');
+    expect(first['images/a_b_tag~2/status']).toContain('Ref:\ta_b:tag');
+    expect(detailCalls).toBe(2);
+    await provider.read();
+    expect(detailCalls).toBe(2); // cached: /proc refresh before every command must not re-fetch
+    providers.images = () => [{ ref: 'a/b:tag', digest: 'sha256:cccc' }];
+    await provider.read();
+    expect(detailCalls).toBe(3); // the digest moved → one re-fetch
   });
 
   it('tab-completes custom commands and their sub-verbs', async () => {

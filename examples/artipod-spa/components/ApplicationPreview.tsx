@@ -38,7 +38,8 @@ function PreviewInstance({ url, runtime, control }: {
       <span>Limit: {(telemetry.limitBytes / (1024 * 1024)).toLocaleString(undefined, { maximumFractionDigits: 2 })} MiB</span>
       {suspended && <span>Suspended</span>}
     </div>}
-    <iframe ref={frame} title="Running pod application" src={url} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" />
+    <iframe ref={frame} title="Running pod application" src={url} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer"
+      onLoad={() => control.current?.query()} />
   </>;
 }
 

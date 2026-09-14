@@ -79,11 +79,35 @@ export const shortDigest = (digest?: string): string => (digest ? digest.replace
 /** Same slug the pod uses for `/open/<slug>` basis mounts. */
 export const mountSlug = (ref: string): string => ref.replace(/[^a-zA-Z0-9._-]+/g, '_');
 
+/**
+ * `mountSlug` is not injective (`a/b:t` and `a_b:t` both give `a_b_t`); as a
+ * `/proc` directory name that would silently overwrite. Later colliders get
+ * `~2`, `~3`, … in listing order.
+ */
+export function uniqueSlugs(names: readonly string[]): string[] {
+  const seen = new Map<string, number>();
+  return names.map((name) => {
+    const slug = mountSlug(name);
+    const n = (seen.get(slug) ?? 0) + 1;
+    seen.set(slug, n);
+    return n === 1 ? slug : `${slug}~${n}`;
+  });
+}
+
 const kv = (rows: [string, string | undefined][]): string =>
   `${rows.map(([k, v]) => `${k}:\t${v ?? '-'}`).join('\n')}\n`;
 
-/** `/proc/images/<slug>/status` and `/proc/workspaces/<slug>/status`. */
+/**
+ * `/proc/images/<slug>/{status,manifest.json}` and `/proc/workspaces/<slug>/status`.
+ *
+ * `refreshProc()` runs this before every live command, so image detail (which
+ * may open a store or fetch a manifest) is cached per `ref@digest` and only
+ * re-fetched when the row's digest moves; the misses are loaded in parallel.
+ * Consequence: the `Hydrated` count under /proc follows the digest, not every
+ * pull — `images -v` reads detail live and is the fresh view.
+ */
 export function makeInventoryProvider(providers: InventoryProviders): ProcProvider {
+  const details = new Map<string, ImageDetail | null>();
   return {
     name: 'inventory',
     description: 'Server images and local workspaces (images / volumes)',
@@ -91,9 +115,24 @@ export function makeInventoryProvider(providers: InventoryProviders): ProcProvid
     root: '',
     async read(): Promise<ProcTree> {
       const tree: ProcTree = {};
-      for (const image of (await providers.images?.()) ?? []) {
-        const detail = await providers.imageDetail?.(image.ref);
-        const slug = mountSlug(image.ref);
+      const images = (await providers.images?.()) ?? [];
+      const detailOf = async (image: ImageRow): Promise<ImageDetail | null> => {
+        if (!providers.imageDetail) return null;
+        const key = `${image.ref}@${image.digest ?? ''}`;
+        if (!details.has(key)) {
+          try {
+            details.set(key, await providers.imageDetail(image.ref));
+          } catch {
+            return null; // transient — try again next refresh
+          }
+        }
+        return details.get(key) ?? null;
+      };
+      const loaded = await Promise.all(images.map(detailOf));
+      const imageSlugs = uniqueSlugs(images.map((i) => i.ref));
+      images.forEach((image, i) => {
+        const detail = loaded[i];
+        const slug = imageSlugs[i];
         tree[`images/${slug}/status`] = kv([
           ['Ref', image.ref], ['Digest', image.digest], ['Encryption', image.encryption],
           ['Locked', image.locked ? 'yes' : 'no'], ['Status', image.status],
@@ -104,13 +143,15 @@ export function makeInventoryProvider(providers: InventoryProviders): ProcProvid
         ]);
         // The real artifact, for jq. Absent when the manifest is not readable here.
         if (detail?.manifest) tree[`images/${slug}/manifest.json`] = detail.manifest;
-      }
-      for (const volume of (await providers.volumes?.()) ?? []) {
-        tree[`workspaces/${mountSlug(volume.name)}/status`] = kv([
+      });
+      const volumes = (await providers.volumes?.()) ?? [];
+      const volumeSlugs = uniqueSlugs(volumes.map((v) => v.name));
+      volumes.forEach((volume, i) => {
+        tree[`workspaces/${volumeSlugs[i]}/status`] = kv([
           ['Name', volume.name], ['Type', volume.type], ['Mode', volume.mode], ['Encryption', volume.encryption],
           ['State', volume.state], ['Mounted', volume.mountpoint ? 'yes' : 'no'], ['Mountpoint', volume.mountpoint || undefined],
         ]);
-      }
+      });
       return tree;
     },
   };
