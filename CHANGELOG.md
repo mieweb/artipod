@@ -7,12 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`@artipod/core/apps`** — the browser app runtime layer (model-exec-poc M0/MA):
+  `SPAPod` descriptor, capture + signed/dev admission, service-worker projection
+  (`runtime-sw.js` dist asset), preview lifecycle (suspend/resume/close) and
+  telemetry; the catalog's **Run** button and `examples/lifecycle-app` use it.
+  Runbook: `docs/apps.md`.
+- **Process namespaces** (`ps`, `kill`, `/proc/<pid>/{status,cmdline}`): every pod
+  session is a PID namespace (pid 1 = the pod; shells, running apps and background
+  tasks are rows). Signals are honest — `STOP/CONT` suspend/resume an app that
+  implements the lifecycle protocol, `TERM/KILL` close it, anything unsupported
+  answers `ENOTSUP`.
+- **Inventory**: `images [-v|-vv] [<ref>] [--json]` and `volumes [-m] [--json]`
+  (also `artipod images|volumes`) in the catalog console and workspace shells,
+  projected under `/proc/images/<slug>/{status,manifest.json}` and
+  `/proc/workspaces/<slug>/status` for `jq`.
+- **Shells know what they are**: `uname [-asnrom]`, `hostname`, `$HOSTNAME` /
+  `$ARTIPOD_KIND|NAME|MODE`, a `<hostname>:<cwd> $` prompt and a motd line in the
+  catalog console, workspace shells, `artipod run` and server exec sessions;
+  mirrored at `/proc/sys/kernel/{hostname,ostype,osrelease,version,identity.json}`.
+- Tab completion for custom commands (`artipod <verb>`, `images -v <ref>`, …).
+
 ### Changed
 
+- **One shell recipe** (model-exec-poc D18): a `Namespace = { identity, processes,
+  inventory }` is the object shells read and `/proc` projects. Pods own theirs
+  (`pod.namespace`, disposed with the pod); pod-less shells come from
+  `openConsole()` in `@artipod/core/host`; `createSandbox({ namespace })` replaces
+  the separate `processes`/`inventory`/`identity` options. `TerminalSession` is
+  the only line discipline — the CLI REPL now drives it over raw-mode stdin
+  (`node:readline` gone), so prompt, motd, `help` version line and completion
+  behave identically everywhere. Server exec sessions gain `ps`, `uname -r` and
+  teardown on eviction.
+- pid 1 is named by the identity (`test2:_1`, `<podId>`, `catalog`, `<sessionId>`);
+  mode lives in `uname -o`, not in `ps`.
+- `jose` and `core-js` become runtime `dependencies` (admission + service-worker
+  polyfills). Weighbridge gains an `./apps` budget (30 KB gzip; 19.2 KB measured).
 - `artipod serve` automatically resumes encrypted broker mode for previously
   initialized stores, remembering custom authority paths. Missing or invalid
   identity/key material stops startup without replacing keys or silently
   allowing plaintext writes. Use `--keyless` for intentional blind hosting.
+- **`dockerode` peer range widened to `^4.0.9 || ^5.0.0`**: dockerode 5 has no API
+  changes — it drops the `uuid` dependency (the one the root `overrides` block used to
+  patch) and raises its Node floor. The override is gone; dev builds now use 5.x.
+- Added `.github/dependabot.yml` (weekly, grouped updates for every npm manifest;
+  major bumps of peer deps are ignored so they stay deliberate).
 
 ## [0.10.1] - 2026-09-03
 
