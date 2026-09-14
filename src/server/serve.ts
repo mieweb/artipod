@@ -15,6 +15,7 @@ import { digestHex } from '../oci/digest.js';
 import { importBlobKey } from '../oci/cipher.js';
 import { OciLayoutPodStore } from '../manager/pod-store.js';
 import { PodSessionHost } from '../manager/session-host.js';
+import { coreVersion } from '../version.js';
 import type { Authority } from '../manager/authority.js';
 import { nodePodFs } from '../nodePodFs.js';
 import { bearerAuth, staticTokenAuth } from './common.js';
@@ -23,7 +24,7 @@ import { serveApp } from './node.js';
 import { publishDirectory, materializeRef } from './folder.js';
 import { PublishMap, withinRoots } from './publish-map.js';
 import { ENCRYPTED_REF_MEDIA_TYPE } from '../manager/encrypted-sync.js';
-import { loadOrCreateAuthority, ensurePodKek } from './authority-dir.js';
+import { loadOrCreateAuthority, loadStoreAuthority, ensurePodKek } from './authority-dir.js';
 import { DEFAULT_KEY_TTL_MS } from './keys-handler.js';
 import { UI_REF } from './ui-ref.js';
 
@@ -51,6 +52,7 @@ export interface ServeCliOptions {
   ui: boolean;
   /** Broker mode (S5.5): encrypt the store at rest + serve /api/keys. */
   encrypt?: boolean;
+  keyless?: boolean;
   /** Lease TTL cap for /api/keys logins: <n>(ms|s|m|h|d). Default 1h (V10). */
   keyTtl?: string;
   /** Authority home (signing key + raw pod KEKs, 0700). Default ~/.artipod/authority. */
@@ -83,18 +85,47 @@ export function parseKeyTtl(spec: string): number | null {
   return ms > 0 ? ms : null;
 }
 
-/** The served store's stable pod identity (lease scope): <store>/store-id.json. */
-async function loadOrCreateStoreId(storeDir: string): Promise<string> {
-  const file = join(storeDir, 'store-id.json');
+interface StoreIdentity {
+  podId: string;
+  authority?: string;
+}
+
+/** An OCI layout with any `<digest>.alias` twin was written by an encrypting store. */
+async function hasCiphertextBlobs(storeDir: string): Promise<boolean> {
   try {
-    const parsed = JSON.parse(await readFile(file, 'utf8')) as { podId?: string };
-    if (parsed.podId) return parsed.podId;
+    const { readdir } = await import('node:fs/promises');
+    return (await readdir(join(storeDir, 'blobs', 'sha256'))).some((name) => name.endsWith('.alias'));
   } catch {
-    // first --encrypt on this store
+    return false;
   }
-  const podId = randomBytes(8).toString('hex');
-  await writeFile(file, `${JSON.stringify({ podId }, null, 2)}\n`);
-  return podId;
+}
+
+async function readStoreIdentity(storeDir: string): Promise<StoreIdentity | null> {
+  const file = join(storeDir, 'store-id.json');
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`Cannot read encrypted store identity at ${file}; restore access or use --keyless.`);
+    }
+    // No identity, but ciphertext on disk (`.alias` twins): the layout IS
+    // encrypted — plaintext writes beside it would break the at-rest invariant.
+    if (await hasCiphertextBlobs(storeDir)) {
+      throw new Error(`${storeDir} holds encrypted blobs but ${file} is missing. Restore it (podId + authority), or use --keyless for blind hosting. Refusing to serve it as a plaintext store.`);
+    }
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(text) as StoreIdentity;
+    if (typeof parsed.podId !== 'string' || !parsed.podId ||
+        (parsed.authority !== undefined && (typeof parsed.authority !== 'string' || !parsed.authority))) {
+      throw new Error('Invalid store identity');
+    }
+    return parsed;
+  } catch {
+    throw new Error(`Invalid encrypted store identity at ${file}; restore it or use --keyless.`);
+  }
 }
 
 /** Locked tags (tag immutability): <store>/locks.json, applied via --lock/--unlock. */
@@ -166,22 +197,8 @@ async function warnOnVersionSkew(uiDir: string): Promise<void> {
   try {
     const { readFile } = await import('node:fs/promises');
     const info = JSON.parse(await readFile(join(uiDir, 'ui-buildinfo.json'), 'utf8')) as { coreVersion?: string };
-    // Compose our own full version the same way export-static does — skew
-    // detection is commit-precise on dev builds.
-    const own = JSON.parse(
-      await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
-    ) as { version?: string };
-    let ownFull = own.version ?? '';
-    try {
-      const bi = JSON.parse(await readFile(new URL('../buildinfo.json', import.meta.url), 'utf8')) as {
-        version?: string;
-        commit?: string;
-        date?: string;
-      };
-      ownFull = `${bi.version ?? ownFull} (${bi.commit ?? 'no-git'}, ${(bi.date ?? '').slice(0, 10)})`;
-    } catch {
-      // gitless build — compare plain versions
-    }
+    // export-static composes coreVersion the same way — skew detection is commit-precise on dev builds.
+    const ownFull = await coreVersion();
     if (info.coreVersion && ownFull && info.coreVersion !== ownFull) {
       stdout.write(
         `warning: the UI bundles @artipod/core ${info.coreVersion} but this serve is ${ownFull} — rebuild it: cd examples/artipod-sync && npm run export:static && artipod import out artipod-ui:latest\n`,
@@ -228,25 +245,45 @@ async function resolveUiDirInner(store: OciLayoutPodStore): Promise<{ dir: strin
 }
 
 export async function runServe(opts: ServeCliOptions): Promise<void> {
+  if (opts.encrypt && opts.keyless) throw new Error('--encrypt and --keyless cannot be combined');
   const storeDir = resolve(opts.store);
   const store = new OciLayoutPodStore(nodePodFs(), storeDir);
   await store.init();
 
-  // --encrypt (S5.5, V9 broker): load-or-create the authority + this store's
-  // KEK BEFORE anything writes blobs, so the first --publish already lands
-  // as ciphertext. The serve holds the key — it can decrypt what it brokers.
+  const identity = opts.keyless ? null : await readStoreIdentity(storeDir);
+  // --keyless over an encrypted layout is a BLIND HOST: ciphertext syncs, but
+  // no plaintext may be written beside it (the at-rest invariant holds
+  // without the key).
+  const blind = opts.keyless && (
+    (await stat(join(storeDir, 'store-id.json')).then(() => true, () => false)) || (await hasCiphertextBlobs(storeDir))
+  );
+  if (blind) store.enableBlindHost();
   let broker: { authority: Authority; podId: string; capTtlMs: number; dir: string; created: boolean } | null = null;
-  if (opts.encrypt) {
+  if (!opts.keyless && (opts.encrypt || identity)) {
     const capTtlMs = opts.keyTtl ? parseKeyTtl(opts.keyTtl) : DEFAULT_KEY_TTL_MS;
     if (capTtlMs === null) {
       stdout.write(`artipod serve: invalid --key-ttl '${opts.keyTtl}' — want <n>(ms|s|m|h|d), e.g. 1h\n`);
       process.exit(2);
     }
-    const dir = resolve(opts.authority ?? join(homedir(), '.artipod/authority'));
-    const { authority, created } = await loadOrCreateAuthority(dir, `serve:${hostname()}`);
-    const podId = await loadOrCreateStoreId(storeDir);
-    const { kek } = await ensurePodKek(dir, authority, podId);
+    const dir = resolve(opts.authority ?? identity?.authority ?? join(homedir(), '.artipod/authority'));
+    const podId = identity?.podId ?? randomBytes(8).toString('hex');
+    let loaded: Awaited<ReturnType<typeof loadStoreAuthority>>;
+    if (identity) {
+      try {
+        loaded = await loadStoreAuthority(dir, podId);
+      } catch {
+        throw new Error(`Cannot resume encrypted store ${storeDir}: authority or matching key missing, unreadable, or invalid at ${dir}. Restore the keys, select --authority <dir>, or use --keyless for blind hosting. No replacement keys were created.`);
+      }
+    } else {
+      const authorityInfo = await loadOrCreateAuthority(dir, `serve:${hostname()}`);
+      const { kek } = await ensurePodKek(dir, authorityInfo.authority, podId);
+      loaded = { ...authorityInfo, kek };
+    }
+    const { authority, created, kek } = loaded;
     store.enableEncryption(await importBlobKey(kek));
+    if (identity?.authority !== dir) {
+      await writeFile(join(storeDir, 'store-id.json'), `${JSON.stringify({ podId, authority: dir }, null, 2)}\n`);
+    }
     broker = { authority, podId, capTtlMs, dir, created };
   }
 
@@ -343,6 +380,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
               maxSessions: 50,
               execTimeoutMs: 30_000,
               maxFsBytes: 256 * 1024 * 1024,
+              version: await coreVersion(),
             }),
             // EXEC_API_TOKEN overrides; otherwise exec rides the app auth (rw)
             ...(env.EXEC_API_TOKEN ? { auth: bearerAuth(() => env.EXEC_API_TOKEN) } : {}),
@@ -375,6 +413,8 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
       `            authority ${tildify(broker.dir)}${broker.created ? ' (created)' : ''} · pod ${broker.podId} · lease cap ${opts.keyTtl ?? '1h'}\n`,
     );
     stdout.write(`            login: POST ${url}/api/keys/login → lease + KEK · /v2 is off while encrypted\n`);
+  } else if (blind) {
+    stdout.write(`  keys:     BLIND HOST (--keyless) — encrypted layout, no key here: ciphertext syncs byte-exact, plaintext writes are refused\n`);
   }
   if (relayHosts.length > 0) stdout.write(`  relay:    ${relayHosts.join(', ')}\n`);
   if (token || readToken) {

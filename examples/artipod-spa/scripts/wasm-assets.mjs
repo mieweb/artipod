@@ -59,6 +59,14 @@ if (existsSync(menuPlugin)) {
   }
 }
 
+// The apps runtime's service worker must be served from the site root.
+const worker = join(root, 'node_modules/@artipod/core/dist/apps/runtime-sw.js');
+if (!existsSync(worker)) {
+  console.error(`wasm-assets: ${worker} missing — rebuild @artipod/core (root npm run build) and reinstall`);
+  process.exit(1);
+}
+cpSync(worker, join(root, 'public/artipod-runtime-sw.js'));
+
 console.log(
-  `kerebron wasm assets → public/kerebron-wasm${fixed ? ` · ${fixed} css import fix(es)` : ''}${menuFixed ? ' · menu MouseEvent view fix' : ''}`,
+  `kerebron wasm assets → public/kerebron-wasm · runtime worker → public/artipod-runtime-sw.js${fixed ? ` · ${fixed} css import fix(es)` : ''}${menuFixed ? ' · menu MouseEvent view fix' : ''}`,
 );

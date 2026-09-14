@@ -56,9 +56,10 @@ artipod serve --only registry          # registry surface only
 | `--cors <origin>` | deny | Repeatable exact-match origin allowlist for `/api/pods`, `/api/oci` (and later `/v2`). The shipped UI is same-origin and needs none of this. |
 | `--oci-allow <host>` | deny | Repeatable upstream allowlist for the registry relay (env `ARTIPOD_OCI_ALLOWED_HOSTS`) |
 | `--no-exec` | exec on | Disable the exec surface. Exec auth: env `EXEC_API_TOKEN`, falling back to the serve token. |
-| `--encrypt` | off | Broker mode: the store writes chunked-AEAD ciphertext at rest and `/api/keys` issues key leases. See [Encrypted pods and key leases](#encrypted-pods-and-key-leases-s55). |
+| `--encrypt` | automatic for previously encrypted stores; off for fresh stores | Initialize broker mode: the store writes chunked-AEAD ciphertext at rest and `/api/keys` issues key leases. Later starts resume it automatically. See [Encrypted pods and key leases](#encrypted-pods-and-key-leases-s55). |
+| `--keyless` | off | Explicit blind hosting, bypassing automatic broker mode without changing persisted encryption settings. No keys are loaded or issued. Cannot combine with `--encrypt`. |
 | `--key-ttl <dur>` | `1h` | Lease TTL cap for `/api/keys` logins — `<n>(ms\|s\|m\|h\|d)`. Issued TTL = min(requested, cap). |
-| `--authority <dir>` | `~/.artipod/authority` | Key authority home: signing key + raw pod KEKs, dir `0700`, files `0600`. Created on first `--encrypt`. **Guard its backups.** |
+| `--authority <dir>` | remembered store authority, otherwise `~/.artipod/authority` | Key authority home: signing key + raw pod KEKs, dir `0700`, files `0600`. Created on first `--encrypt`; a successful broker start remembers the resolved path. **Guard its backups.** |
 | `--open` | — | Open the printed URL in a browser |
 
 ## The UI (S2, local-first)
@@ -163,30 +164,40 @@ you. Embedders pass their own policy: `createArtipodApp({ isLocked })`.
 
 Two ways to serve encrypted content — pick per trust model:
 
-| | **blind host** (default — zero flags) | **broker** (`--encrypt`) |
+| | **blind host** (fresh store, or `--keyless`) | **broker** (`--encrypt` initially, automatic thereafter) |
 |---|---|---|
 | what the server holds | opaque ciphertext blobs + an encrypted envelope ref | ciphertext at rest **plus the KEK** |
 | can the server read the data? | **no — ever** | **yes** — stated honestly: a broker can decrypt what it brokers (write-back materializes plaintext anyway) |
 | how keys move | out-of-band (you distribute them) | `POST /api/keys/login` → signed lease + KEK |
 | client sync | `pushEncryptedRef` / `pullEncryptedRef` (ciphertext digests only) | ordinary sync with an `X-Artipod-Lease` header; wire is plaintext (put TLS in front off-localhost) |
 | `/v2` (docker) | works for the ciphertext blobs it can address | **off (403)** — the distribution API cannot carry leases, and serving decrypted blobs to any token holder would bypass them |
-| code needed | none — an encrypted ref is just blobs + a ref to this server | `--encrypt` |
+| code needed | none — an encrypted ref is just blobs + a ref to this server | `--encrypt` on first boot |
 
 **Broker mode** (`artipod serve --publish <dir> --encrypt`):
 
 - First boot creates the authority (`~/.artipod/authority`, `0700`): an ECDSA
   signing key (`authority.json`) and one KEK per served store (`keks.json`),
-  keyed by the store's `store-id.json`. **Serve makes the key if one is not
-  there** — no ceremony.
-- Every blob written after `--encrypt` (including the boot `--publish`
+  keyed by the store's `store-id.json`. Keys are created when initializing
+  a new broker store, never replaced when resuming an existing one.
+- Subsequent `artipod serve` starts detect `store-id.json` and resume broker
+  mode with the matching key. Custom authority paths are remembered there;
+  `--authority` overrides the remembered path. Older identities containing
+  only `podId` use the default authority, so older custom-authority stores
+  need `--authority` once to remember their location. A key for some other
+  store does not turn encryption on for a fresh store.
+- Missing, unreadable, or invalid identity/key material stops startup with
+  recovery guidance, even with `--encrypt`. Serve does not silently switch
+  to plaintext writes or mint replacement keys. Restore the original keys
+  or explicitly select `--keyless` for blind hosting.
+- Every blob written in broker mode (including the boot `--publish`
   snapshot) lands as chunked-AEAD ciphertext with a `.alias` digest twin
   ([encryption.md](encryption.md#at-rest-format)). Blobs already on disk stay
   as they were — use a fresh store for full coverage.
 - `POST /api/keys/login` (JSON: `{principal?, podIds?, ttlMs?}`) returns a
   signed lease + base64 KEKs. It authenticates through the S5 token hook: an
   **ro token gets a read-only lease**; no token needed on an open localhost
-  serve. `GET /api/keys` returns metadata only (never key material); without
-  `--encrypt` the route 404s.
+  serve. `GET /api/keys` returns metadata only (never key material); outside
+  broker mode the route 404s.
 - Gated requests carry `X-Artipod-Lease: <base64 lease JSON>`. Blob
   reads/writes and ref **writes** require a live lease covering the store's
   pod with a matching permission; ref **reads** stay open (pointers are the
@@ -213,9 +224,11 @@ re-issue and refusing further ciphertext after expiry. The TTL bounds an
 open session; it is **not** revocation of an already-leaked key. That is
 rotation/rewrap, a documented future ([encryption.md](encryption.md)).
 
-A keyless serve of the *same* store stays useful as a blind host: refs list
+A deliberate `artipod serve --keyless` of the *same* store stays useful as a blind host: refs list
 fine, ciphertext-addressed blobs sync byte-exact, and plaintext-addressed
-reads answer `423 Locked` instead of leaking. Binding a key-issuing serve to
+reads answer `423 Locked` instead of leaking. This does not decrypt existing
+data, encrypt new uploads at rest, or erase the store's broker settings;
+omit `--keyless` to resume broker mode. Binding a key-issuing serve to
 anything but localhost is ask-first territory — the authority dir holds raw
 KEK material.
 

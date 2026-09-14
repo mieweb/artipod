@@ -14,7 +14,7 @@
 
 import type { PodFs } from '../podfs.js';
 import { sha256, verifyDigest, digestHex, type Digest } from '../oci/digest.js';
-import { decryptBlob, encryptBlob } from '../oci/cipher.js';
+import { decryptBlob, encryptBlob, isEncryptedBlob } from '../oci/cipher.js';
 import type { StoredRef } from '../oci/store.js';
 import { OciStore } from '../oci/store.js';
 import { PodLockedError } from './keyring.js';
@@ -57,6 +57,7 @@ const MEDIA_TYPE_ANNOTATION = 'org.artipod.refMediaType';
  */
 export class OciLayoutPodStore implements PodStore {
   private keySource: (() => CryptoKey) | null = null;
+  private blind = false;
 
   constructor(
     private readonly fs: PodFs,
@@ -87,6 +88,20 @@ export class OciLayoutPodStore implements PodStore {
   /** True when this store writes ciphertext (regardless of lock state). */
   get encrypted(): boolean {
     return this.keySource !== null;
+  }
+
+  /**
+   * Keyless custody of an encrypted layout (serve `--keyless`): reads stay
+   * as they are (ciphertext-addressed bytes move, plaintext addressing is
+   * refused), and writes accept ONLY ciphertext envelopes — a blind host
+   * never lays plaintext beside the ciphertext it cannot read.
+   */
+  enableBlindHost(): void {
+    this.blind = true;
+  }
+
+  get blindHost(): boolean {
+    return this.blind;
   }
 
   async init(): Promise<void> {
@@ -158,6 +173,9 @@ export class OciLayoutPodStore implements PodStore {
       await this.fs.writeFile(this.blobPath(encrypted.ciphertextDigest), encrypted.bytes);
       await this.fs.writeFile(this.aliasPath(digest), encrypted.ciphertextDigest);
     } else {
+      if (this.blind && !isEncryptedBlob(bytes)) {
+        throw new PodLockedError(`blob ${digest}: this store is encrypted and served without keys — only ciphertext may be written here`);
+      }
       await this.fs.writeFile(this.blobPath(digest), bytes);
     }
     return digest;

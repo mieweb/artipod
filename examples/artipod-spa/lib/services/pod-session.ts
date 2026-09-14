@@ -19,6 +19,8 @@ import { workspaceStore, initialWorkspace } from '../stores/workspace';
 import { brokerStore } from '../stores/broker';
 import { navigateTo } from '../stores/route';
 import { nextDraftRef } from '../boot';
+import { createBrowserRuntime, type BrowserRuntime } from '@artipod/core/apps';
+import { catalogInventory } from './inventory';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
 
@@ -28,6 +30,7 @@ export interface PodSession {
   sandbox: Sandbox;
   events: PodEvents;
   scheduler: TaskScheduler;
+  runtime: BrowserRuntime;
   publish(target?: string): Promise<string>;
   /** Suggested publish target for the panel (fork → next free _ tag). */
   suggestPublishValue(): Promise<string>;
@@ -206,10 +209,18 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   // Push retry rides the sync-machine + a NAMED task (visible in artipod ps).
   const scheduler = svc.scheduler;
   let syncState: SyncState = { ...initialSyncState, offline: svc.forcedOffline };
+  // `kill <sync:push pid>` (TERM): no more runs, no re-arming, row retired —
+  // the documented close semantics, not a cancel that the next edit undoes.
+  let pushTerminated = false;
   const dispatch = (event: SyncEvent): void => {
     syncState = reduceSync(syncState, event);
-    if (wantsPush(syncState, event) && event.type !== 'edit') void scheduler.run(PUSH_TASK);
+    if (!pushTerminated && wantsPush(syncState, event) && event.type !== 'edit') void scheduler.run(PUSH_TASK);
   };
+
+  // The session is a PID namespace (D16/D18) owned by the pod: shells, running
+  // apps and tasks are its processes; `ps` / `kill` and /proc/<pid> read from
+  // `pod.processes`, and `pod.dispose()` tears it down.
+  const inventory = catalogInventory();
 
   const pod = await createZenFsPod(
     {
@@ -253,10 +264,13 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       publish: doPublish,
       // `artipod ps` in this shell shows the client's live schedule.
       tasks: () => scheduler.list(),
+      inventory,
+      identity: { kind: 'workspace', name: route.id, mode: route.mode, version: process.env.NEXT_PUBLIC_ARTIPOD_VERSION },
       extraCommands: [publishCmd],
     },
   );
   podRef = pod;
+  const { processes } = pod;
   const sandbox = pod.createSandbox({ confineTo: pod.basis ? pod.basis.at : blankRoot });
   // per-artipod catalog badge: ref workspaces under a broker keep ciphertext
   await io.patch(route.id, { encrypted: !!brokerKey && route.isRef });
@@ -284,7 +298,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     }),
   );
   scheduler.register(PUSH_TASK, async () => {
-    if (!needsPush || route.mode !== 'rw' || svc.forcedOffline) return;
+    if (pushTerminated || !needsPush || route.mode !== 'rw' || svc.forcedOffline) return;
     dispatch({ type: 'push-start' });
     const result = await pod.pushBasis();
     if (result && !result.pushed) {
@@ -294,15 +308,24 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       void io.patch(route.id, { unsynced: false });
     }
   });
-  void scheduler.run(PUSH_TASK); // boot retry (offline session left work behind)
-  scheduler.schedule(PUSH_TASK, 15_000); // slow interval; re-armed after each run
+  // Boot retry (an offline session left work behind). The slow 15 s interval
+  // is armed by `rearm` below once this run has COMPLETED — scheduling here
+  // would flip the task to `scheduled` mid-run and let a second push overlap.
+  void scheduler.run(PUSH_TASK);
+  const pushProcess = processes.spawn({ kind: 'task', name: PUSH_TASK, state: 'idle', signal: { TERM: () => {
+    pushTerminated = true;
+    scheduler.cancel(PUSH_TASK);
+    pushProcess.exit();
+  } } });
   const rearm = scheduler.onChange(() => {
+    if (pushTerminated) return;
     const task = scheduler.list().find((t) => t.name === PUSH_TASK);
+    if (task) pushProcess.update({ state: task.state, detail: task.lastResult ? { last: task.lastResult } : undefined });
     if (task && task.state === 'idle' && task.nextRunAt === undefined) scheduler.schedule(PUSH_TASK, 15_000);
   });
   // Reconnect + lease renewal: broker snapshots drive both retry and re-key.
   const unsubBroker = brokerStore.subscribe(() => {
-    void scheduler.run(PUSH_TASK);
+    if (!pushTerminated) void scheduler.run(PUSH_TASK);
     const lease = svc.getLease();
     const key = svc.getKey();
     if (lease && key) void pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key });
@@ -337,12 +360,21 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   (window as unknown as { __artipod?: unknown }).__artipod = pod;
   workspaceStore.setState({ phase: 'ready', root: pod.basis ? pod.basis.at : blankRoot });
 
+  const runtime = createBrowserRuntime({
+    read: async path => new Uint8Array(await pod.zfs.promises.readFile(path)),
+    list: async path => await pod.zfs.promises.readdir(path) as string[],
+    stat: async path => await pod.zfs.promises.lstat(path),
+  }, pod.basis ? pod.basis.at : blankRoot, { processes, detail: { pod: route.id } });
+  const stopPreview = () => runtime.stop();
+  window.addEventListener('pagehide', stopPreview);
+
   const session: PodSession = {
     route,
     pod,
     sandbox,
     events,
     scheduler,
+    runtime,
     publish: doPublish,
     async suggestPublishValue(): Promise<string> {
       if (!route.isRef) return `me/${route.id}:_1`;
@@ -355,10 +387,16 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       }
     },
     async close(): Promise<void> {
+      runtime.dispose();
+      window.removeEventListener('pagehide', stopPreview);
       const closing = (async () => {
+        // Nothing new may start pushing from here on; then flush.
+        pushTerminated = true;
+        scheduler.cancel(PUSH_TASK);
         // Flush-on-close (U5): a mid-flight or pending push finishes BEFORE the
-        // pod dies — the aborted-push residue from reload-navigation, fixed
-        // properly. Offline or ro: nothing to flush; the registry flag stands.
+        // pod dies — `pod.pushBasis()` awaits an in-flight push plus one
+        // follow-up, so this really drains. Offline or ro: nothing to flush;
+        // the registry flag stands.
         if (route.isRef && route.mode === 'rw' && !svc.forcedOffline) {
           try {
             const result = await pod.pushBasis();
@@ -373,10 +411,10 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         for (const off of offs) off();
         unsubBroker();
         rearm();
-        scheduler.cancel(PUSH_TASK);
         if (probeTimer) clearTimeout(probeTimer);
         // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
-        // keys, hydration) unregister — the next session must not collide.
+        // keys, hydration, the process namespace) unregister — the next
+        // session must not collide.
         pod.dispose();
         releaseWsLock?.();
         const w = window as unknown as { __artipod?: unknown };

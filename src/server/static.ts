@@ -58,6 +58,12 @@ export function createStaticHandler(dir: string): (req: Request) => Promise<Resp
       return Response.json({ error: 'method not allowed' }, { status: 405 });
     }
     const pathname = decodeURIComponent(new URL(req.url).pathname);
+    // Reserved for the browser runtime's service worker; never served from disk.
+    if (pathname === '/_artipod/run' || pathname.startsWith('/_artipod/run/')) {
+      return Response.json({ error: 'execution session unavailable' }, {
+        status: 404, headers: { 'cache-control': 'no-store' },
+      });
+    }
     // normalize + prefix check = no `..` escape
     const target = normalize(join(root, pathname));
     if (target !== root && !target.startsWith(root + sep)) {

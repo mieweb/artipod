@@ -1,0 +1,6 @@
+{
+  "apiVersion": "artipod.io/v1",
+  "kind": "SPAPod",
+  "metadata": { "name": "Lifecycle sample" },
+  "spec": { "entrypoint": "index.html" }
+}

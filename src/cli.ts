@@ -18,6 +18,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { stdin, stdout, exit, argv, env } from 'node:process';
 import { createZenFsPod, type ZenFsPod } from './realize/zenfs.js';
+import { TerminalSession } from './host/terminal-session.js';
+import { coreVersion } from './version.js';
 import type { PodManifest } from './manifest.js';
 import { OciLayoutPodStore } from './manager/pod-store.js';
 import { newSuperblock, OCI_ROOT, SUPERBLOCK_PATH, type PodSuperblock } from './oci/store.js';
@@ -55,16 +57,20 @@ const SERVE_FLAGS = `  --port <n>         listen port (default 2784; 0 = OS-assi
   --encrypt          broker mode (key authority): store blobs as chunked-AEAD
                      ciphertext at rest and serve key leases at /api/keys — a
                      signing key + this store's KEK are created on first use.
+                     Encrypted stores automatically resume broker mode on restart.
                      Honest caveat: THE SERVE MACHINE CAN DECRYPT WHAT IT
                      BROKERS, and /v2 is off while encrypted (docker cannot
                      carry leases). Keyless serves of encrypted refs stay
                      blind hosts — ciphertext syncs, keys move out-of-band
+  --keyless          explicitly serve without keys (blind host); overrides automatic
+                     broker mode, does not decrypt data or erase encryption settings
   --key-ttl <dur>    lease TTL cap for /api/keys logins, <n>(ms|s|m|h|d)
                      (default 1h) — bounds an open session: client keyrings
                      evaporate the key at expiry and re-login restores; it is
                      NOT revocation of an already-leaked key
   --authority <dir>  key authority home (signing key + raw pod KEKs, 0700;
-                     default ~/.artipod/authority) — guard its backups
+                     remembered per store; initially ~/.artipod/authority)
+                     — guard its backups
   --no-ui            headless landing only (skip UI resolution); the UI resolves
                      local-first: ARTIPOD_UI_DIR (a static build), then the
                      ARTIPOD_UI_REF ref in the store (default artipod-ui:latest)
@@ -316,6 +322,7 @@ function parseArgs(
         }
       } else if (a === '--no-seal') serve.noSeal = true;
       else if (a === '--encrypt') serve.encrypt = true;
+      else if (a === '--keyless') serve.keyless = true;
       else if (a === '--key-ttl') {
         serve.keyTtl = rest[++i];
         if (!serve.keyTtl || !/^\d+(ms|s|m|h|d)?$/.test(serve.keyTtl.trim())) {
@@ -446,12 +453,21 @@ async function bootPod(args: RunArgs, dir?: string): Promise<ZenFsPod> {
   await mkdir(resolve(args.store), { recursive: true });
   const store = new OciLayoutPodStore(nodePodFs(), resolve(args.store));
   await store.init();
+  // The shell's identity: `uname -a`, `hostname`, prompt and banner all read
+  // it; the pod names its PID namespace after it (D18).
+  const identity = {
+    kind: 'pod',
+    name: args.ref ?? (dir ? basename(dir) : 'ephemeral'),
+    mode: dir ? (args.dir ? 'kept, --dir' : 'kept') : '--rm',
+    version: await coreVersion(),
+  };
   return createZenFsPod(manifest, {
     proc: true,
     cwd: '/',
     sync: { remote: store },
     oci: { transport: new DirectRegistryTransport() },
     hydration: {},
+    identity,
   });
 }
 
@@ -786,119 +802,76 @@ async function materializeBases(pod: ZenFsPod, args: RunArgs): Promise<void> {
   }
 }
 
+/**
+ * The interactive shell: the same TerminalSession line discipline the
+ * browser and server use, driven by raw-mode stdin (D18). Piped stdin is
+ * fed line by line; the session treats `\n` as Enter, so scripts just work.
+ */
 async function repl(pod: ZenFsPod, note?: string): Promise<number> {
   const sandbox = pod.createSandbox();
-  const { createInterface } = await import('node:readline');
-  let abort: AbortController | null = null;
-  let sigintArmed = false;
-
-  const rl = createInterface({
-    input: stdin,
-    output: stdout,
-    terminal: stdin.isTTY === true,
-    completer: (line: string, callback: (err: Error | null, result: [string[], string]) => void) => {
-      sandbox
-        .complete(line)
-        .then(({ candidates, replaceStart }) => callback(null, [candidates, line.slice(replaceStart)]))
-        .catch(() => callback(null, [[], line]));
-    },
-  });
-
-  const prompt = () => {
-    rl.setPrompt(`${sandbox.getCwd()} $ `);
-    rl.prompt();
+  const tty = stdin.isTTY === true;
+  // Transcripts (non-TTY) get plain \n and no colours/cursor moves.
+  // eslint-disable-next-line no-control-regex
+  const ansi = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+  const write = (text: string): void => {
+    stdout.write(tty ? text : text.replace(/\r\n/g, '\n').replace(/\r/g, '').replace(ansi, ''));
   };
 
-  const banner = [
-    `artipod ${pod.oci.store.getSuperblock().podId} — type \`artipod\` for pod verbs, \`exit\` to leave`,
-    `mounts: ${pod.mountTable.map((m) => `${m.path}${m.readonly ? ':ro' : ''}`).join(', ')}`,
-    'to see it in action, type: examples',
-    ...(note ? [note] : []),
-    '',
-  ].join('\n');
-  stdout.write(banner);
-
   return new Promise<number>((resolveExit) => {
-    let lastCode = 0;
-    let running = false;
-    let closed = false;
-    const queue: string[] = [];
+    let done = false;
+    let ctrlCArmed = false;
+    let pending: Promise<void> = Promise.resolve();
+    const session = new TerminalSession({
+      sandbox,
+      io: { write },
+      version: sandbox.identity?.version,
+      banner: [
+        `artipod ${pod.oci.store.getSuperblock().podId} — type \`artipod\` for pod verbs, \`exit\` to leave`,
+        `mounts: ${pod.mountTable.map((m) => `${m.path}${m.readonly ? ':ro' : ''}`).join(', ')}`,
+        'to see it in action, type: examples',
+        ...(note ? [note] : []),
+      ],
+      onExit: () => finish(),
+    });
 
-    const finish = () => {
-      stdout.write('\n');
+    function finish(): void {
+      if (done) return;
+      done = true;
+      write('\r\n');
+      if (tty) stdin.setRawMode(false);
+      stdin.pause();
+      session.dispose();
       pod.dispose();
-      resolveExit(lastCode);
-    };
+      resolveExit(session.lastExitCode);
+    }
 
-    // Piped scripts hit EOF ('close') while lines are still queued or a
-    // disk-backed command is mid-flight — keep draining, then finish.
-    const continueOrFinish = () => {
-      const next = queue.shift();
-      if (next !== undefined) void handle(next);
-      else if (closed) finish();
-      else prompt();
-    };
-
-    const runLine = async (line: string) => {
-      running = true;
-      abort = new AbortController();
-      try {
-        const r = await sandbox.exec(line, { signal: abort.signal });
-        if (r.stdout) stdout.write(r.stdout);
-        if (r.stderr) stdout.write(r.stderr);
-        lastCode = r.exitCode;
-      } catch (e) {
-        stdout.write(`${String(e)}\n`);
-        lastCode = 1;
-      } finally {
-        abort = null;
-        running = false;
-      }
-      continueOrFinish();
-    };
-
-    const handle = async (raw: string) => {
-      const line = raw.trim();
-      sigintArmed = false;
-      if (line === 'exit' || line === 'logout') {
-        if (closed) finish();
-        else rl.close();
+    if (tty) stdin.setRawMode(true);
+    stdin.setEncoding('utf8');
+    stdin.on('data', (chunk: string) => {
+      if (done) return;
+      if (chunk === '\x03') {
+        // Ctrl+C: abort a running command now (not behind the queue); twice while idle = leave
+        if (session.isBusy) {
+          void session.handleData(chunk);
+          return;
+        }
+        if (ctrlCArmed) {
+          finish();
+          return;
+        }
+        ctrlCArmed = true;
+        write(' (Ctrl+C again, Ctrl+D or `exit` leaves)');
+        void session.handleData(chunk); // clears the line, ^C, fresh prompt
         return;
       }
-      if (!line) {
-        continueOrFinish();
-        return;
-      }
-      await runLine(line);
-    };
-
-    rl.on('line', (line) => {
-      if (running) queue.push(line);
-      else void handle(line);
+      ctrlCArmed = false;
+      pending = pending.then(() => session.handleData(chunk));
     });
-
-    rl.on('SIGINT', () => {
-      if (running && abort) {
-        abort.abort();
-        stdout.write('^C\n');
-        return;
-      }
-      if (sigintArmed) {
-        rl.close();
-        return;
-      }
-      sigintArmed = true;
-      stdout.write('^C (press Ctrl+C again or type `exit` to leave)\n');
-      prompt();
+    // Piped scripts: EOF after the last line has run means leave.
+    stdin.on('end', () => {
+      void pending.then(() => finish());
     });
-
-    rl.on('close', () => {
-      if (closed) return;
-      closed = true;
-      if (!running && queue.length === 0) finish();
-    });
-
-    prompt();
+    stdin.resume();
   });
 }
 
@@ -909,26 +882,9 @@ function bannerNote(args: RunArgs, loc: PodLocation): string {
   return `kept at ${tildify(loc.dir!)} once you write (untouched pods are removed) — resume: artipod run -it ${basename(loc.dir!).slice(0, 8)}`;
 }
 
-/** "artipod <version> (<commit>, <commit date>)" — buildinfo.json is baked by
- * postbuild; the version auto-bumps from git tags (`0.3.1+5` = 5 commits past
- * tag 0.3.1). Git-less or plain-tsc builds fall back to the npm version. */
+/** "artipod <version> (<commit>, <commit date>)" — see src/version.ts. */
 async function versionLine(): Promise<string> {
-  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
-  let version = pkg.version;
-  let build = '';
-  try {
-    const bi = JSON.parse(await readFile(new URL('./buildinfo.json', import.meta.url), 'utf8')) as {
-      version?: string | null;
-      commit?: string | null;
-      date?: string | null;
-    };
-    if (bi.version) version = bi.version;
-    const parts = [bi.commit, bi.date?.slice(0, 10)].filter(Boolean);
-    if (parts.length > 0) build = ` (${parts.join(', ')})`;
-  } catch {
-    // no buildinfo baked — version only
-  }
-  return `artipod ${version}${build}`;
+  return `artipod ${await coreVersion()}`;
 }
 
 async function main(): Promise<void> {

@@ -31,6 +31,20 @@ export interface LoadedAuthority {
   created: boolean;
 }
 
+export async function loadStoreAuthority(dir: string, podId: string): Promise<LoadedAuthority & { kek: Uint8Array }> {
+  const parsed = JSON.parse(await readFile(join(dir, 'authority.json'), 'utf8')) as AuthorityFile;
+  const keys = await importSigningKeyPair(parsed);
+  const keks = JSON.parse(await readFile(join(dir, 'keks.json'), 'utf8')) as Record<string, string>;
+  if (!Object.hasOwn(keks, podId) || typeof keks[podId] !== 'string') {
+    throw new Error('Missing store key');
+  }
+  const kek = fromBase64(keks[podId]);
+  if (kek.length !== 32) throw new Error('Invalid store key');
+  const authority = Authority.from(parsed.name, keys);
+  authority.registerPod(podId, kek);
+  return { authority, kek, created: false };
+}
+
 export async function loadOrCreateAuthority(dir: string, name: string, clock?: () => number): Promise<LoadedAuthority> {
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await chmod(dir, 0o700); // pre-existing dirs tighten too

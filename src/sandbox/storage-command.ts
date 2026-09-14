@@ -192,6 +192,11 @@ devices that can be attached anywhere in it, side by side.
   -t opfs [-o dir=PATH]  the OPFS sandbox dir, or a subdirectory of it
 
 The mount point is created if it does not exist.
+
+Images are mounted with the pod verb, from inside a workspace shell:
+  artipod image mount <ref> [path] [--through N]   read-only lazy view of an image
+  artipod open <ref> [path]                        writable copy-on-write overlay
+\`images\` lists what the server offers; \`volumes\` lists local workspaces.
 `,
   umount: `usage: umount [-f] <dir>
 

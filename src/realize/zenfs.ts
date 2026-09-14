@@ -32,6 +32,7 @@ import { createSandboxTools } from '../agent/tools.js';
 import type { ToolHandler as AgentToolHandler } from '../agent/types.js';
 import { registerPodManifestProvider } from '../proc/pod-provider.js';
 import { registerProcProvider } from '../proc/registry.js';
+import { openNamespace } from '../proc/namespace.js';
 import { Keyring, makeKeysProcProvider } from '../manager/keyring.js';
 import { PodLocker } from '../manager/locker.js';
 import { AuditLog } from '../manager/audit.js';
@@ -160,6 +161,15 @@ export interface ZenFsPodOptions
   publish?: (target?: string) => Promise<string>;
   /** `artipod ps` rows — the app's background schedule (renewals, retries, delegations). */
   tasks?: () => import('../oci/command.js').PsTask[];
+  /**
+   * Adopt a caller-owned process table instead of the pod creating its own
+   * (tests). The pod registers it under /proc but does not dispose it.
+   */
+  processes?: import('../proc/processes.js').ProcessTable;
+  /** `images` / `volumes` and `artipod images|volumes`: app-provided inventory. */
+  inventory?: import('../proc/inventory.js').InventoryProviders;
+  /** Names every shell of this pod (`hostname`, `uname`, prompt, banner). */
+  identity?: import('../sandbox/types.js').SandboxIdentity;
   /** Manager sync: the remote PodStore push/pull/clone talk to. */
   sync?: {
     remote?: import('../manager/pod-store.js').PodStore;
@@ -240,6 +250,15 @@ export interface ZenFsPod {
   readonly hydrator?: Hydrator;
   /** Present when `sync.basis` opened at boot (sync plan Phase D). */
   readonly basis?: { ref: string; at: string };
+  /**
+   * The pod's namespace (D16/D18): identity, process table and inventory —
+   * what every shell of this pod reads and what `/proc` projects. pid 1 is
+   * the pod, every shell is a row, apps and tasks the host spawns join it.
+   * Torn down by `dispose()`.
+   */
+  readonly namespace: import('../proc/namespace.js').Namespace;
+  /** Shortcut for `namespace.processes`. */
+  readonly processes: import('../proc/processes.js').ProcessTable;
   /** Push the overlay's changes now (the auto-push path, awaitable). */
   pushBasis(): Promise<import('../manager/overlay-sync.js').OverlayPushResult | null>;
   /**
@@ -292,6 +311,15 @@ export async function createZenFsPod(
   const ociStore = new OciStore(zfs);
   await ociStore.init();
   const oci = { store: ociStore, transport: options.oci?.transport };
+  // The pod's namespace (D18): identity + processes + inventory — what every
+  // shell reads and what /proc projects. pid 1 carries the identity name;
+  // mode lives in `uname -o`, not in `ps`.
+  const namespace = openNamespace({
+    identity: options.identity ?? { kind: 'pod', name: ociStore.getSuperblock().podId },
+    processes: options.processes,
+    inventory: options.inventory,
+    proc,
+  });
   const snapshots = new SnapshotManager({
     zfs,
     store: ociStore,
@@ -376,47 +404,51 @@ export async function createZenFsPod(
   const autoPushOpt = options.sync?.autoPush;
   const debounceMs = typeof autoPushOpt === 'object' ? (autoPushOpt.debounceMs ?? 2000) : 2000;
   let pushTimer: ReturnType<typeof setTimeout> | null = null;
-  let pushing = false;
-  let pushQueued = false;
-  const pushBasis = async () => {
+  // One push at a time. A call during an in-flight push AWAITS it and then one
+  // follow-up push (changes that landed meanwhile) — so a close-time flush
+  // really flushes instead of returning null and re-arming a timer.
+  type PushResult = import('../manager/overlay-sync.js').OverlayPushResult | null;
+  let inflight: Promise<PushResult> | null = null;
+  let followUp: Promise<PushResult> | null = null;
+  let podDisposed = false;
+  const pushBasis = async (): Promise<PushResult> => {
     const remote = options.sync?.remote;
-    if (!basis || !hydrator || !remote) return null;
+    if (!basis || !hydrator || !remote || podDisposed) return null;
     if ((await import('../oci/settings.js').then((m) => m.readPodSettings(zfs))).offline) {
       events.emit('sync:push', { ref: basis.ref, ok: false, layers: 0, movedBytes: 0, error: "offline mode is on ('artipod offline off' to re-enable)" });
       return null;
     }
     const overlay = hydrator.overlays.get(basis.ref);
     if (!overlay) return null;
-    if (pushing) {
-      pushQueued = true;
-      return null;
+    if (inflight) {
+      followUp ??= inflight.then(() => { followUp = null; return pushBasis(); });
+      return followUp;
     }
-    pushing = true;
-    try {
-      const result = await pushOverlay({
-        store: ociStore,
-        zfs,
-        ref: basis.ref,
-        upperAt: overlay.upperAt,
-        deletions: hydrator.overlayDeletions(basis.ref),
-        actor,
-        remote,
-      });
-      if (result.pushed) {
-        events.emit('sync:push', { ref: basis.ref, ok: true, layers: result.overlayLayers, movedBytes: result.sync?.movedBytes ?? 0 });
+    const run = async () => {
+      try {
+        const result = await pushOverlay({
+          store: ociStore,
+          zfs,
+          ref: basis!.ref,
+          upperAt: overlay.upperAt,
+          deletions: hydrator.overlayDeletions(basis!.ref),
+          actor,
+          remote,
+        });
+        if (result.pushed) {
+          events.emit('sync:push', { ref: basis!.ref, ok: true, layers: result.overlayLayers, movedBytes: result.sync?.movedBytes ?? 0 });
+        }
+        return result;
+      } catch (e) {
+        console.warn(`artipod: overlay push for '${basis!.ref}' failed — ${(e as Error).message}`);
+        events.emit('sync:push', { ref: basis!.ref, ok: false, layers: 0, movedBytes: 0, error: (e as Error).message });
+        return null;
+      } finally {
+        inflight = null;
       }
-      return result;
-    } catch (e) {
-      console.warn(`artipod: overlay push for '${basis.ref}' failed — ${(e as Error).message}`);
-      events.emit('sync:push', { ref: basis.ref, ok: false, layers: 0, movedBytes: 0, error: (e as Error).message });
-      return null;
-    } finally {
-      pushing = false;
-      if (pushQueued) {
-        pushQueued = false;
-        schedulePush();
-      }
-    }
+    };
+    inflight = run();
+    return inflight;
   };
   const schedulePush = () => {
     if (pushTimer) clearTimeout(pushTimer);
@@ -446,6 +478,8 @@ export async function createZenFsPod(
     approvals,
     hydrator,
     basis,
+    namespace,
+    processes: namespace.processes,
     pushBasis,
     agentLoopOptions(opts?: { autoSnapshot?: boolean }) {
       if (opts?.autoSnapshot === false) return {};
@@ -468,6 +502,7 @@ export async function createZenFsPod(
         zfs: shellZfs,
         events,
         proc: confineTo ? false : proc,
+        namespace,
         cwd: confineTo ? '/' : defaultCwd,
         onEdit: options.onEdit && confineTo
           ? (path) => options.onEdit!(`${confineTo}${path.startsWith('/') ? '' : '/'}${path}`)
@@ -492,6 +527,7 @@ export async function createZenFsPod(
             pushBasis,
             publish: options.publish,
             tasks: options.tasks,
+            inventory: namespace.inventory,
           }),
           ...(options.extraCommands ?? []),
         ],
@@ -514,6 +550,7 @@ export async function createZenFsPod(
       return tools;
     },
     dispose() {
+      podDisposed = true;
       if (pushTimer) clearTimeout(pushTimer);
       offAutoPush?.();
       // Unmount overlays — a later session must not read this one's stale view.
@@ -521,6 +558,7 @@ export async function createZenFsPod(
       disposeProc?.();
       disposeKeysProc?.();
       disposeHydrationProc?.();
+      void namespace.dispose();
     },
   };
 }

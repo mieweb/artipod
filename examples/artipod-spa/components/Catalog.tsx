@@ -9,7 +9,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import dynamicImport from 'next/dynamic';
 import { useStore } from 'zustand';
-import { Terminal as LucideTerminal, Plus, Server, HardDrive } from 'lucide-react';
+import { Terminal as LucideTerminal, Plus, Server, HardDrive, Play } from 'lucide-react';
+import { executableStore, refreshExecutables } from '@/lib/services/executable-catalog';
 import type { Sandbox } from '@artipod/core/sandbox';
 import { catalogStore, refreshServer, E2E_MEDIA_TYPE } from '@/lib/stores/catalog';
 import { registryStore } from '@/lib/stores/registry';
@@ -25,6 +26,7 @@ const Terminal = dynamicImport(() => import('@/components/Terminal'), { ssr: fal
 export default function Catalog({ actorId }: { actorId: () => Promise<string> }) {
   const { serverRefs, localHeads, verdicts, changedRefs } = useStore(catalogStore);
   const local = useStore(registryStore, (s) => s.entries);
+  const applications = useStore(executableStore, (s) => s.applications);
   const brokerStatus = useStore(brokerStore, (s) => s.status);
   const [rootSandbox, setRootSandbox] = useState<Sandbox | null>(null);
   const [termOpen, setTermOpen] = useState(false);
@@ -32,17 +34,25 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
   const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
   const [pub, setPub] = useState<{ id: string; mode: OpenMode; value: string } | null>(null);
 
+  useEffect(() => { void refreshExecutables(); }, [serverRefs, local, brokerStatus]);
+
   useEffect(() => {
     void refreshServer();
     let disposeEvents: (() => void) | null = null;
+    let disposeConsole: (() => void) | null = null;
+    // The initializer awaits; if the catalog unmounted meanwhile (navigation
+    // to a workspace), nothing may register or setState — and anything that
+    // did is torn down here rather than leaking into the workspace's /proc.
+    let cancelled = false;
     (async () => {
       await refreshLocal();
+      if (cancelled) return;
       // root console over the raw fs — /proc, every workspace, pod internals;
       // its commands rescan the lists (fs:changed after every exec)
       try {
         const { fs } = await import('@/lib/filesystem');
-        const { createSandbox } = await import('@artipod/core/sandbox');
-        const { PodEvents: Events } = await import('@artipod/core/host');
+        const { PodEvents: Events, openConsole } = await import('@artipod/core/host');
+        const { catalogInventory } = await import('@/lib/services/inventory');
         const { defineCommand } = await import('just-bash/browser');
         // The safe alternative to rm -rf: erases ONLY artipod state and
         // reloads a factory-fresh machine. Server pods are untouched.
@@ -76,17 +86,27 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           return { stdout: 'local artipod data erased — reloading a factory-fresh machine…\n', stderr: '', exitCode: 0 };
         });
         const consoleEvents = new Events();
+        if (cancelled) return;
         let timer: ReturnType<typeof setTimeout> | null = null;
         disposeEvents = consoleEvents.on('fs:changed', () => {
           if (timer) clearTimeout(timer);
           timer = setTimeout(() => void refreshLocal().then(refreshVerdicts), 300);
         });
-        setRootSandbox(createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents, extraCommands: [factoryReset] }));
+        // A pod-less console (D18): its own small PID namespace (nothing runs
+        // here but this shell), images / volumes / artipod over the page's rows.
+        const rootConsole = openConsole({
+          zfs: fs, cwd: '/', proc: true, events: consoleEvents, inventory: catalogInventory(),
+          identity: { kind: 'catalog', name: 'catalog', version: process.env.NEXT_PUBLIC_ARTIPOD_VERSION },
+          extraCommands: [factoryReset],
+        });
+        disposeConsole = () => { void rootConsole.dispose(); };
+        if (cancelled) { disposeConsole(); return; }
+        setRootSandbox(rootConsole.sandbox);
       } catch {
         // fs init failed — no console
       }
     })();
-    return () => disposeEvents?.();
+    return () => { cancelled = true; disposeEvents?.(); disposeConsole?.(); };
   }, []);
 
   // Ancestry verdicts follow server refs + local heads.
@@ -137,12 +157,12 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
     );
 
   const row = (id: string, badge: React.ReactNode, note: string, mode: OpenMode = 'rw', label?: string) => (
-    <li key={`${id}:${mode}`}>
+    <li key={`${id}:${mode}`} className="flex items-stretch gap-1">
       {/* U5: client-side navigation — the href stays for copy/new-tab */}
       <a
         href={workspaceUrl(id, mode)}
         onClick={(e) => navClick(e, id, mode)}
-        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded bg-[#333] px-3 py-2 text-sm hover:bg-[#3d3d3d]"
+        className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded bg-[#333] px-3 py-2 text-sm hover:bg-[#3d3d3d]"
       >
         <span className="min-w-0 flex-1 basis-40 truncate font-mono">{label ?? id}</span>
         <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-gray-400">
@@ -150,6 +170,11 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           {badge}
         </span>
       </a>
+      {applications[id] && <button
+        title={`Run ${applications[id].name}`} aria-label={`Run ${applications[id].name}`}
+        onClick={() => navigateTo(id, id.includes(':') ? 'cow' : mode, '&run=1')}
+        className="flex shrink-0 items-center gap-1 rounded border border-gray-600 px-3 text-sm hover:bg-gray-700"
+      ><Play size={16} />Run</button>}
     </li>
   );
 
@@ -357,7 +382,8 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           ) : (
             <ul className="mb-6 space-y-2">
               {localOnly.map((e) => {
-                // a cow fork IS a pending draft — show it under the _ name it will publish as
+                // a cow fork IS a pending draft; the _ name it would publish as is a
+                // suggestion, so it goes in the meta — the row is named by its basis
                 const draftName =
                   e.kind === 'pod' && e.mode === 'cow' ? nextDraftRef(e.id, new Set((serverRefs ?? []).map((r) => r.ref))) : null;
                 return row(
@@ -375,7 +401,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
                         });
                       }}
                       className="rounded border border-gray-600 px-1.5 py-0.5 text-[10px] uppercase text-gray-400 hover:border-gray-400 hover:text-white"
-                      title="Publish to the server"
+                      title={draftName ? `Publish to the server as ${draftName}` : 'Publish to the server'}
                     >
                       publish
                     </button>
@@ -383,9 +409,9 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
                       {e.kind === 'blank' ? 'blank' : e.mode === 'cow' ? 'unpublished fork' : 'local'}
                     </span>
                   </>,
-                  draftName ? `fork of ${e.id}` : e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
+                  draftName ? `fork · publishes as ${draftName}` : e.lastOpened ? new Date(e.lastOpened).toLocaleDateString() : '',
                   e.mode ?? 'rw',
-                  draftName ?? e.id,
+                  draftName ? `${e.id} (fork)` : e.id,
                 );
               })}
             </ul>

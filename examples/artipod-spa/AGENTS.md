@@ -1,6 +1,6 @@
 # artipod-spa — agent notes
 
-The SPA rewrite of the artipod demo. **Read `../../spa-ui-plan.md` first** —
+The SPA rewrite of the artipod demo. **Read `../../plan/spa-ui-plan.md` first** —
 it is the living plan (decisions P1–P10, phases U0–U7) and this app must not
 drift from it. The old app (`../artipod-sync`) remains the shipped `dist-ui`
 until the U7 cutover; do not break it.

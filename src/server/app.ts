@@ -161,6 +161,11 @@ export function createArtipodApp(options: ArtipodAppOptions): ArtipodApp {
       return json({ error: 'not found' }, 404);
     }
     if (first !== 'v2') {
+      // Reserved for the browser runtime's service worker on EVERY path (UI,
+      // headless fallback): a page without a worker grant must see 404 here.
+      if (first === '_artipod' && second === 'run') {
+        return Response.json({ error: 'execution session unavailable' }, { status: 404, headers: { 'cache-control': 'no-store' } });
+      }
       if (ui) return ui(req);
       if (options.fallback) return options.fallback(req);
     }

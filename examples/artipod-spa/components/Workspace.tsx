@@ -9,7 +9,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamicImport from 'next/dynamic';
 import { useStore } from 'zustand';
-import { Terminal as LucideTerminal, Home as HomeIcon, FolderTree, FileCode, Bot, Settings, UploadCloud } from 'lucide-react';
+import { Terminal as LucideTerminal, Home as HomeIcon, FolderTree, FileCode, Bot, Settings, UploadCloud, Play } from 'lucide-react';
+import ApplicationPreview from '@/components/ApplicationPreview';
+import { inspectApplication } from '@artipod/core/apps';
 import { workspaceStore, initialWorkspace, patchPublish, setView, setEditingFile, type ViewMode } from '@/lib/stores/workspace';
 import { openPodSession, type PodSession } from '@/lib/services/pod-session';
 import { OPEN_DRAFT_TIP, actorId, isOpenRef, setOpenTag, type Route } from '@/lib/boot';
@@ -32,10 +34,13 @@ export default function Workspace({ route }: { route: Route }) {
   const [termHeight, setTermHeight] = useState(300);
   const sessionRef = useRef<PodSession | null>(null);
   const [sessionTick, setSessionTick] = useState(0);
+  const [executable, setExecutable] = useState(false);
+  const [appFocused, setAppFocused] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     let opened: PodSession | null = null;
+    let offInspect: (() => void) | undefined;
     // Show "Opening…" NOW — the boot itself queues behind the previous
     // session's serialized close (flush-push included).
     workspaceStore.setState({ ...initialWorkspace, syncActive: route.isRef && route.mode === 'rw' });
@@ -45,6 +50,20 @@ export default function Workspace({ route }: { route: Route }) {
         opened = session;
         sessionRef.current = session;
         setSessionTick((t) => t + 1);
+        if (route.runIntent) setView('preview');
+        const root = session.pod.basis?.at ?? `/work/${route.id}`;
+        const inspect = async () => {
+          try {
+            await inspectApplication({
+              read: async path => new Uint8Array(await session.pod.zfs.promises.readFile(path)),
+              list: async path => await session.pod.zfs.promises.readdir(path) as string[],
+              stat: async path => await session.pod.zfs.promises.lstat(path),
+            }, root);
+            if (!cancelled) setExecutable(true);
+          } catch { if (!cancelled) setExecutable(false); }
+        };
+        void inspect();
+        offInspect = session.events.on('fs:changed', () => void inspect());
       })
       .catch((e) => {
         console.error('workspace boot failed:', e);
@@ -54,6 +73,7 @@ export default function Workspace({ route }: { route: Route }) {
       // U5: leaving the route closes the session — flush-push, unsubscribe,
       // pod.dispose (overlays + proc providers), Web Lock release.
       cancelled = true;
+      offInspect?.();
       sessionRef.current = null;
       void opened?.close();
     };
@@ -150,7 +170,7 @@ export default function Workspace({ route }: { route: Route }) {
 
   return (
     <main className="flex h-[var(--app-height)] flex-col overflow-hidden bg-black pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] text-white">
-      <div className="flex items-center border-b border-gray-700 bg-[#2d2d2d] px-2">
+      <div className={`${appFocused ? 'hidden' : 'flex'} items-center overflow-x-auto border-b border-gray-700 bg-[#2d2d2d] px-2`}>
         {/* U5: client-side — the session closes (flush + dispose) on the way out.
             Not next/link: our router owns the transition (href kept for new-tab). */}
         {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
@@ -174,6 +194,7 @@ export default function Workspace({ route }: { route: Route }) {
         {tab('tree', <FolderTree size={16} />, 'Files')}
         {tab('editor', <FileCode size={16} />, `Editor${snap.editingFile ? ` (${snap.editingFile.split('/').pop()})` : ''}`, !snap.editingFile)}
         {tab('agent', <Bot size={16} />, 'Agent')}
+        {(executable || route.runIntent) && tab('preview', <Play size={16} />, 'Run')}
         <div className="ml-auto flex items-center">
           {route.mode !== 'ro' && (
             <button
@@ -249,6 +270,9 @@ export default function Workspace({ route }: { route: Route }) {
       )}
 
       <div className="relative flex-1 overflow-hidden bg-[#1e1e1e]">
+        {ready && sessionRef.current && <div className={`absolute inset-0 ${snap.activeView === 'preview' || appFocused ? 'z-20' : 'invisible z-0'}`}>
+          <ApplicationPreview session={sessionRef.current} focused={appFocused} onFocus={setAppFocused} />
+        </div>}
         {snap.phase === 'opening' && (
           <div className="absolute inset-0 flex items-center justify-center text-gray-400">
             Opening {route.isRef ? route.id : `blank workspace ${route.id}`}…
@@ -330,7 +354,7 @@ export default function Workspace({ route }: { route: Route }) {
         )}
       </div>
 
-      <div className="shrink-0 overflow-hidden border-t border-gray-700 bg-[#1e1e1e]" style={{ height: termOpen ? termHeight : 0 }}>
+      <div className="shrink-0 overflow-hidden border-t border-gray-700 bg-[#1e1e1e]" style={{ height: termOpen && !appFocused ? termHeight : 0 }}>
         <div onPointerDown={onDividerPointerDown} className="h-1.5 cursor-row-resize bg-[#2d2d2d] transition-colors hover:bg-blue-500" title="Drag to resize" />
         <div style={{ height: termOpen ? termHeight - 6 : 0 }}>
           {ready && sessionRef.current && (

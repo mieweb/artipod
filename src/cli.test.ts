@@ -63,6 +63,14 @@ describe('artipod CLI', () => {
     expect(gone.code).not.toBe(0);
   });
 
+  it('the pod shell knows what it is: uname/hostname/ps carry the pod identity', async () => {
+    const r = await run(['run', '--rm', '-c', 'uname -a; hostname; ps']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^artipod ephemeral \S+ .*pod ephemeral \(--rm\) — artipod run on this machine node\n/);
+    expect(r.stdout).toContain('\nephemeral\n');
+    expect(r.stdout).toMatch(/\n\s+1\s+0 init\s+running .* ephemeral\n\s+2\s+1 shell running .* bash\n/);
+  });
+
   it('keeps pods by default: `artipod pods` lists them and a pod-id prefix resumes', async () => {
     const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
     try {
@@ -188,8 +196,18 @@ describe('artipod CLI', () => {
     const r = await run(['run', '-it'], { input: 'mkdir sub\ncd sub\necho inside > f.txt\ncat f.txt\npwd\nexit\n' });
     expect(r.stdout).toContain('inside');
     expect(r.stdout).toContain('/sub');
+    // one line discipline (D18): the prompt is TerminalSession's, transcripts are plain \n
+    expect(r.stdout).toMatch(/\n[0-9a-f]{16}:\/sub \$ pwd\n\/sub\n/);
+    expect(r.stdout).not.toContain('\r');
+    expect(r.stdout).toContain('uname -a for details');
     expect(r.stdout).toContain('get back: artipod run -it');
     expect(r.code).toBe(0);
+  });
+
+  it('the REPL leaves on EOF without `exit`, and mirrors the last exit code', async () => {
+    const r = await run(['run', '--rm', '-it'], { input: 'echo a\nfalse\n' });
+    expect(r.stdout).toContain('\na\n');
+    expect(r.code).toBe(1);
   });
 
   it('run REF resolves a pushed volume ref from the local store and materializes at /', async () => {

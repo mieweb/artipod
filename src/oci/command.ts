@@ -14,6 +14,9 @@ import { defineCommand } from 'just-bash/browser';
 import type { ZenFsLike } from '../sandbox/types.js';
 import type { PodEvents } from '../events.js';
 import { renderTable } from '../sandbox/table.js';
+import { verbTree, withCompletion } from '../sandbox/types.js';
+import { runImages, runVolumes } from '../sandbox/inventory-command.js';
+import type { InventoryProviders } from '../proc/inventory.js';
 import type { OciStore } from './store.js';
 import type { OciTransport } from './transport.js';
 import { parseImageRef, formatImageRef } from './transport.js';
@@ -54,6 +57,8 @@ export interface ArtipodCommandContext {
    * App-provided; absent = the verb explains there is no scheduler here.
    */
   tasks?: () => PsTask[];
+  /** `artipod images` / `artipod volumes` — app-provided server refs and local workspaces. */
+  inventory?: InventoryProviders;
   /** Phase 6.5: login/lock/status against the pod's authority. */
   authority?: {
     /** App-provided authentication → lease + keys (raw, or device-unwrapped CryptoKeys). */
@@ -129,6 +134,8 @@ const USAGE = `usage: artipod <image|layer|snapshot|commit|compact|gc> …
   lock [--all|<pod>]                   drop keys now (reads fail EACCES until login)
   status                               lease + capability expiries (also /proc/keys)
   ps                                   background tasks: sync retries, key renewal, schedules
+  images [-v|-vv] [<ref>] [--json]     refs on the server (-v: paths + what changed; -vv: full layer stack)
+  volumes [-m] [--json]                local workspaces; MOUNTPOINT set while a tab has one open
   image pull <ref> --index             index-level pull: metadata + placeholders only
   hydrate <ref> <path|glob>            fetch the lazy layers backing matching paths
   dehydrate <ref> <glob>               evict layer blobs; placeholders + indexes stay
@@ -148,8 +155,18 @@ async function resolveStoredRef(store: OciStore, refArg: string): Promise<{ disp
   return stored ? { display: stored.ref, manifestDigest: stored.manifestDigest } : null;
 }
 
+/** `artipod <Tab>` — the verb tree, kept next to USAGE so they drift together. */
+const VERBS = {
+  image: { pull: {}, ls: {}, inspect: {}, history: {}, mount: {}, umount: {} },
+  layer: { inspect: {}, mount: {} },
+  snapshot: { create: {}, ls: {}, diff: {}, mount: {}, checkout: {} },
+  commit: {}, compact: {}, gc: {}, push: {}, pull: {}, clone: {}, open: {}, files: {},
+  hydrate: {}, dehydrate: {}, publish: {}, login: {}, lock: {}, status: {}, ps: {},
+  images: { '-v': {}, '-vv': {}, '--json': {} }, volumes: { '-m': {}, '--json': {} }, offline: { on: {}, off: {} }, examples: {},
+};
+
 export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
-  defineCommand('artipod', async (args) => {
+  withCompletion(defineCommand('artipod', async (args) => {
     const { store, zfs, transport, events, snapshots, remote, authority, hydrator, pushBasis, publish } = podContext;
     const [group, sub, ...rest] = args;
 
@@ -186,6 +203,16 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
         if (entries.length === 0) return ok('locked — no live leases or capabilities (artipod login to restore)\n');
         const lines = entries.map((e) => `${e.kind.padEnd(10)} ${e.name.padEnd(32)} expires ${new Date(e.expiresAt).toISOString()}`);
         return ok(`${lines.join('\n')}\n`);
+      }
+
+      if (group === 'images') {
+        if (!podContext.inventory) return fail('artipod images: no server catalog in this context');
+        return runImages(podContext.inventory, [sub, ...rest].filter((a): a is string => !!a), 'artipod images');
+      }
+
+      if (group === 'volumes') {
+        if (!podContext.inventory) return fail('artipod volumes: no workspace registry in this context');
+        return runVolumes(podContext.inventory, [sub, ...rest].filter((a): a is string => !!a), 'artipod volumes');
       }
 
       if (group === 'ps') {
@@ -543,4 +570,4 @@ export const makeArtipodCommand = (podContext: ArtipodCommandContext) =>
     } catch (error) {
       return fail(`artipod: ${(error as Error).message}`);
     }
-  });
+  }), verbTree(VERBS));

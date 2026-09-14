@@ -52,6 +52,16 @@ describe('createStaticHandler', () => {
     }
   });
 
+  it('never serves files or SPA fallback under execution session URLs', async () => {
+    await mkdir(join(dir, '_artipod/run'), { recursive: true });
+    await writeFile(join(dir, '_artipod/run/index.html'), '<html>NOT ADMITTED</html>');
+    for (const path of ['/_artipod/run', '/_artipod/run/', '/_artipod/run/unknown/app', '/_artipod/run/index.html']) {
+      const response = await req(path);
+      expect(response.status).toBe(404);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.text()).not.toContain('<html>');
+    }
+  });
   it('rejects non-GET/HEAD', async () => {
     expect((await req('/', { method: 'POST', body: 'x' })).status).toBe(405);
   });
