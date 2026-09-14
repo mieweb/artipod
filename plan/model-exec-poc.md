@@ -54,6 +54,7 @@ All phases run on `main`.
 | M0 - admission and browser runtime | in progress; MVP committed `0f3fcf6`: catalog Run, signed/dev admission, worker projection, preview lifecycle, telemetry. Open: CasePod mount selection, D4 record + bypass audit, offline cache/revocation port, mapped Sources replay, full-gate run | pending |
 | MA - apps layer, process namespaces, `ps`/`kill` | owner-requested 2026-09-06; implemented in PR #57 (`2f35fa7`, `ed56df7`, follow-up): `@artipod/core/apps`, `ProcessTable` + `/proc/<pid>`, `ps`/`kill`, sample at `examples/lifecycle-app`, runbook `docs/apps.md`; live-verified on 2784 | earned pending PR review; not an M0 gate |
 | MB - inventory depth: `-v`/`-vv`, hydration, `--json`, `/proc` manifests, glossary | owner-approved 2026-09-06 ("lets do it"); runs inside PR #57 | pending |
+| MC - one shell recipe: pod-owned process namespace, `openConsole()`, `TerminalSession` everywhere (CLI included) | owner-selected 2026-09-07 ("can this be simplified to a single thing that runs in browser and on server?" → option 1: in PR #57) | pending |
 | M1 - semantic discovery and composition | narrow catalog discovery/UI overlap authorized 2026-09-06 and shipped in `0f3fcf6` (SPAPod descriptor + Run); full phase depends on M0 | pending |
 | M2 - submission, review, and approved distribution | not started; depends on M1 | pending |
 | M3 - agent-driven edits | not started; depends on M2 and provider confirmation | pending |
@@ -82,6 +83,7 @@ The execution-admission direction was approved by the owner on 2026-09-05. Imple
 | D15 | The browser app runtime ships as the core subpath `@artipod/core/apps` (browser-safe, adapter-injected, imports only dependency-free core leaf modules such as `oci/digest` and `oci/tar`, never the `/oci` barrel), not an SPA-private `lib/m0` and not yet a separate package | Owner-selected 2026-09-06 after pros/cons review. Lift to `@artipod/apps` later if a second consumer appears; a lifted package would need core to expose those leaves as a light subpath. `jose` moves to core deps. The service worker ships as a dist asset consumers copy to their site root. Weighbridge `./apps` budget 30 KB gzip (measured 19.2 KB). |
 | D16 | Processes are namespaced per supervisor ("turtles all the way down"): a pod session owns a `ProcessTable`; shells, running apps and background tasks are its processes; a process that launches things owns a child table. Visibility is downward only; lifecycle cascades down; pids are namespace-local, identity is a uuid | Owner-selected 2026-09-06. Browser tabs and the server are separate namespaces — no implicit merge; cross-namespace views are explicit future commands. Signals map per kind (`STOP/CONT` = cooperative suspend/resume, `TERM/KILL` = close); unsupported → `ENOTSUP`, never a fake state. `/proc/<pid>/*` mirrors Linux layout. |
 | D17 | Glossary vs OCI/Docker: **image** = OCI image (manifest + config + layers), **ref** = repository:tag, **file layer** = an ordinary OCI layer that artipod's publish/import path emits per file (granularity, not a new type), **lazy** = a layer whose blob is not fetched (hydration state, never granularity), **parents** (`org.artipod.parents`) = the tag's history across manifests. A workspace/cow fork is the "container" (upper over a basis). | Owner-discussed 2026-09-06. Do not call file layers "lazy layers". Known inconsistencies to fix later: `artipod commit` emits one whole-tree layer without parents (Docker-style) while `import`/`publish` emit file layers; `artipod image history` shows the layer stack, not the parents chain — rename to `image layers` and give `history` the parents DAG. Docker overlay2 cannot run a >128-layer artipod image as a rootfs; artipod volume images are not meant to be. "pod" collides with Kubernetes harder than "layer" with Docker; noted, not renamed. **Command names must not shadow Unix tools the shell already has:** the sandbox ships real `mount`/`umount`/`lsblk`/`df`/`findmnt` for ZenFS backends (storage-command.ts); the inventory listing of local workspaces is therefore `volumes` (docker's word), not `lsblk`, and `mount --help` points at `artipod image mount` / `artipod open`. |
+| D18 | One shell recipe, two layers: (1) a **namespace** — `ProcessTable` + its `/proc` rows + inventory provider — is owned by whoever owns the PID namespace (the pod via `createZenFsPod`, or `openConsole()` for pod-less consoles) and torn down by its owner's `dispose()`; (2) a **shell** = `createSandbox()` over that namespace, driven by the single `TerminalSession` line discipline. Front-ends (xterm, WebSocket, `process.stdin`, HTTP exec) only move bytes. No surface may hand-assemble tables, registrations or unregister closures. | Owner-selected 2026-09-07 after the four-surface audit found every surface re-deriving the recipe (CLI lacked `ps`/inventory, server lacked `ps`/version, duplicated prompt/motd, two line disciplines). The `/proc` provider registry stays process-global for now because ZenFS itself is a per-package singleton (`realizeZenFs` mounts on `@zenfs/core.fs`; `/proc` is a global mount) — a per-pod registry without a per-pod fs would be theatre. Revisit both together. |
 
 ### Reference map
 
@@ -544,6 +546,42 @@ the real artifact where one exists. Each commit updates this plan.
   `image history` → `image layers` and fixing `commit` granularity are
   recorded in D17 as follow-ups, not done here. *(Live verification recorded
   below; awaiting owner review of the output shape before checking.)*
+
+### MC: One shell recipe — pod-owned namespace, `openConsole()`, `TerminalSession` everywhere (owner-selected, in PR #57)
+
+Owner, after the 2026-09-07 audit: "can this be simplified to a single
+thing that runs in browser and on server? It feels a little spaghetti."
+Decision D18. Each commit updates this plan.
+
+- [ ] `src/proc/namespace.ts`: `openNamespace({ name, inventory?, processes? })`
+  → `{ processes, inventory, dispose() }` — the only place that calls
+  `registerProcessTable` / `registerProcProvider(makeInventoryProvider)`
+  and the only place that unregisters them.
+- [ ] `createZenFsPod` owns its namespace: creates it (named after the
+  identity), exposes `pod.processes`, disposes it in `pod.dispose()`.
+  `processes` option stays as "adopt a caller-owned table" for tests.
+  `pod-session.ts` and `cli.ts` stop creating/registering tables.
+- [ ] `src/host/console.ts`: `openConsole({ zfs, identity, inventory?, … })`
+  for pod-less shells (catalog console, server exec sessions) → `{ sandbox,
+  processes, dispose() }`; wires the console `artipod` verb when inventory
+  is present. `Catalog.tsx` and `PodSessionHost` use it; the server session
+  gets `ps`, `uname -r`, and a proper teardown on eviction.
+- [ ] `TerminalSession` is the one line discipline: gains `onExit`
+  (`exit`/`logout`/Ctrl-D on an empty line) and splits multi-key chunks
+  (paste, piped stdin: `\n` = Enter). `cli.ts repl()` drops `node:readline`
+  and drives `TerminalSession` over raw-mode `process.stdin` (line-mode when
+  stdin is not a TTY). Prompt/motd/`help` version line exist in one place.
+- [ ] `src/version.ts` `coreVersion()` replaces the two hand-rolled
+  package.json+buildinfo readers (`cli.ts versionLine`, `serve.ts` skew
+  check) and feeds the server identity.
+- [ ] Same pid-1 name everywhere: the identity name (`test2:_1`, `<podId>`,
+  `catalog`, `<sessionId>`); mode lives in `uname -o`, not in `ps`.
+- [ ] **Done when:** `ps`, `uname -a`, `hostname`, `images`/`volumes`
+  (where an inventory exists) behave the same in `artipod run -it`, the
+  browser workspace, the catalog console and a server exec session; the
+  piped-stdin CLI test passes on `TerminalSession`; core + SPA gates pass;
+  live check on 2784; no surface outside `namespace.ts` calls
+  `registerProcessTable`.
 
 ### M1: Semantic discovery and simple composition
 
