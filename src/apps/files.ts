@@ -38,6 +38,10 @@ export async function applicationSource(files: ApplicationFiles, root: string): 
     async read(path) {
       if (!paths.includes(path)) throw new Error('Unprojected application path');
       const relative = applicationPath(path);
+      // Re-check the root too: a base swapped for a symlink after enumeration
+      // would otherwise resolve every child through it.
+      const rootNow = await files.stat(base || '/');
+      if (!rootNow.isDirectory() || rootNow.isSymbolicLink()) throw new Error('Application root changed');
       let parent = base;
       for (const segment of relative.split('/')) {
         parent += `/${segment}`;

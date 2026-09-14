@@ -54,7 +54,8 @@ export class PodSessionHost {
 
   evictExpired(now = Date.now()): void {
     this.sessions.forEach((entry, id) => {
-      if (now - entry.lastUsed > this.options.ttlMs) {
+      // A command outliving the TTL keeps its console; release() refreshes lastUsed.
+      if (!entry.busy && now - entry.lastUsed > this.options.ttlMs) {
         this.sessions.delete(id);
         void entry.console.dispose();
       }

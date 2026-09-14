@@ -40,8 +40,13 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
     void refreshServer();
     let disposeEvents: (() => void) | null = null;
     let disposeConsole: (() => void) | null = null;
+    // The initializer awaits; if the catalog unmounted meanwhile (navigation
+    // to a workspace), nothing may register or setState — and anything that
+    // did is torn down here rather than leaking into the workspace's /proc.
+    let cancelled = false;
     (async () => {
       await refreshLocal();
+      if (cancelled) return;
       // root console over the raw fs — /proc, every workspace, pod internals;
       // its commands rescan the lists (fs:changed after every exec)
       try {
@@ -81,6 +86,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           return { stdout: 'local artipod data erased — reloading a factory-fresh machine…\n', stderr: '', exitCode: 0 };
         });
         const consoleEvents = new Events();
+        if (cancelled) return;
         let timer: ReturnType<typeof setTimeout> | null = null;
         disposeEvents = consoleEvents.on('fs:changed', () => {
           if (timer) clearTimeout(timer);
@@ -94,12 +100,13 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           extraCommands: [factoryReset],
         });
         disposeConsole = () => { void rootConsole.dispose(); };
+        if (cancelled) { disposeConsole(); return; }
         setRootSandbox(rootConsole.sandbox);
       } catch {
         // fs init failed — no console
       }
     })();
-    return () => { disposeEvents?.(); disposeConsole?.(); };
+    return () => { cancelled = true; disposeEvents?.(); disposeConsole?.(); };
   }, []);
 
   // Ancestry verdicts follow server refs + local heads.

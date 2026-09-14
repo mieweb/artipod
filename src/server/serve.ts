@@ -90,14 +90,31 @@ interface StoreIdentity {
   authority?: string;
 }
 
+/** An OCI layout with any `<digest>.alias` twin was written by an encrypting store. */
+async function hasCiphertextBlobs(storeDir: string): Promise<boolean> {
+  try {
+    const { readdir } = await import('node:fs/promises');
+    return (await readdir(join(storeDir, 'blobs', 'sha256'))).some((name) => name.endsWith('.alias'));
+  } catch {
+    return false;
+  }
+}
+
 async function readStoreIdentity(storeDir: string): Promise<StoreIdentity | null> {
   const file = join(storeDir, 'store-id.json');
   let text: string;
   try {
     text = await readFile(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new Error(`Cannot read encrypted store identity at ${file}; restore access or use --keyless.`);
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`Cannot read encrypted store identity at ${file}; restore access or use --keyless.`);
+    }
+    // No identity, but ciphertext on disk (`.alias` twins): the layout IS
+    // encrypted — plaintext writes beside it would break the at-rest invariant.
+    if (await hasCiphertextBlobs(storeDir)) {
+      throw new Error(`${storeDir} holds encrypted blobs but ${file} is missing. Restore it (podId + authority), or use --keyless for blind hosting. Refusing to serve it as a plaintext store.`);
+    }
+    return null;
   }
   try {
     const parsed = JSON.parse(text) as StoreIdentity;

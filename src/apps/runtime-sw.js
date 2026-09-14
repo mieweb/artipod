@@ -1,13 +1,17 @@
 const sessions = new Map();
 const PREFIX = '/_artipod/run/';
+// Which page may grant sessions: any same-origin page that is not itself a
+// guest, or exactly the path named by `?owner=<pathname>` on the script URL
+// (consumers embedding the runtime on one route pin it there).
+const OWNER = new URL(self.location.href).searchParams.get('owner');
+const isOwnerPage = url =>
+  url.origin === self.location.origin && !url.pathname.startsWith(PREFIX) && (OWNER === null || url.pathname === OWNER);
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
 self.addEventListener('message', event => {
   const owner = event.source;
-  if (!owner?.url) return;
-  const url = new URL(owner.url);
-  if (url.origin !== self.location.origin || url.pathname !== '/' || !url.searchParams.get('artipod')) return;
+  if (!owner?.url || !isOwnerPage(new URL(owner.url))) return;
   const { type, session, validUntil, entrypoint } = event.data ?? {};
   if (type === 'revoke' && sessions.get(session)?.owner === owner.id) {
     sessions.get(session).port.close();

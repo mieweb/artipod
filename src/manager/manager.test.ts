@@ -150,6 +150,18 @@ describe('PodSessionHost', () => {
     expect(host.size).toBe(0);
   });
 
+  it('never evicts a busy session: a command outliving the TTL keeps its console', async () => {
+    unmountAll();
+    const host = new PodSessionHost({ ttlMs: 10, maxSessions: 2, execTimeoutMs: 5000, maxFsBytes: 1024 * 1024 });
+    const held = await host.acquire('erin');
+    expect(held.ok).toBe(true);
+    host.evictExpired(Date.now() + 60_000);
+    expect(host.size).toBe(1);
+    if (held.ok) held.release();
+    host.evictExpired(Date.now() + 60_000);
+    expect(host.size).toBe(0);
+  });
+
   it('a session is a console (D18): ps, uname -r and artipod work like everywhere else', async () => {
     unmountAll();
     const host = new PodSessionHost({ ttlMs: 60_000, maxSessions: 2, execTimeoutMs: 5000, maxFsBytes: 1024 * 1024, version: '7.7.7' });

@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
-function harness() {
+function harness(ownerPin?: string) {
   const handlers = new Map<string, (event: Record<string, unknown>) => void>();
   const listeners = new Set<(event: { data: unknown }) => void>();
   const origin = 'https://artipod.example';
+  const script = `${origin}/artipod-runtime-sw.js${ownerPin ? `?owner=${encodeURIComponent(ownerPin)}` : ''}`;
   const session = '11111111-1111-4111-8111-111111111111';
   const owner = { id: 'owner', url: `${origin}/?artipod=local-app` };
   const port = {
@@ -18,7 +19,7 @@ function harness() {
   };
   runInNewContext(readFileSync(new URL('./runtime-sw.js', import.meta.url), 'utf8'), {
     URL, Response, Uint8Array, crypto, setTimeout, clearTimeout,
-    self: { location: { origin }, clients: { get: async () => owner }, addEventListener: (name: string, handler: (event: Record<string, unknown>) => void) => handlers.set(name, handler) },
+    self: { location: { origin, href: script }, clients: { get: async () => owner }, addEventListener: (name: string, handler: (event: Record<string, unknown>) => void) => handlers.set(name, handler) },
   });
   return {
     owner,
@@ -34,13 +35,25 @@ function harness() {
 }
 
 describe('main-origin runtime worker', () => {
-  it('denies unadmitted URLs and catalog/guest grants', async () => {
+  it('denies unadmitted URLs, guest grants, cross-origin grants, and off-page grants when pinned', async () => {
     const worker = harness();
-    expect((await worker.fetch()).status).toBe(403);
-    worker.grant({ id: 'owner', url: 'https://artipod.example/' });
     expect((await worker.fetch()).status).toBe(403);
     worker.grant({ id: 'guest', url: 'https://artipod.example/_artipod/run/guest/app/index.html' });
     expect((await worker.fetch()).status).toBe(403);
+    worker.grant({ id: 'elsewhere', url: 'https://evil.example/' });
+    expect((await worker.fetch()).status).toBe(403);
+    // any same-origin non-guest page may grant — a consumer's page needs no ?artipod=
+    worker.owner.url = 'https://artipod.example/my/workbench';
+    worker.grant();
+    expect((await worker.fetch()).status).toBe(200);
+    // …unless the consumer pinned the owner page on the script URL
+    const pinned = harness('/my/workbench');
+    pinned.owner.url = 'https://artipod.example/';
+    pinned.grant();
+    expect((await pinned.fetch()).status).toBe(403);
+    pinned.owner.url = 'https://artipod.example/my/workbench?x=1';
+    pinned.grant();
+    expect((await pinned.fetch()).status).toBe(200);
   });
   it('admits an iframe then its assets, but never top-level or worker entrypoints', async () => {
     const worker = harness(); worker.grant();

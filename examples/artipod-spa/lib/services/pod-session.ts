@@ -209,9 +209,12 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   // Push retry rides the sync-machine + a NAMED task (visible in artipod ps).
   const scheduler = svc.scheduler;
   let syncState: SyncState = { ...initialSyncState, offline: svc.forcedOffline };
+  // `kill <sync:push pid>` (TERM): no more runs, no re-arming, row retired —
+  // the documented close semantics, not a cancel that the next edit undoes.
+  let pushTerminated = false;
   const dispatch = (event: SyncEvent): void => {
     syncState = reduceSync(syncState, event);
-    if (wantsPush(syncState, event) && event.type !== 'edit') void scheduler.run(PUSH_TASK);
+    if (!pushTerminated && wantsPush(syncState, event) && event.type !== 'edit') void scheduler.run(PUSH_TASK);
   };
 
   // The session is a PID namespace (D16/D18) owned by the pod: shells, running
@@ -295,7 +298,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     }),
   );
   scheduler.register(PUSH_TASK, async () => {
-    if (!needsPush || route.mode !== 'rw' || svc.forcedOffline) return;
+    if (pushTerminated || !needsPush || route.mode !== 'rw' || svc.forcedOffline) return;
     dispatch({ type: 'push-start' });
     const result = await pod.pushBasis();
     if (result && !result.pushed) {
@@ -307,15 +310,20 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   });
   void scheduler.run(PUSH_TASK); // boot retry (offline session left work behind)
   scheduler.schedule(PUSH_TASK, 15_000); // slow interval; re-armed after each run
-  const pushProcess = processes.spawn({ kind: 'task', name: PUSH_TASK, state: 'idle', signal: { TERM: () => scheduler.cancel(PUSH_TASK) } });
+  const pushProcess = processes.spawn({ kind: 'task', name: PUSH_TASK, state: 'idle', signal: { TERM: () => {
+    pushTerminated = true;
+    scheduler.cancel(PUSH_TASK);
+    pushProcess.exit();
+  } } });
   const rearm = scheduler.onChange(() => {
+    if (pushTerminated) return;
     const task = scheduler.list().find((t) => t.name === PUSH_TASK);
     if (task) pushProcess.update({ state: task.state, detail: task.lastResult ? { last: task.lastResult } : undefined });
     if (task && task.state === 'idle' && task.nextRunAt === undefined) scheduler.schedule(PUSH_TASK, 15_000);
   });
   // Reconnect + lease renewal: broker snapshots drive both retry and re-key.
   const unsubBroker = brokerStore.subscribe(() => {
-    void scheduler.run(PUSH_TASK);
+    if (!pushTerminated) void scheduler.run(PUSH_TASK);
     const lease = svc.getLease();
     const key = svc.getKey();
     if (lease && key) void pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key });

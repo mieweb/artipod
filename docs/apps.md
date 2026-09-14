@@ -18,34 +18,37 @@ npm install @artipod/core
    `/artipod-runtime-sw.js` at build time (the workbench does this in its
    asset prebuild). The worker registers with scope `/` but intercepts only
    `/_artipod/run/…`; every grant is memory-only and bound to the page that
-   made it. Return 404 for that prefix from your static server so a page
-   without a worker never serves anything there.
-2. Create a process table for the session and a runtime over the pod's files:
+   made it. Any same-origin page that is not itself a running app may grant;
+   to pin granting to one route, register it as
+   `/artipod-runtime-sw.js?owner=/my/page` (`createBrowserRuntime(…, { worker })`).
+   Return 404 for that prefix from your static server so a page without a
+   worker never serves anything there.
+2. Create a runtime over the pod's files, in the pod's namespace:
 
    ```ts
    import { createBrowserRuntime } from '@artipod/core/apps';
-   import { ProcessTable, registerProcessTable } from '@artipod/core/proc';
 
-   const processes = new ProcessTable('my-session');
-   registerProcessTable(processes);            // /proc/<pid>/status in shells
+   const pod = await createZenFsPod(manifest, { identity: { kind: 'workspace', name: 'my-app' } });
    const runtime = createBrowserRuntime({
      read: (path) => pod.zfs.promises.readFile(path),
      list: (path) => pod.zfs.promises.readdir(path),
      stat: (path) => pod.zfs.promises.lstat(path),
-   }, '/work/my-app', { processes, detail: { pod: 'my-app' } });
+   }, '/work/my-app', { processes: pod.processes, detail: { pod: 'my-app' } });
    ```
 
-   Pass the same table to `createZenFsPod({ processes })` (or
-   `createSandbox({ processes })`) and every shell gets `ps` / `kill` plus its
-   own `shell` row.
+   The pod owns the process table (`pod.processes`, part of `pod.namespace`);
+   every `pod.createSandbox()` shell gets `ps` / `kill` plus its own `shell`
+   row, and each launched app becomes an `app` row.
 3. Render `runtime.store` however you like (`getState`/`subscribe`; the shape
    is zustand-compatible). `launch('development', true)` after your own
    explicit confirmation, or `launch('release')` against host-pinned policy.
    Mount `snapshot.url` in an iframe. For Stop/Resume, run
    `controlRuntimeLifecycle` over the iframe and hand it to
    `runtime.attach({ suspend, resume })` so `kill -STOP` reaches the app;
-   forward its reports with `runtime.report(...)`.
-4. `runtime.stop()` revokes the session; `processes.dispose()` on teardown
+   forward its reports with `runtime.report(...)`. A development
+   authorization is a one-hour window: reloads ride it, only a fresh
+   confirmation restarts it.
+4. `runtime.stop()` revokes the session; `pod.dispose()` on teardown
    cascades KILL to every row.
 
 ## Run a Local App in the Workbench
@@ -140,6 +143,14 @@ Signals are honest: a row that does not handle one answers `Operation not
 supported` — an app that never implemented the lifecycle protocol cannot be
 frozen, and `ps` will keep saying `running`. `artipod ps` remains the detailed
 view of scheduler tasks.
+
+**Deliberate exception — confined shells have no `/proc`.** A workspace
+terminal is rooted at the workspace (`pod.createSandbox({ confineTo })`) so
+other workspaces and pod internals are out of reach; `/proc` is pod-global
+and is not materialized inside that view. `ps`, `kill`, `uname`, `images`
+and `volumes` still work there (they read the namespace directly); the
+`/proc/<pid>`, `/proc/images` and `/proc/sys` files are available in the
+catalog console, in `artipod run`, and in any unconfined pod shell.
 
 ## Inventory: `images`, `volumes`
 

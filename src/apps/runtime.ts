@@ -3,7 +3,7 @@ import { MAX_APPROVAL_MS, verifyRelease, type AdmissionPolicy, type ReleaseEvide
 import { applicationSource, type ApplicationFiles } from './files.js';
 import { parseExecutableDescriptor } from './descriptor.js';
 import type { LifecycleSnapshot, LifecycleState } from './lifecycle.js';
-import type { ProcessHandle, ProcessTable } from '../proc/processes.js';
+import { ProcessError, type ProcessHandle, type ProcessTable } from '../proc/processes.js';
 
 /** Minimal external store; shape-compatible with zustand's `useStore`. */
 export interface SnapshotStore<T> {
@@ -57,6 +57,11 @@ export interface BrowserRuntimeOptions {
   processes?: ProcessTable;
   /** Extra columns for the process row, e.g. the pod ref. */
   detail?: Record<string, string>;
+  /**
+   * Where the consumer serves `runtime-sw.js` (default `/artipod-runtime-sw.js`,
+   * scope `/`). Append `?owner=<pathname>` to let only that page grant sessions.
+   */
+  worker?: string;
 }
 
 export async function boundedResponse(response: Response, limit: number): Promise<Uint8Array> {
@@ -99,11 +104,18 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string, opti
   let worker: ServiceWorker | null = null;
   let port: MessagePort | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let development: string | undefined;
+  /** One development authorization: these exact requirements, until this time. */
+  let development: { fingerprint: string; validUntil: number } | undefined;
   let disposed = false;
   let process: ProcessHandle | undefined;
   let instance: RuntimeInstance | null = null;
-  const unsupported = (action: string) => () => { throw new Error(`Application does not support ${action}`); };
+  // Honest signals (D16): no attached controller, or an app that answered
+  // the lifecycle probe with `unsupported`, is ENOTSUP — never a silent success.
+  const lifecycleSignal = (action: 'suspend' | 'resume') => () => {
+    const state = store.getState().lifecycle?.state;
+    if (!instance || state === 'unsupported') throw new ProcessError('ENOTSUP', `application does not support ${action}`);
+    instance[action]();
+  };
   const stop = () => {
     generation++;
     if (session) worker?.postMessage({ type: 'revoke', session });
@@ -163,7 +175,11 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string, opti
         let publisher: string | undefined;
         let approver: string | undefined;
         if (mode === 'development') {
-          if (!authorize && development !== fingerprint) throw new Error('Development authorization required for these application requirements');
+          const live = development?.fingerprint === fingerprint && Date.now() < development.validUntil;
+          if (!authorize && !live) throw new Error('Development authorization required for these application requirements');
+          // Reload rides the SAME authorization window; only a fresh authorize restarts it.
+          if (authorize) development = { fingerprint, validUntil };
+          validUntil = development!.validUntil;
         } else {
           const load = async (path: string, missing: string) => {
             let response: Response;
@@ -183,7 +199,7 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string, opti
           ({ validUntil, publisher, approver } = verified);
         }
         if (current !== generation || disposed) throw new Error('Launch cancelled');
-        const registration = await deadline(navigator.serviceWorker.register('/artipod-runtime-sw.js', { scope: '/' }), 'Runtime worker registration');
+        const registration = await deadline(navigator.serviceWorker.register(options.worker ?? '/artipod-runtime-sw.js', { scope: '/' }), 'Runtime worker registration');
         if (!registration.active) await deadline(navigator.serviceWorker.ready, 'Runtime worker activation');
         if (!navigator.serviceWorker.controller) {
           await deadline(new Promise<void>(resolve => {
@@ -211,15 +227,14 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string, opti
           worker!.postMessage({ type: 'grant', session: admitted, entrypoint: `/app/${captured.entrypoint}`, validUntil }, [channel.port2]);
         }), 'Runtime worker grant');
         if (current !== generation || disposed) throw new Error('Launch cancelled');
-        if (mode === 'development') development = fingerprint;
         timer = setTimeout(revoke, Math.max(0, validUntil - Date.now()));
         const url = `/_artipod/run/${admitted}/app/${captured.entrypoint}`;
         process = options.processes?.spawn({
           kind: 'app', name: descriptor.name,
           detail: { ...options.detail, mode, digest: captured.subject.digest.slice(0, 19), url },
           signal: {
-            STOP: () => (instance ?? { suspend: unsupported('suspend') }).suspend(),
-            CONT: () => (instance ?? { resume: unsupported('resume') }).resume(),
+            STOP: lifecycleSignal('suspend'),
+            CONT: lifecycleSignal('resume'),
             TERM: revoke,
             KILL: revoke,
           },

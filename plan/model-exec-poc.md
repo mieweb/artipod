@@ -731,6 +731,40 @@ Success means humans and agents share an explicitly authorized local development
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
 
+### 2026-09-13 - PR #57 review round (Copilot, 09-11 + 09-14) and main merge
+
+- Merged `origin/main` (dockerode 5, dependabot, FAQ); only `CHANGELOG.md`
+  conflicted — kept both entries and added this PR's Unreleased notes
+  (apps layer, processes, inventory, identity, one shell recipe).
+- Ten review comments, disposition:
+  1. `runtime-sw.js` owner gate hard-coded `/?artipod=` → **fixed**: any
+     same-origin page that is not itself a guest may grant; consumers pin
+     one route with `runtime-sw.js?owner=<pathname>`
+     (`createBrowserRuntime(…, { worker })`). Runbook updated.
+  2. `registerProcessTable` stale cleanup clobbers newer table → **already
+     fixed** in `4514d36` (identity-checked, idempotent).
+  3. `Catalog.tsx` async init after unmount → **fixed**: `cancelled` flag
+     guards every await; late-created console is disposed on the spot.
+  4. `kill <sync:push>` TERM re-armed and kept the row → **fixed**:
+     `pushTerminated` stops runs/re-arms/broker retriggers; row exits.
+  5. STOP/CONT without a controller threw a plain Error; `unsupported`
+     apps silently "succeeded" → **fixed**: `ProcessError('ENOTSUP')` in
+     both cases, gated on the last reported lifecycle state.
+  6. Confined shells have no `/proc` → **documented** as a deliberate
+     exception in docs/apps.md (commands read the namespace directly).
+  7. `files.ts` TOCTOU on the root → **fixed**: root re-stat before every
+     read.
+  8. Development grant never expired across Reload → **fixed**: the grant
+     is `{ fingerprint, validUntil }`; reloads ride the window, only a fresh
+     authorize restarts it; `validUntil` in the snapshot is the window's.
+  9. `PodSessionHost.evictExpired` evicted busy sessions → **fixed**: busy
+     entries are skipped; `release()` refreshes `lastUsed`.
+  10. `serve`: missing `store-id.json` treated an encrypted layout as
+      plaintext → **fixed**: `.alias` twins on disk fail closed with a
+      restore/`--keyless` message.
+- Gates: core lint/tsc/build, 658 tests; weighbridge `./apps` 19.3 KB; SPA
+  lint/typecheck/29 tests. Pushed; threads answered on the PR.
+
 ### 2026-09-13 - MC follow-up: the namespace is the common object
 
 - Owner: "we should have a common object that is exposed via proc and the

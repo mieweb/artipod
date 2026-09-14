@@ -20,9 +20,15 @@ describe('application-only filesystem adapter', () => {
   it('rejects symlinks including replacements after enumeration', async () => {
     const files = fixture();
     const source = await applicationSource(files, '/pod');
-    files.stat = async () => ({ size: 2, isDirectory: () => false, isSymbolicLink: () => true });
+    files.stat = async path => ({ size: 2, isDirectory: () => path === '/pod', isSymbolicLink: () => path !== '/pod' });
     await expect(source.read('/app/index.html')).rejects.toThrow('symlink');
     await expect(applicationSource(files, '/pod')).rejects.toThrow();
+  });
+  it('rejects a root swapped for a symlink after enumeration (children would resolve through it)', async () => {
+    const files = fixture();
+    const source = await applicationSource(files, '/pod');
+    files.stat = async path => ({ size: 32, isDirectory: () => path === '/pod', isSymbolicLink: () => path === '/pod' });
+    await expect(source.read('/app/index.html')).rejects.toThrow('root changed');
   });
   it('bounds traversal before capture', async () => {
     const files = fixture();

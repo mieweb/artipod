@@ -71,6 +71,19 @@ describe('selected pod runtime', () => {
     expect(runtime.store.getState().error).toContain('authorization required');
   });
 
+  it('a development authorization is a one-hour window that reloads ride, not restart', async () => {
+    await runtime.launch('development', true);
+    const { validUntil } = runtime.store.getState();
+    vi.advanceTimersByTime(40 * 60_000);
+    await runtime.launch('development'); // reload inside the window
+    expect(runtime.store.getState().phase).toBe('running');
+    expect(runtime.store.getState().validUntil).toBe(validUntil); // same window, not a fresh hour
+    vi.advanceTimersByTime(25 * 60_000); // past the original hour
+    expect(runtime.store.getState().phase).toBe('stopped');
+    await runtime.launch('development');
+    expect(runtime.store.getState().error).toContain('authorization required');
+  });
+
   it('serves immutable saved bytes from the selected pod until reload', async () => {
     await runtime.launch('development', true);
     content.set('index.html', 'Changed after capture');
@@ -92,8 +105,13 @@ describe('selected pod runtime', () => {
     const { pid } = runtime.store.getState();
     expect(pid).toBe(2);
     expect(table.get(2)).toMatchObject({ kind: 'app', name: 'Selected application', state: 'running', detail: { pod: 'demo:_1', mode: 'development' }, signals: ['STOP', 'CONT', 'TERM', 'KILL'] });
-    await expect(table.signal(2, 'STOP')).rejects.toThrow('does not support suspend');
+    // honest signals: no controller, or an app that declared itself unsupported → ENOTSUP
+    await expect(table.signal(2, 'STOP')).rejects.toMatchObject({ code: 'ENOTSUP' });
     const detach = runtime.attach(controller);
+    runtime.report({ state: 'unsupported' });
+    await expect(table.signal(2, 'STOP')).rejects.toMatchObject({ code: 'ENOTSUP' });
+    expect(controller.suspend).not.toHaveBeenCalled();
+    runtime.report({ state: 'running' });
     await table.signal(2, 'STOP');
     expect(controller.suspend).toHaveBeenCalledTimes(1);
     runtime.report({ state: 'suspended', telemetry: { elapsedMs: 4200, retainedBytes: 65536, limitBytes: 8388608 } });
@@ -102,7 +120,7 @@ describe('selected pod runtime', () => {
     await table.signal(2, 'CONT');
     expect(controller.resume).toHaveBeenCalledTimes(1);
     detach();
-    await expect(table.signal(2, 'STOP')).rejects.toThrow('does not support suspend');
+    await expect(table.signal(2, 'STOP')).rejects.toMatchObject({ code: 'ENOTSUP' });
     await table.signal(2, 'TERM');
     expect(runtime.store.getState()).toEqual({ phase: 'stopped' });
     expect(table.get(2)).toBeUndefined();
