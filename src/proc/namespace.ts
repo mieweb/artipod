@@ -1,14 +1,40 @@
 /**
- * A process namespace (Decision D16/D18): the ProcessTable plus its `/proc`
- * projection and, optionally, an inventory provider. Whoever owns the
- * namespace (a pod, or `openConsole()` for pod-less shells) is the ONLY
- * caller of the global registrations, and tears them down in one place.
+ * A namespace (Decisions D16/D18) — THE object a shell reads its world from,
+ * and the same object `/proc` projects as files:
+ *
+ *   identity   → uname / hostname / prompt      ↔ /proc/sys/kernel/*
+ *   processes  → ps / kill                      ↔ /proc/<pid>/status
+ *   inventory  → images / volumes / artipod …   ↔ /proc/images, /proc/workspaces
+ *
+ * Whoever owns the PID namespace owns this (a pod via `createZenFsPod`, or
+ * `openConsole()` for pod-less shells); it is the ONLY caller of the global
+ * `/proc` registrations and tears them down in one `dispose()`.
  */
+import type { SandboxIdentity } from './identity.js';
+import { makeIdentityProvider } from './identity.js';
 import type { InventoryProviders } from './inventory.js';
 import { makeInventoryProvider } from './inventory.js';
 import { ProcessTable, registerProcessTable } from './processes.js';
 import { getProvider, registerProcProvider } from './registry.js';
 import type { ProcProvider } from './registry.js';
+
+export interface NamespaceOptions {
+  /** Names the namespace: pid 1, `hostname`, `uname`. */
+  identity: SandboxIdentity;
+  /** Adopt a caller-owned table (tests); it is registered but not disposed here. */
+  processes?: ProcessTable;
+  inventory?: InventoryProviders;
+  /** Project into the global `/proc` registry. Default true; false for shells without /proc. */
+  proc?: boolean;
+}
+
+export interface Namespace {
+  readonly identity: SandboxIdentity;
+  readonly processes: ProcessTable;
+  readonly inventory?: InventoryProviders;
+  /** Unregisters the `/proc` projection synchronously, then cascades KILL through the owned table. */
+  dispose(): Promise<void>;
+}
 
 const unregisterBy = new WeakMap<ProcProvider, () => void>();
 
@@ -24,33 +50,18 @@ function registerLatest(provider: ProcProvider): () => void {
   };
 }
 
-export interface NamespaceOptions {
-  /** pid 1's name — the identity name (`<ref>`, `<podId>`, `catalog`, `<sessionId>`). */
-  name: string;
-  /** Adopt a caller-owned table (tests); it is registered but not disposed here. */
-  processes?: ProcessTable;
-  inventory?: InventoryProviders;
-  /** Project into the global `/proc` registry. Default true; false for shells without /proc. */
-  proc?: boolean;
-}
-
-export interface Namespace {
-  readonly processes: ProcessTable;
-  readonly inventory?: InventoryProviders;
-  /** Unregisters `/proc` rows synchronously, then cascades KILL through the owned table. */
-  dispose(): Promise<void>;
-}
-
 export function openNamespace(opts: NamespaceOptions): Namespace {
   const owned = !opts.processes;
-  const processes = opts.processes ?? new ProcessTable(opts.name);
+  const processes = opts.processes ?? new ProcessTable(opts.identity.name);
   const offs: Array<() => void> = [];
   if (opts.proc !== false) {
+    offs.push(registerLatest(makeIdentityProvider(opts.identity)));
     offs.push(registerProcessTable(processes));
     if (opts.inventory) offs.push(registerLatest(makeInventoryProvider(opts.inventory)));
   }
   let disposed = false;
   return {
+    identity: opts.identity,
     processes,
     inventory: opts.inventory,
     dispose() {

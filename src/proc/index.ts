@@ -34,3 +34,5 @@ export { makeInventoryProvider, mountSlug, shortDigest } from './inventory.js';
 export type { ImageDetail, ImageRow, InventoryProviders, LayerRow, VolumeRow } from './inventory.js';
 export { openNamespace } from './namespace.js';
 export type { Namespace, NamespaceOptions } from './namespace.js';
+export { describeIdentity, hostnameOf, makeIdentityProvider } from './identity.js';
+export type { SandboxIdentity } from './identity.js';

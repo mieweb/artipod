@@ -8,32 +8,41 @@
  */
 import { createSandbox, type CreateSandboxOptions } from '../sandbox/index.js';
 import { makeConsoleArtipodCommand } from '../sandbox/inventory-command.js';
-import type { Sandbox, SandboxIdentity } from '../sandbox/types.js';
-import { openNamespace } from '../proc/namespace.js';
+import type { Sandbox } from '../sandbox/types.js';
+import { openNamespace, type Namespace } from '../proc/namespace.js';
+import type { SandboxIdentity } from '../proc/identity.js';
+import type { InventoryProviders } from '../proc/inventory.js';
 import type { ProcessTable } from '../proc/processes.js';
 
-export interface ConsoleOptions extends Omit<CreateSandboxOptions, 'processes' | 'identity'> {
+export interface ConsoleOptions extends Omit<CreateSandboxOptions, 'namespace'> {
   /** Required here: a console with no name cannot say what it is. */
   identity: SandboxIdentity;
+  /** Rows for `images` / `volumes` / `artipod images|volumes` (and `/proc/images`, `/proc/workspaces`). */
+  inventory?: InventoryProviders;
 }
 
 export interface Console {
   readonly sandbox: Sandbox;
+  /** The console's namespace — what the shell reads and `/proc` projects. */
+  readonly namespace: Namespace;
+  /** Shortcut for `namespace.processes`. */
   readonly processes: ProcessTable;
   /** Retires the shell, unprojects `/proc`, cascades KILL through the namespace. */
   dispose(): Promise<void>;
 }
 
 export function openConsole(opts: ConsoleOptions): Console {
+  const { identity, inventory, ...sandboxOpts } = opts;
   // No /proc in the shell (the default here) means nothing global is touched.
-  const namespace = openNamespace({ name: opts.identity.name, inventory: opts.inventory, proc: opts.proc === true });
+  const namespace = openNamespace({ identity, inventory, proc: opts.proc === true });
   const sandbox = createSandbox({
-    ...opts,
-    processes: namespace.processes,
-    extraCommands: [makeConsoleArtipodCommand(opts.inventory ?? {}, namespace.processes), ...(opts.extraCommands ?? [])],
+    ...sandboxOpts,
+    namespace,
+    extraCommands: [makeConsoleArtipodCommand(inventory ?? {}, namespace.processes), ...(opts.extraCommands ?? [])],
   });
   return {
     sandbox,
+    namespace,
     processes: namespace.processes,
     dispose() {
       sandbox.dispose();

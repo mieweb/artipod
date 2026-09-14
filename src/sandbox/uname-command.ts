@@ -5,7 +5,10 @@
  */
 import { defineCommand } from 'just-bash/browser';
 import type { ExecResult } from 'just-bash/browser';
-import { hostnameOf, withCompletion, type SandboxIdentity } from './types.js';
+import { withCompletion } from './types.js';
+import { describeIdentity, hostnameOf, type SandboxIdentity } from '../proc/identity.js';
+
+export { describeIdentity };
 
 const ok = (stdout: string): ExecResult => ({ stdout, stderr: '', exitCode: 0 });
 
@@ -19,17 +22,6 @@ const USAGE = `usage: uname [-a] [-s] [-n] [-r] [-o] [-m]
   -m  machine             the runtime: browser / node
   -a  all of the above
 `;
-
-/** The one-line "where am I" the banner and `uname -o` share. */
-export function describeIdentity(identity: SandboxIdentity): string {
-  switch (identity.kind) {
-    case 'catalog': return 'catalog console — no pod open; the whole browser filesystem';
-    case 'workspace': return `workspace ${identity.name}${identity.mode ? ` (${identity.mode})` : ''} — a pod session`;
-    case 'pod': return `pod ${identity.name}${identity.mode ? ` (${identity.mode})` : ''} — artipod run on this machine`;
-    case 'server': return `server exec session ${identity.name}`;
-    default: return `${identity.kind} ${identity.name}${identity.mode ? ` (${identity.mode})` : ''}`;
-  }
-}
 
 const machine = (): string => (typeof window !== 'undefined' && typeof document !== 'undefined' ? 'browser' : 'node');
 

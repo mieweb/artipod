@@ -6,10 +6,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { configure, InMemory, fs as zfs, umount } from '@zenfs/core';
 import { createSandbox, type Sandbox } from '../sandbox/index.js';
 import { makeConsoleArtipodCommand } from '../sandbox/inventory-command.js';
-import { clearProcProviders, registerProcProvider } from './registry.js';
+import { clearProcProviders } from './registry.js';
 import { unmountProc } from './snapshot.js';
-import { makeInventoryProvider, mountSlug, type InventoryProviders } from './inventory.js';
-import { ProcessTable } from './processes.js';
+import { mountSlug, type InventoryProviders } from './inventory.js';
+import { openNamespace } from './namespace.js';
 
 const sampleLayers = [
   { digest: 'sha256:1111111111', size: 512, path: 'artipod.json', mtimeMs: Date.UTC(2026, 8, 6, 17, 0), actor: 'examples-builder', local: true },
@@ -42,10 +42,10 @@ describe('inventory', () => {
     try { umount('/'); } catch { /* first run */ }
     await configure({ mounts: { '/': InMemory } });
     await zfs.promises.mkdir('/repo');
-    registerProcProvider(makeInventoryProvider(inventory));
-    sandbox = createSandbox({ zfs, proc: true, cwd: '/repo', inventory, processes: new ProcessTable('catalog'),
-      identity: { kind: 'catalog', name: 'catalog', version: '0.10.1+19' },
-      extraCommands: [makeConsoleArtipodCommand(inventory, new ProcessTable('catalog'))] });
+    // One namespace: the commands read it, /proc projects it.
+    const namespace = openNamespace({ identity: { kind: 'catalog', name: 'catalog', version: '0.10.1+19' }, inventory });
+    sandbox = createSandbox({ zfs, proc: true, cwd: '/repo', namespace,
+      extraCommands: [makeConsoleArtipodCommand(inventory, namespace.processes)] });
   });
 
   it('images renders repository/tag columns and flags', async () => {
@@ -120,7 +120,7 @@ describe('inventory', () => {
     expect((await sandbox.exec('uname -rn')).stdout).toBe('catalog 0.10.1+19\n');
     expect((await sandbox.exec('hostname')).stdout).toBe('catalog\n');
     expect((await sandbox.exec('echo $HOSTNAME $ARTIPOD_KIND')).stdout).toBe('catalog catalog\n');
-    const workspace = createSandbox({ zfs, cwd: '/repo', identity: { kind: 'workspace', name: 'samples/lifecycle:_3', mode: 'cow' } });
+    const workspace = createSandbox({ zfs, cwd: '/repo', namespace: openNamespace({ identity: { kind: 'workspace', name: 'samples/lifecycle:_3', mode: 'cow' }, proc: false }) });
     expect((await workspace.exec('hostname; uname -o; echo $ARTIPOD_MODE')).stdout).toBe('samples_lifecycle__3\nworkspace samples/lifecycle:_3 (cow) — a pod session\ncow\n');
     const { TerminalSession } = await import('../host/terminal-session.js');
     let screen = '';

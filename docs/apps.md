@@ -90,15 +90,25 @@ the same thing. Kinds: `catalog`, `workspace`, `pod`, `server`.
 
 There is one shell recipe, two layers, and the front-ends only move bytes:
 
-- **A namespace** — the `ProcessTable`, its `/proc/<pid>` rows and (when
-  given) an inventory provider — belongs to whoever owns the PID namespace.
-  A pod owns its own: `createZenFsPod({ identity, inventory })` creates it,
-  `pod.processes` exposes it (spawn your app/task rows there), and
+- **A namespace** is *the* object a shell reads its world from, and the
+  same object `/proc` projects as files — commands and files cannot
+  disagree:
+
+  | `Namespace` field | commands                          | `/proc`                          |
+  |-------------------|-----------------------------------|----------------------------------|
+  | `identity`        | `hostname`, `uname`, `$ARTIPOD_*` | `/proc/sys/kernel/{hostname,ostype,osrelease,version,identity.json}` |
+  | `processes`       | `ps`, `kill`                      | `/proc/<pid>/{status,cmdline}`   |
+  | `inventory`       | `images`, `volumes`, `artipod …`  | `/proc/images/…`, `/proc/workspaces/…` |
+
+  It belongs to whoever owns the PID namespace. A pod owns its own:
+  `createZenFsPod({ identity, inventory })` creates it, `pod.namespace` /
+  `pod.processes` expose it (spawn your app/task rows there), and
   `pod.dispose()` tears it down. A shell *without* a pod — the catalog
   console, a server exec session — gets one from
   `openConsole({ zfs, identity, inventory?, proc? })` in `@artipod/core/host`,
-  which returns `{ sandbox, processes, dispose() }` with the pod-less
-  `artipod` verb wired. Nothing else calls `registerProcessTable`.
+  which returns `{ sandbox, namespace, dispose() }` with the pod-less
+  `artipod` verb wired. `createSandbox({ namespace })` is the only way a
+  shell learns any of this; nothing else calls `registerProcessTable`.
 - **A shell** is `createSandbox()` over that namespace (`pod.createSandbox()`
   or the console's `sandbox`), driven by the single `TerminalSession` line
   discipline: history, cursor editing, Ctrl+R, tab completion, `\n`-as-Enter

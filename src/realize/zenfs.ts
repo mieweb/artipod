@@ -251,10 +251,13 @@ export interface ZenFsPod {
   /** Present when `sync.basis` opened at boot (sync plan Phase D). */
   readonly basis?: { ref: string; at: string };
   /**
-   * The pod's PID namespace (D16/D18): pid 1 is the pod, every shell is a
-   * row, apps and tasks the host spawns join it; `ps` / `kill` / `/proc/<pid>`
-   * read from it. Torn down by `dispose()`.
+   * The pod's namespace (D16/D18): identity, process table and inventory —
+   * what every shell of this pod reads and what `/proc` projects. pid 1 is
+   * the pod, every shell is a row, apps and tasks the host spawns join it.
+   * Torn down by `dispose()`.
    */
+  readonly namespace: import('../proc/namespace.js').Namespace;
+  /** Shortcut for `namespace.processes`. */
   readonly processes: import('../proc/processes.js').ProcessTable;
   /** Push the overlay's changes now (the auto-push path, awaitable). */
   pushBasis(): Promise<import('../manager/overlay-sync.js').OverlayPushResult | null>;
@@ -308,9 +311,11 @@ export async function createZenFsPod(
   const ociStore = new OciStore(zfs);
   await ociStore.init();
   const oci = { store: ociStore, transport: options.oci?.transport };
-  // pid 1 carries the identity name; mode lives in `uname -o`, not in `ps`.
+  // The pod's namespace (D18): identity + processes + inventory — what every
+  // shell reads and what /proc projects. pid 1 carries the identity name;
+  // mode lives in `uname -o`, not in `ps`.
   const namespace = openNamespace({
-    name: options.identity?.name ?? ociStore.getSuperblock().podId,
+    identity: options.identity ?? { kind: 'pod', name: ociStore.getSuperblock().podId },
     processes: options.processes,
     inventory: options.inventory,
     proc,
@@ -469,6 +474,7 @@ export async function createZenFsPod(
     approvals,
     hydrator,
     basis,
+    namespace,
     processes: namespace.processes,
     pushBasis,
     agentLoopOptions(opts?: { autoSnapshot?: boolean }) {
@@ -492,9 +498,7 @@ export async function createZenFsPod(
         zfs: shellZfs,
         events,
         proc: confineTo ? false : proc,
-        processes: namespace.processes,
-        inventory: options.inventory,
-        identity: options.identity,
+        namespace,
         cwd: confineTo ? '/' : defaultCwd,
         onEdit: options.onEdit && confineTo
           ? (path) => options.onEdit!(`${confineTo}${path.startsWith('/') ? '' : '/'}${path}`)
@@ -519,7 +523,7 @@ export async function createZenFsPod(
             pushBasis,
             publish: options.publish,
             tasks: options.tasks,
-            inventory: options.inventory,
+            inventory: namespace.inventory,
           }),
           ...(options.extraCommands ?? []),
         ],

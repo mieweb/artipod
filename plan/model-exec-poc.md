@@ -83,7 +83,7 @@ The execution-admission direction was approved by the owner on 2026-09-05. Imple
 | D15 | The browser app runtime ships as the core subpath `@artipod/core/apps` (browser-safe, adapter-injected, imports only dependency-free core leaf modules such as `oci/digest` and `oci/tar`, never the `/oci` barrel), not an SPA-private `lib/m0` and not yet a separate package | Owner-selected 2026-09-06 after pros/cons review. Lift to `@artipod/apps` later if a second consumer appears; a lifted package would need core to expose those leaves as a light subpath. `jose` moves to core deps. The service worker ships as a dist asset consumers copy to their site root. Weighbridge `./apps` budget 30 KB gzip (measured 19.2 KB). |
 | D16 | Processes are namespaced per supervisor ("turtles all the way down"): a pod session owns a `ProcessTable`; shells, running apps and background tasks are its processes; a process that launches things owns a child table. Visibility is downward only; lifecycle cascades down; pids are namespace-local, identity is a uuid | Owner-selected 2026-09-06. Browser tabs and the server are separate namespaces — no implicit merge; cross-namespace views are explicit future commands. Signals map per kind (`STOP/CONT` = cooperative suspend/resume, `TERM/KILL` = close); unsupported → `ENOTSUP`, never a fake state. `/proc/<pid>/*` mirrors Linux layout. |
 | D17 | Glossary vs OCI/Docker: **image** = OCI image (manifest + config + layers), **ref** = repository:tag, **file layer** = an ordinary OCI layer that artipod's publish/import path emits per file (granularity, not a new type), **lazy** = a layer whose blob is not fetched (hydration state, never granularity), **parents** (`org.artipod.parents`) = the tag's history across manifests. A workspace/cow fork is the "container" (upper over a basis). | Owner-discussed 2026-09-06. Do not call file layers "lazy layers". Known inconsistencies to fix later: `artipod commit` emits one whole-tree layer without parents (Docker-style) while `import`/`publish` emit file layers; `artipod image history` shows the layer stack, not the parents chain — rename to `image layers` and give `history` the parents DAG. Docker overlay2 cannot run a >128-layer artipod image as a rootfs; artipod volume images are not meant to be. "pod" collides with Kubernetes harder than "layer" with Docker; noted, not renamed. **Command names must not shadow Unix tools the shell already has:** the sandbox ships real `mount`/`umount`/`lsblk`/`df`/`findmnt` for ZenFS backends (storage-command.ts); the inventory listing of local workspaces is therefore `volumes` (docker's word), not `lsblk`, and `mount --help` points at `artipod image mount` / `artipod open`. |
-| D18 | One shell recipe, two layers: (1) a **namespace** — `ProcessTable` + its `/proc` rows + inventory provider — is owned by whoever owns the PID namespace (the pod via `createZenFsPod`, or `openConsole()` for pod-less consoles) and torn down by its owner's `dispose()`; (2) a **shell** = `createSandbox()` over that namespace, driven by the single `TerminalSession` line discipline. Front-ends (xterm, WebSocket, `process.stdin`, HTTP exec) only move bytes. No surface may hand-assemble tables, registrations or unregister closures. | Owner-selected 2026-09-07 after the four-surface audit found every surface re-deriving the recipe (CLI lacked `ps`/inventory, server lacked `ps`/version, duplicated prompt/motd, two line disciplines). The `/proc` provider registry stays process-global for now because ZenFS itself is a per-package singleton (`realizeZenFs` mounts on `@zenfs/core.fs`; `/proc` is a global mount) — a per-pod registry without a per-pod fs would be theatre. Revisit both together. |
+| D18 | One shell recipe, two layers: (1) a **namespace** — ONE object `{ identity, processes, inventory }` that the commands read (`uname`/`hostname`, `ps`/`kill`, `images`/`volumes`) AND that `/proc` projects (`/proc/sys/kernel/*`, `/proc/<pid>/*`, `/proc/images|workspaces`), so files and commands cannot disagree — is owned by whoever owns the PID namespace (the pod via `createZenFsPod`, or `openConsole()` for pod-less consoles) and torn down by its owner's `dispose()`; (2) a **shell** = `createSandbox()` over that namespace, driven by the single `TerminalSession` line discipline. Front-ends (xterm, WebSocket, `process.stdin`, HTTP exec) only move bytes. No surface may hand-assemble tables, registrations or unregister closures. | Owner-selected 2026-09-07 after the four-surface audit found every surface re-deriving the recipe (CLI lacked `ps`/inventory, server lacked `ps`/version, duplicated prompt/motd, two line disciplines). The `/proc` provider registry stays process-global for now because ZenFS itself is a per-package singleton (`realizeZenFs` mounts on `@zenfs/core.fs`; `/proc` is a global mount) — a per-pod registry without a per-pod fs would be theatre. Revisit both together. |
 
 ### Reference map
 
@@ -581,7 +581,15 @@ Decision D18. Each commit updates this plan.
   browser workspace, the catalog console and a server exec session; the
   piped-stdin CLI test passes on `TerminalSession`; core + SPA gates pass;
   live check on 2784; no surface outside `namespace.ts` calls
-  `registerProcessTable`. *(All verified 2026-09-13 — see worklog. Left
+  `registerProcessTable`.
+- [x] The namespace is the common object (owner, 2026-09-13: "we should
+  have a common object that is exposed via proc and the commands use to get
+  information"): `Namespace = { identity, processes, inventory? }`;
+  `createSandbox({ namespace })` replaces the three separate options;
+  identity moves to `src/proc/identity.ts` and gains a `/proc/sys/kernel/*`
+  projection; `pod.namespace` / `console.namespace` / `sandbox.namespace`
+  are the same reference.
+  *(All verified 2026-09-13 — see worklog. Left
   for later: a `PodStore`-backed `InventoryProviders` so `images` works in
   CLI pods and server sessions, which today answer "no server catalog in
   this context".)*
@@ -722,6 +730,26 @@ Success means humans and agents share an explicitly authorized local development
   and exec concurrency tests. No timeout or assertion changes were needed.
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
+
+### 2026-09-13 - MC follow-up: the namespace is the common object
+
+- Owner: "we should have a common object that is exposed via proc and the
+  commands use to get information." Before: `createSandbox` took
+  `processes`, `inventory`, `identity` separately and `/proc` was fed by
+  separate registrations; identity was not in `/proc` at all. Now
+  `Namespace = { identity, processes, inventory?, dispose() }` is the one
+  object: `createSandbox({ namespace })`, `pod.namespace`,
+  `console.namespace`, `sandbox.namespace` — same reference. `/proc`
+  projects each field: new `/proc/sys/kernel/{hostname,ostype,osrelease,
+  version,identity.json}` (Linux layout) next to `/proc/<pid>` and
+  `/proc/images|workspaces`. `SandboxIdentity`, `hostnameOf`,
+  `describeIdentity` moved to `src/proc/identity.ts` (sandbox re-exports).
+- Test: `cat /proc/sys/kernel/hostname` == `hostname`, `osrelease` ==
+  `uname -r`, `version` == `uname -o`, `identity.json` deep-equals
+  `namespace.identity`; `sandbox.namespace === console.namespace`.
+- Gates: core lint/tsc/build, 655 tests; SPA lint/typecheck/29 tests (no
+  SPA source change — both surfaces already go through the pod/console).
+  CLI pod: `ls /proc` now lists `sys`. Not pushed.
 
 ### 2026-09-13 - MC: one shell recipe (D18)
 

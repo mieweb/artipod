@@ -6,7 +6,8 @@ import { configure, InMemory, fs as zfs, umount } from '@zenfs/core';
 import { createSandbox, type Sandbox } from '../sandbox/index.js';
 import { clearProcProviders } from './registry.js';
 import { unmountProc } from './snapshot.js';
-import { ProcessError, ProcessTable, registerProcessTable } from './processes.js';
+import { ProcessError, ProcessTable } from './processes.js';
+import { openNamespace } from './namespace.js';
 
 describe('ProcessTable', () => {
   it('starts with pid 1, allocates pids upward, and cascades on dispose', async () => {
@@ -74,8 +75,8 @@ describe('ps / kill in the shell', () => {
     await configure({ mounts: { '/': InMemory } });
     await zfs.promises.mkdir('/repo');
     table = new ProcessTable('session', () => 0);
-    registerProcessTable(table);
-    sandbox = createSandbox({ zfs, proc: true, cwd: '/repo', processes: table });
+    const namespace = openNamespace({ identity: { kind: 'test', name: 'session' }, processes: table });
+    sandbox = createSandbox({ zfs, proc: true, cwd: '/repo', namespace });
     table.spawn({ kind: 'app', name: 'Lifecycle sample', detail: { mode: 'development' }, signal: {
       STOP: () => { signals.push('STOP'); }, CONT: () => { signals.push('CONT'); }, TERM: () => { signals.push('TERM'); },
     } });
@@ -97,7 +98,7 @@ describe('ps / kill in the shell', () => {
     expect(long.stdout).toContain('mode=development');
     await sandbox.exec('cd /');
     expect(table.get(2)?.detail.cwd).toBe('/');
-    const scratch = createSandbox({ zfs, cwd: '/repo', processes: table });
+    const scratch = createSandbox({ zfs, cwd: '/repo', namespace: sandbox.namespace });
     expect(table.list().filter((p) => p.kind === 'shell')).toHaveLength(2);
     scratch.dispose();
     scratch.dispose();

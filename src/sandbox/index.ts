@@ -23,13 +23,13 @@ import { makeGitCommand } from './git-command.js';
 import { makeModuleCommands } from './module-command.js';
 import { makeProcessCommands } from './process-command.js';
 import { makeInventoryCommands } from './inventory-command.js';
-import type { InventoryProviders } from '../proc/inventory.js';
-import type { ProcessHandle, ProcessTable } from '../proc/processes.js';
+import type { Namespace } from '../proc/namespace.js';
+import type { ProcessHandle } from '../proc/processes.js';
 import { makeNotesCommand } from './notes-command.js';
 import { makeStorageCommands } from './storage-command.js';
 import { makeSudoCommand } from './sudo-command.js';
 import type { PodEvents } from '../events.js';
-import type { CompletableCommand, CompletionResult, Sandbox, SandboxExecOptions, SandboxIdentity, ZenFsLike } from './types.js';
+import type { CompletableCommand, CompletionResult, Sandbox, SandboxExecOptions, ZenFsLike } from './types.js';
 import { hostnameOf } from './types.js';
 import { makeUnameCommands } from './uname-command.js';
 import { ZenFsAdapter } from './zenfs-adapter.js';
@@ -76,14 +76,14 @@ export interface CreateSandboxOptions {
    */
   proc?: boolean;
   /**
-   * The session's process table: adds `ps` / `kill` and registers this shell
-   * as a `shell` row whose state tracks exec activity.
+   * The namespace this shell lives in (D18): its identity (`hostname`,
+   * `uname`, `$HOSTNAME`, `$ARTIPOD_*`, the host's prompt/banner), process
+   * table (`ps` / `kill`, this shell becomes a `shell` row) and inventory
+   * (`images` / `volumes`). The same object `/proc` projects — commands and
+   * files never disagree. Pods own theirs; `openConsole()` makes one for
+   * pod-less shells.
    */
-  processes?: ProcessTable;
-  /** Server images + local workspaces: adds `images` and `volumes`. */
-  inventory?: InventoryProviders;
-  /** Names this shell: `hostname`, `uname`, `$HOSTNAME`, `$ARTIPOD_KIND`, and the host's prompt/banner. */
-  identity?: SandboxIdentity;
+  namespace?: Namespace;
   /**
    * Host work to run around each non-transient command, e.g. materializing
    * state into the filesystem. Returned messages are appended to stderr, so a
@@ -106,6 +106,8 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
   const adapter = new ZenFsAdapter(opts.zfs);
   const initialCwd = opts.cwd ?? DEFAULT_CWD;
   if (opts.proc) registerBuiltinProviders();
+  const { namespace } = opts;
+  const identity = namespace?.identity;
 
   const commands = [
     // git shares the sandbox's zfs — shell view and git view stay coherent
@@ -115,14 +117,14 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     makeSudoCommand(opts.events, opts.sudo),
     ...makeStorageCommands(() => opts.zfs),
     ...(opts.proc ? makeModuleCommands() : []),
-    ...(opts.processes ? makeProcessCommands(opts.processes) : []),
-    ...(opts.inventory ? makeInventoryCommands(opts.inventory) : []),
-    ...(opts.identity ? makeUnameCommands(opts.identity) : []),
+    ...(namespace ? makeProcessCommands(namespace.processes) : []),
+    ...(namespace?.inventory ? makeInventoryCommands(namespace.inventory) : []),
+    ...(identity ? makeUnameCommands(identity) : []),
     ...(opts.extraCommands ?? []),
   ];
-  const shellProcess: ProcessHandle | undefined = opts.processes?.spawn({ kind: 'shell', name: 'bash', state: 'idle', detail: { cwd: initialCwd } });
-  const identityEnv = opts.identity
-    ? { HOSTNAME: hostnameOf(opts.identity), ARTIPOD_KIND: opts.identity.kind, ARTIPOD_NAME: opts.identity.name, ...(opts.identity.mode ? { ARTIPOD_MODE: opts.identity.mode } : {}) }
+  const shellProcess: ProcessHandle | undefined = namespace?.processes.spawn({ kind: 'shell', name: 'bash', state: 'idle', detail: { cwd: initialCwd } });
+  const identityEnv = identity
+    ? { HOSTNAME: hostnameOf(identity), ARTIPOD_KIND: identity.kind, ARTIPOD_NAME: identity.name, ...(identity.mode ? { ARTIPOD_MODE: identity.mode } : {}) }
     : {};
 
   const bash = new Bash({
@@ -239,7 +241,8 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
     fs: adapter,
     zfs: opts.zfs,
     dispose: () => shellProcess?.exit(),
-    identity: opts.identity,
+    identity,
+    namespace,
   };
   return sandbox;
 }

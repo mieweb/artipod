@@ -335,10 +335,17 @@ describe('openConsole (D18: a pod-less shell owns its namespace)', () => {
     expect((await shell.exec('artipod images')).stdout).toMatch(/demo\/app\s+1/);
     expect((await shell.exec('images --json')).stdout).toContain('"demo/app:1"');
     expect((await shell.exec('ls /proc/images')).exitCode).toBe(0);
+    // the commands and /proc read the same Namespace object — they cannot disagree
+    expect(shell.namespace).toBe(console_.namespace);
+    expect((await shell.exec('cat /proc/sys/kernel/hostname')).stdout).toBe((await shell.exec('hostname')).stdout);
+    expect((await shell.exec('cat /proc/sys/kernel/osrelease')).stdout).toBe((await shell.exec('uname -r')).stdout);
+    expect((await shell.exec('cat /proc/sys/kernel/version')).stdout).toBe((await shell.exec('uname -o')).stdout);
+    expect(JSON.parse((await shell.exec('cat /proc/sys/kernel/identity.json')).stdout)).toEqual(console_.namespace.identity);
     expect(getProvider('processes')).toBeDefined();
     await console_.dispose();
     expect(getProvider('processes')).toBeUndefined();
     expect(getProvider('inventory')).toBeUndefined();
+    expect(getProvider('sys')).toBeUndefined();
   });
 
   it('a later console wins the global /proc slot; the earlier owner cannot pull it out (server: many sessions)', async () => {
