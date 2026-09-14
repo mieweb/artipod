@@ -20,7 +20,6 @@ import { brokerStore } from '../stores/broker';
 import { navigateTo } from '../stores/route';
 import { nextDraftRef } from '../boot';
 import { createBrowserRuntime, type BrowserRuntime } from '@artipod/core/apps';
-import { ProcessTable, registerProcessTable, registerProcProvider, makeInventoryProvider } from '@artipod/core/proc';
 import { catalogInventory } from './inventory';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
@@ -215,12 +214,10 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     if (wantsPush(syncState, event) && event.type !== 'edit') void scheduler.run(PUSH_TASK);
   };
 
-  // The session is a PID namespace (D16): shells, running apps and tasks are
-  // its processes; `ps` / `kill` and /proc/<pid> read from this table.
-  const processes = new ProcessTable(`${route.id}:${route.mode}`);
-  const unregisterProcesses = registerProcessTable(processes);
+  // The session is a PID namespace (D16/D18) owned by the pod: shells, running
+  // apps and tasks are its processes; `ps` / `kill` and /proc/<pid> read from
+  // `pod.processes`, and `pod.dispose()` tears it down.
   const inventory = catalogInventory();
-  const unregisterInventory = registerProcProvider(makeInventoryProvider(inventory));
 
   const pod = await createZenFsPod(
     {
@@ -264,13 +261,13 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       publish: doPublish,
       // `artipod ps` in this shell shows the client's live schedule.
       tasks: () => scheduler.list(),
-      processes,
       inventory,
       identity: { kind: 'workspace', name: route.id, mode: route.mode, version: process.env.NEXT_PUBLIC_ARTIPOD_VERSION },
       extraCommands: [publishCmd],
     },
   );
   podRef = pod;
+  const { processes } = pod;
   const sandbox = pod.createSandbox({ confineTo: pod.basis ? pod.basis.at : blankRoot });
   // per-artipod catalog badge: ref workspaces under a broker keep ciphertext
   await io.patch(route.id, { encrypted: !!brokerKey && route.isRef });
@@ -402,11 +399,9 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         rearm();
         scheduler.cancel(PUSH_TASK);
         if (probeTimer) clearTimeout(probeTimer);
-        await processes.dispose();
-        unregisterProcesses();
-        unregisterInventory();
         // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
-        // keys, hydration) unregister — the next session must not collide.
+        // keys, hydration, the process namespace) unregister — the next
+        // session must not collide.
         pod.dispose();
         releaseWsLock?.();
         const w = window as unknown as { __artipod?: unknown };

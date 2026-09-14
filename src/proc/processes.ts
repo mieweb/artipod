@@ -183,15 +183,23 @@ function status(row: ProcessInfo): string {
   return `${lines.join('\n')}\n`;
 }
 
+let current: ProcessTable | null = null;
 let unregisterCurrent: (() => void) | null = null;
 
-/** Register (or replace) the process provider — one table per proc registry. */
+/**
+ * Project a table at `/proc/<pid>` — the registry is process-global, so the
+ * latest live namespace wins; an earlier owner's unregister is then a no-op
+ * (it never pulls the newer table's rows out from under it).
+ */
 export function registerProcessTable(table: ProcessTable): () => void {
   unregisterCurrent?.();
   const unregister = registerProcProvider(table.provider());
-  unregisterCurrent = () => {
+  current = table;
+  unregisterCurrent = unregister;
+  return () => {
+    if (current !== table) return;
     unregister();
+    current = null;
     unregisterCurrent = null;
   };
-  return unregisterCurrent;
 }

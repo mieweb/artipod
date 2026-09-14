@@ -86,17 +86,36 @@ Every shell announces what it is a shell *of*: the banner ends with a motd
 line, the prompt is `<hostname>:<cwd> $` (`catalog:/ $` for the catalog
 console, `samples_lifecycle__3:/ $` for a workspace, `<podId>:/ $` for
 `artipod run` on the CLI), and `uname -a` / `hostname` / `$ARTIPOD_KIND` say
-the same thing. Kinds: `catalog`, `workspace`, `pod`, `server`. Consumers set
-it with `createSandbox({ identity: { kind, name, mode, version } })`.
+the same thing. Kinds: `catalog`, `workspace`, `pod`, `server`.
 
-A pod session is a PID namespace. pid 1 is the session; the terminal shell,
-each running app and each background task is a row. Visibility is downward
-only: a shell sees its session, never another tab or the server.
+There is one shell recipe, two layers, and the front-ends only move bytes:
+
+- **A namespace** — the `ProcessTable`, its `/proc/<pid>` rows and (when
+  given) an inventory provider — belongs to whoever owns the PID namespace.
+  A pod owns its own: `createZenFsPod({ identity, inventory })` creates it,
+  `pod.processes` exposes it (spawn your app/task rows there), and
+  `pod.dispose()` tears it down. A shell *without* a pod — the catalog
+  console, a server exec session — gets one from
+  `openConsole({ zfs, identity, inventory?, proc? })` in `@artipod/core/host`,
+  which returns `{ sandbox, processes, dispose() }` with the pod-less
+  `artipod` verb wired. Nothing else calls `registerProcessTable`.
+- **A shell** is `createSandbox()` over that namespace (`pod.createSandbox()`
+  or the console's `sandbox`), driven by the single `TerminalSession` line
+  discipline: history, cursor editing, Ctrl+R, tab completion, `\n`-as-Enter
+  for paste and piped input, `onExit` for `exit`/`logout`/Ctrl+D. xterm in
+  the browser, `process.stdin` in raw mode on the CLI, a WebSocket on a
+  server — each just forwards `handleData()` in and `io.write()` out.
+
+A pod session is a PID namespace. pid 1 carries the identity name (the ref,
+the pod id, `catalog`, the session id — mode lives in `uname -o`, not in
+`ps`); the terminal shell, each running app and each background task is a
+row. Visibility is downward only: a shell sees its session, never another
+tab or the server.
 
 ```text
 $ ps
 PID PPID KIND  STATE     TIME NAME
-  1    0 init  running   12s  samples/lifecycle:_3:cow
+  1    0 init  running   12s  samples/lifecycle:_3
   2    1 shell idle      12s  bash
   3    1 task  idle      12s  [sync:push]
   4    1 app   running   4s   Lifecycle sample

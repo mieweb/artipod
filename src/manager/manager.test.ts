@@ -149,4 +149,16 @@ describe('PodSessionHost', () => {
     host.evictExpired(Date.now() + 120_000);
     expect(host.size).toBe(0);
   });
+
+  it('a session is a console (D18): ps, uname -r and artipod work like everywhere else', async () => {
+    unmountAll();
+    const host = new PodSessionHost({ ttlMs: 60_000, maxSessions: 2, execTimeoutMs: 5000, maxFsBytes: 1024 * 1024, version: '7.7.7' });
+    const r = await host.exec('dave', 'uname -a; ps; artipod help');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.stdout).toMatch(/^artipod dave 7\.7\.7 server exec session dave/);
+    expect(r.stdout).toMatch(/1\s+0 init\s+running .* dave\n\s+2\s+1 shell running .* bash/);
+    expect(r.stdout).toContain('images');
+    host.reset();
+  });
 });

@@ -553,35 +553,38 @@ Owner, after the 2026-09-07 audit: "can this be simplified to a single
 thing that runs in browser and on server? It feels a little spaghetti."
 Decision D18. Each commit updates this plan.
 
-- [ ] `src/proc/namespace.ts`: `openNamespace({ name, inventory?, processes? })`
+- [x] `src/proc/namespace.ts`: `openNamespace({ name, inventory?, processes? })`
   → `{ processes, inventory, dispose() }` — the only place that calls
   `registerProcessTable` / `registerProcProvider(makeInventoryProvider)`
   and the only place that unregisters them.
-- [ ] `createZenFsPod` owns its namespace: creates it (named after the
+- [x] `createZenFsPod` owns its namespace: creates it (named after the
   identity), exposes `pod.processes`, disposes it in `pod.dispose()`.
   `processes` option stays as "adopt a caller-owned table" for tests.
   `pod-session.ts` and `cli.ts` stop creating/registering tables.
-- [ ] `src/host/console.ts`: `openConsole({ zfs, identity, inventory?, … })`
+- [x] `src/host/console.ts`: `openConsole({ zfs, identity, inventory?, … })`
   for pod-less shells (catalog console, server exec sessions) → `{ sandbox,
   processes, dispose() }`; wires the console `artipod` verb when inventory
   is present. `Catalog.tsx` and `PodSessionHost` use it; the server session
   gets `ps`, `uname -r`, and a proper teardown on eviction.
-- [ ] `TerminalSession` is the one line discipline: gains `onExit`
+- [x] `TerminalSession` is the one line discipline: gains `onExit`
   (`exit`/`logout`/Ctrl-D on an empty line) and splits multi-key chunks
   (paste, piped stdin: `\n` = Enter). `cli.ts repl()` drops `node:readline`
   and drives `TerminalSession` over raw-mode `process.stdin` (line-mode when
   stdin is not a TTY). Prompt/motd/`help` version line exist in one place.
-- [ ] `src/version.ts` `coreVersion()` replaces the two hand-rolled
+- [x] `src/version.ts` `coreVersion()` replaces the two hand-rolled
   package.json+buildinfo readers (`cli.ts versionLine`, `serve.ts` skew
   check) and feeds the server identity.
-- [ ] Same pid-1 name everywhere: the identity name (`test2:_1`, `<podId>`,
+- [x] Same pid-1 name everywhere: the identity name (`test2:_1`, `<podId>`,
   `catalog`, `<sessionId>`); mode lives in `uname -o`, not in `ps`.
-- [ ] **Done when:** `ps`, `uname -a`, `hostname`, `images`/`volumes`
+- [x] **Done when:** `ps`, `uname -a`, `hostname`, `images`/`volumes`
   (where an inventory exists) behave the same in `artipod run -it`, the
   browser workspace, the catalog console and a server exec session; the
   piped-stdin CLI test passes on `TerminalSession`; core + SPA gates pass;
   live check on 2784; no surface outside `namespace.ts` calls
-  `registerProcessTable`.
+  `registerProcessTable`. *(All verified 2026-09-13 — see worklog. Left
+  for later: a `PodStore`-backed `InventoryProviders` so `images` works in
+  CLI pods and server sessions, which today answer "no server catalog in
+  this context".)*
 
 ### M1: Semantic discovery and simple composition
 
@@ -719,6 +722,49 @@ Success means humans and agents share an explicitly authorized local development
   and exec concurrency tests. No timeout or assertion changes were needed.
 
 M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. For each phase, record dated progress, exact commands and one-line results, browser evidence, decisions/deviations, blockers, and the gate result (plus commit hash when committed). Never record credentials or real subject data.
+
+### 2026-09-13 - MC: one shell recipe (D18)
+
+- Owner chose option 1 (do it in #57). Landed as one commit after the plan
+  commit `9332184`:
+  - `src/proc/namespace.ts` `openNamespace()` — the only caller of
+    `registerProcessTable` / inventory registration. `registerProcessTable`
+    now has honest latest-wins semantics: a stale owner's unregister is a
+    no-op instead of clobbering the newer table's pointer (it would have
+    thrown `already registered` on the third pod in one process once every
+    pod registers). Inventory gets the same rule inside the namespace.
+  - `createZenFsPod` owns its namespace (pid 1 = `identity.name`, else the
+    pod id), exposes `pod.processes`, disposes it in `pod.dispose()`;
+    `processes` option = adopt (not disposed). `pod-session.ts` lost 6 lines
+    of table/unregister plumbing and uses `pod.processes`; `cli.ts bootPod`
+    lost its table too.
+  - `src/host/console.ts` `openConsole()` for pod-less shells; used by
+    `Catalog.tsx` and `PodSessionHost` (sessions now have `ps`, `uname -r`
+    via a new `version` option fed by `coreVersion()`, and `dispose()` on
+    eviction/reset). A console without `proc` registers nothing globally, so
+    50 server sessions do not fight over `/proc/processes`.
+  - `TerminalSession`: `splitKeys()` (CSI / control / printable runs;
+    `\r\n` and `\n` = Enter), `onExit` (`exit`/`logout`/Ctrl+D on an empty
+    line), `lastExitCode`. `cli.ts repl()` is now ~70 lines over raw-mode
+    stdin: chunks queue behind the running command except Ctrl+C, which
+    aborts immediately (twice while idle = leave); non-TTY output strips
+    `\r` and ANSI so transcripts stay plain. `node:readline` remains only for
+    the `prune` y/N question.
+  - `src/version.ts` `coreVersion()` replaces the two hand-rolled readers;
+    `export-static.mjs` composes the same string (no more `(no-git, )` on
+    gitless builds).
+- Verified: core lint/tsc/build, vitest 61 files / 655 tests with Docker up;
+  SPA lint/typecheck/29 tests; export + weighbridge (`./apps` 19.2 KB) PASS.
+  Live on 2784 (fresh serve, new bundle): catalog console `uname -a` →
+  `… catalog console — …`, `ps` pid 1 `catalog`, `/proc` has `images` +
+  `workspaces`; workspace `test2:_1` `ps` pid 1 `test2:_1` (was
+  `test2:_1:rw`); CLI `printf … | artipod run --rm -i` shows the same motd,
+  prompt and `ps`; `POST /api/exec` session `mc-check`: `uname -a` →
+  `artipod mc-check 0.10.1+26 (…) server exec session mc-check node`, `ps`
+  pid 1 `mc-check`. Not pushed.
+- Discarded (owner-confirmed) an unrelated stale cli.ts diff that removed
+  `--keyless`; left the untracked root `model-exec-poc.md` and the
+  `docs/apps.md` link change alone.
 
 ### 2026-09-07 - `artipod run` is a pod too: identity + process table on the CLI
 

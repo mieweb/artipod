@@ -15,6 +15,7 @@ import { digestHex } from '../oci/digest.js';
 import { importBlobKey } from '../oci/cipher.js';
 import { OciLayoutPodStore } from '../manager/pod-store.js';
 import { PodSessionHost } from '../manager/session-host.js';
+import { coreVersion } from '../version.js';
 import type { Authority } from '../manager/authority.js';
 import { nodePodFs } from '../nodePodFs.js';
 import { bearerAuth, staticTokenAuth } from './common.js';
@@ -179,22 +180,8 @@ async function warnOnVersionSkew(uiDir: string): Promise<void> {
   try {
     const { readFile } = await import('node:fs/promises');
     const info = JSON.parse(await readFile(join(uiDir, 'ui-buildinfo.json'), 'utf8')) as { coreVersion?: string };
-    // Compose our own full version the same way export-static does — skew
-    // detection is commit-precise on dev builds.
-    const own = JSON.parse(
-      await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
-    ) as { version?: string };
-    let ownFull = own.version ?? '';
-    try {
-      const bi = JSON.parse(await readFile(new URL('../buildinfo.json', import.meta.url), 'utf8')) as {
-        version?: string;
-        commit?: string;
-        date?: string;
-      };
-      ownFull = `${bi.version ?? ownFull} (${bi.commit ?? 'no-git'}, ${(bi.date ?? '').slice(0, 10)})`;
-    } catch {
-      // gitless build — compare plain versions
-    }
+    // export-static composes coreVersion the same way — skew detection is commit-precise on dev builds.
+    const ownFull = await coreVersion();
     if (info.coreVersion && ownFull && info.coreVersion !== ownFull) {
       stdout.write(
         `warning: the UI bundles @artipod/core ${info.coreVersion} but this serve is ${ownFull} — rebuild it: cd examples/artipod-sync && npm run export:static && artipod import out artipod-ui:latest\n`,
@@ -369,6 +356,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
               maxSessions: 50,
               execTimeoutMs: 30_000,
               maxFsBytes: 256 * 1024 * 1024,
+              version: await coreVersion(),
             }),
             // EXEC_API_TOKEN overrides; otherwise exec rides the app auth (rw)
             ...(env.EXEC_API_TOKEN ? { auth: bearerAuth(() => env.EXEC_API_TOKEN) } : {}),

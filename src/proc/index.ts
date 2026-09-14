@@ -32,3 +32,5 @@ export { PROCESS_SIGNALS, ProcessError, ProcessTable, registerProcessTable } fro
 export type { ProcessHandle, ProcessInfo, ProcessKind, ProcessSignal, ProcessSpec } from './processes.js';
 export { makeInventoryProvider, mountSlug, shortDigest } from './inventory.js';
 export type { ImageDetail, ImageRow, InventoryProviders, LayerRow, VolumeRow } from './inventory.js';
+export { openNamespace } from './namespace.js';
+export type { Namespace, NamespaceOptions } from './namespace.js';

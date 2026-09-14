@@ -31,6 +31,12 @@ export interface TerminalSessionOptions {
   version?: string;
   /** Secondary tabs: refuse to run commands, explain why. */
   readOnly?: boolean;
+  /**
+   * Called when the user leaves: `exit` / `logout`, or Ctrl+D on an empty
+   * line. Without it those fall through to the shell (a browser tab has
+   * nowhere to go); with it the host tears the session down.
+   */
+  onExit?: () => void;
 }
 
 const RED = '\x1b[31m';
@@ -39,6 +45,37 @@ const RESET = '\x1b[0m';
 
 /** xterm wants \r\n; sandbox output uses \n. */
 export const toCrLf = (s: string): string => s.replace(/\r?\n/g, '\r\n');
+
+/**
+ * Split a raw input chunk into keys: one CSI escape, one control character,
+ * or one run of printable text each. Paste and piped stdin arrive as chunks;
+ * `\r\n` and `\n` both become Enter.
+ */
+export function splitKeys(data: string): string[] {
+  const keys: string[] = [];
+  let i = 0;
+  while (i < data.length) {
+    const ch = data[i];
+    if (ch === '\x1b' && data[i + 1] === '[') {
+      let j = i + 2;
+      while (j < data.length && !(data.charCodeAt(j) >= 0x40 && data.charCodeAt(j) <= 0x7e)) j++;
+      keys.push(data.slice(i, Math.min(j + 1, data.length)));
+      i = j + 1;
+    } else if (ch === '\r' || ch === '\n') {
+      keys.push('\r');
+      i += ch === '\r' && data[i + 1] === '\n' ? 2 : 1;
+    } else if (data.charCodeAt(i) < 32 || data.charCodeAt(i) === 127) {
+      keys.push(ch);
+      i++;
+    } else {
+      let j = i + 1;
+      while (j < data.length && data.charCodeAt(j) >= 32 && data.charCodeAt(j) !== 127 && data[j] !== '\x1b') j++;
+      keys.push(data.slice(i, j));
+      i = j;
+    }
+  }
+  return keys;
+}
 
 /** Longest common prefix of a non-empty candidate list. */
 export function commonPrefix(items: string[]): string {
@@ -68,6 +105,8 @@ export class TerminalSession {
   private completing = false;
   private disposers: Array<() => void> = [];
   private disposed = false;
+  /** Exit code of the last command run (0 before any). */
+  lastExitCode = 0;
 
   constructor(private readonly opts: TerminalSessionOptions) {
     const { io, banner, events, sandbox } = opts;
@@ -167,8 +206,15 @@ export class TerminalSession {
     return false;
   }
 
-  /** Feed raw terminal input (keystrokes, paste). */
+  /** Feed raw terminal input (keystrokes, paste, piped lines) — keys run in order. */
   async handleData(data: string): Promise<void> {
+    for (const key of splitKeys(data)) {
+      if (this.disposed) return;
+      await this.handleKey(key);
+    }
+  }
+
+  private async handleKey(data: string): Promise<void> {
     if (this.disposed) return;
     const { io, sandbox } = this.opts;
 
@@ -186,6 +232,13 @@ export class TerminalSession {
       return;
     }
     if (this.busy) return; // ignore typing while a command runs
+
+    if (data === '\x04' && this.opts.onExit && !this.buffer && !this.search) {
+      // Ctrl+D on an empty line
+      io.write('\r\n');
+      this.opts.onExit();
+      return;
+    }
 
     if (this.search) {
       if (!this.handleSearchKey(data)) return;
@@ -304,6 +357,10 @@ export class TerminalSession {
       this.cursor = 0;
 
       if (cmd.trim()) {
+        if (this.opts.onExit && /^(exit|logout)$/.test(cmd.trim())) {
+          this.opts.onExit();
+          return;
+        }
         if (this.opts.readOnly) {
           io.write(`${RED}read-only session: commands are disabled in this tab${RESET}\r\n`);
           this.prompt();
@@ -323,9 +380,11 @@ export class TerminalSession {
             io.write(`${DIM}artipod extras: ${[...sandbox.customCommands].sort().join(', ')} (details: notes)${RESET}\r\n\r\n`);
           }
           const result = await sandbox.exec(cmd, { signal: this.abortController.signal });
+          this.lastExitCode = result.exitCode;
           if (result.stdout) io.write(toCrLf(result.stdout));
           if (result.stderr) io.write(`${RED}${toCrLf(result.stderr)}${RESET}`);
         } catch (e) {
+          this.lastExitCode = 1;
           io.write(`${RED}${toCrLf(String(e))}${RESET}\r\n`);
         } finally {
           this.busy = false;

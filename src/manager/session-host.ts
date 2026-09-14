@@ -6,7 +6,7 @@
  * app — they arrive here as options.
  */
 
-import { createSandbox } from '../sandbox/index.js';
+import { openConsole, type Console } from '../host/console.js';
 import type { Sandbox, ZenFsLike } from '../sandbox/types.js';
 
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -18,10 +18,12 @@ export interface SessionHostOptions {
   maxFsBytes: number;
   /** Root prefix for per-session chroots. Default: /sessions */
   rootPrefix?: string;
+  /** Core version for `uname -r` in session shells (see src/version.ts). */
+  version?: string;
 }
 
 interface SessionEntry {
-  sandbox: Sandbox;
+  console: Console;
   lastUsed: number;
   busy: boolean;
 }
@@ -52,7 +54,10 @@ export class PodSessionHost {
 
   evictExpired(now = Date.now()): void {
     this.sessions.forEach((entry, id) => {
-      if (now - entry.lastUsed > this.options.ttlMs) this.sessions.delete(id);
+      if (now - entry.lastUsed > this.options.ttlMs) {
+        this.sessions.delete(id);
+        void entry.console.dispose();
+      }
     });
   }
 
@@ -80,12 +85,14 @@ export class PodSessionHost {
         entry = existing;
       } else {
         const ctx = core.bindContext({ root });
+        // A session is a pod-less console (D18): its own PID namespace, no
+        // global /proc (many sessions share this process).
         entry = {
-          sandbox: createSandbox({
+          console: openConsole({
             zfs: ctx.fs as unknown as ZenFsLike,
             executionLimitProfile: 'hardened',
             executionLimits: { maxFileSystemBytes: this.options.maxFsBytes },
-            identity: { kind: 'server', name: sessionId },
+            identity: { kind: 'server', name: sessionId, version: this.options.version },
           }),
           lastUsed: Date.now(),
           busy: false,
@@ -102,7 +109,7 @@ export class PodSessionHost {
     const finalEntry = entry;
     return {
       ok: true,
-      sandbox: entry.sandbox,
+      sandbox: entry.console.sandbox,
       release: () => {
         finalEntry.busy = false;
         finalEntry.lastUsed = Date.now();
@@ -132,6 +139,7 @@ export class PodSessionHost {
 
   /** Test helper: drop all sessions. */
   reset(): void {
+    for (const entry of this.sessions.values()) void entry.console.dispose();
     this.sessions.clear();
   }
 }

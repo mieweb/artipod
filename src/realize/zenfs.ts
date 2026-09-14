@@ -32,6 +32,7 @@ import { createSandboxTools } from '../agent/tools.js';
 import type { ToolHandler as AgentToolHandler } from '../agent/types.js';
 import { registerPodManifestProvider } from '../proc/pod-provider.js';
 import { registerProcProvider } from '../proc/registry.js';
+import { openNamespace } from '../proc/namespace.js';
 import { Keyring, makeKeysProcProvider } from '../manager/keyring.js';
 import { PodLocker } from '../manager/locker.js';
 import { AuditLog } from '../manager/audit.js';
@@ -160,7 +161,10 @@ export interface ZenFsPodOptions
   publish?: (target?: string) => Promise<string>;
   /** `artipod ps` rows — the app's background schedule (renewals, retries, delegations). */
   tasks?: () => import('../oci/command.js').PsTask[];
-  /** The session's process table: `ps` / `kill` in every shell, and a row per shell. */
+  /**
+   * Adopt a caller-owned process table instead of the pod creating its own
+   * (tests). The pod registers it under /proc but does not dispose it.
+   */
   processes?: import('../proc/processes.js').ProcessTable;
   /** `images` / `volumes` and `artipod images|volumes`: app-provided inventory. */
   inventory?: import('../proc/inventory.js').InventoryProviders;
@@ -246,6 +250,12 @@ export interface ZenFsPod {
   readonly hydrator?: Hydrator;
   /** Present when `sync.basis` opened at boot (sync plan Phase D). */
   readonly basis?: { ref: string; at: string };
+  /**
+   * The pod's PID namespace (D16/D18): pid 1 is the pod, every shell is a
+   * row, apps and tasks the host spawns join it; `ps` / `kill` / `/proc/<pid>`
+   * read from it. Torn down by `dispose()`.
+   */
+  readonly processes: import('../proc/processes.js').ProcessTable;
   /** Push the overlay's changes now (the auto-push path, awaitable). */
   pushBasis(): Promise<import('../manager/overlay-sync.js').OverlayPushResult | null>;
   /**
@@ -298,6 +308,13 @@ export async function createZenFsPod(
   const ociStore = new OciStore(zfs);
   await ociStore.init();
   const oci = { store: ociStore, transport: options.oci?.transport };
+  // pid 1 carries the identity name; mode lives in `uname -o`, not in `ps`.
+  const namespace = openNamespace({
+    name: options.identity?.name ?? ociStore.getSuperblock().podId,
+    processes: options.processes,
+    inventory: options.inventory,
+    proc,
+  });
   const snapshots = new SnapshotManager({
     zfs,
     store: ociStore,
@@ -452,6 +469,7 @@ export async function createZenFsPod(
     approvals,
     hydrator,
     basis,
+    processes: namespace.processes,
     pushBasis,
     agentLoopOptions(opts?: { autoSnapshot?: boolean }) {
       if (opts?.autoSnapshot === false) return {};
@@ -474,7 +492,7 @@ export async function createZenFsPod(
         zfs: shellZfs,
         events,
         proc: confineTo ? false : proc,
-        processes: options.processes,
+        processes: namespace.processes,
         inventory: options.inventory,
         identity: options.identity,
         cwd: confineTo ? '/' : defaultCwd,
@@ -531,6 +549,7 @@ export async function createZenFsPod(
       disposeProc?.();
       disposeKeysProc?.();
       disposeHydrationProc?.();
+      void namespace.dispose();
     },
   };
 }

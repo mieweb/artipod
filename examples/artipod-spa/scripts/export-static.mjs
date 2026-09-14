@@ -40,8 +40,10 @@ if (copiedVersion !== rootVersion) {
 
 let fullVersion;
 try {
+  // Same composition as core's coreVersion() — the serve compares the strings verbatim.
   const info = JSON.parse(await readFile(join(root, 'node_modules/@artipod/core/dist/buildinfo.json'), 'utf8'));
-  fullVersion = `${info.version ?? copiedVersion} (${info.commit ?? 'no-git'}, ${(info.date ?? '').slice(0, 10)})`;
+  const parts = [info.commit, info.date?.slice(0, 10)].filter(Boolean);
+  fullVersion = `${info.version ?? copiedVersion}${parts.length > 0 ? ` (${parts.join(', ')})` : ''}`;
 } catch {
   fullVersion = copiedVersion; // gitless source tarball
 }

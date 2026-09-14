@@ -9,7 +9,9 @@ import { configure, InMemory, fs as zfs, umount } from '@zenfs/core';
 import { PodEvents } from '../events.js';
 import { createSandbox, type Sandbox } from '../sandbox/index.js';
 import { FileBuffer } from './file-buffer.js';
-import { TerminalSession, commonPrefix, toCrLf } from './terminal-session.js';
+import { TerminalSession, commonPrefix, splitKeys, toCrLf } from './terminal-session.js';
+import { openConsole } from './console.js';
+import { getProvider } from '../proc/registry.js';
 import { TREE_ROOT_ID, TreeSource } from './tree-source.js';
 
 let sandbox: Sandbox;
@@ -45,6 +47,33 @@ describe('TerminalSession', () => {
     await session.handleData('\r');
     expect(io.out).toContain('hi\r\n');
     session.dispose();
+  });
+
+  it('splits pasted / piped chunks into keys and treats \\n as Enter (D18: one line discipline for stdin too)', async () => {
+    expect(splitKeys('ab\x1b[Ac\r\nd\n\x7f')).toEqual(['ab', '\x1b[A', 'c', '\r', 'd', '\r', '\x7f']);
+    const io = new FakeIO();
+    const session = new TerminalSession({ sandbox, io });
+    await session.handleData('mkdir sub\ncd sub\npwd\nfalse\n');
+    expect(io.out).toContain('/repo/sub\r\n');
+    expect(io.out).toContain('/repo/sub $ ');
+    expect(session.lastExitCode).toBe(1);
+    session.dispose();
+  });
+
+  it('exit / logout / Ctrl+D on an empty line call onExit when the host provides it', async () => {
+    const io = new FakeIO();
+    let exits = 0;
+    const session = new TerminalSession({ sandbox, io, onExit: () => exits++ });
+    await session.handleData('exit\r');
+    await session.handleData('logout\n');
+    await session.handleData('\x04');
+    await session.handleData('ec\x04'); // not empty — ignored
+    expect(exits).toBe(3);
+    session.dispose();
+    // without onExit the line goes to the shell (a browser tab has nowhere to go)
+    const plain = new TerminalSession({ sandbox, io: new FakeIO() });
+    await plain.handleData('exit\r');
+    plain.dispose();
   });
 
   it('help shows the version line when configured', async () => {
@@ -291,5 +320,40 @@ describe('sandbox events', () => {
     const r = await sandbox.exec('edit notes.md');
     expect(r.exitCode).toBe(0);
     expect(requested).toEqual(['/repo/notes.md']);
+  });
+});
+
+describe('openConsole (D18: a pod-less shell owns its namespace)', () => {
+  it('ps, uname, artipod and inventory come from one recipe; dispose unprojects /proc', async () => {
+    const console_ = openConsole({
+      zfs, proc: true, inventory: { images: async () => [{ ref: 'demo/app:1' }] },
+      identity: { kind: 'catalog', name: 'catalog', version: '9.9.9' },
+    });
+    const { sandbox: shell } = console_;
+    expect((await shell.exec('uname -a')).stdout).toMatch(/^artipod catalog 9\.9\.9 catalog console/);
+    expect((await shell.exec('ps')).stdout).toMatch(/1\s+0 init\s+running .* catalog\n\s+2\s+1 shell running .* bash/);
+    expect((await shell.exec('artipod images')).stdout).toMatch(/demo\/app\s+1/);
+    expect((await shell.exec('images --json')).stdout).toContain('"demo/app:1"');
+    expect((await shell.exec('ls /proc/images')).exitCode).toBe(0);
+    expect(getProvider('processes')).toBeDefined();
+    await console_.dispose();
+    expect(getProvider('processes')).toBeUndefined();
+    expect(getProvider('inventory')).toBeUndefined();
+  });
+
+  it('a later console wins the global /proc slot; the earlier owner cannot pull it out (server: many sessions)', async () => {
+    const a = openConsole({ zfs, proc: true, identity: { kind: 'server', name: 'a' } });
+    const b = openConsole({ zfs, proc: true, identity: { kind: 'server', name: 'b' } });
+    await a.dispose();
+    expect(getProvider('processes')).toBeDefined();
+    expect((await b.sandbox.exec('ps')).stdout).toContain(' b\n');
+    await b.dispose();
+    expect(getProvider('processes')).toBeUndefined();
+    // no /proc at all: still ps + uname, nothing registered globally
+    const c = openConsole({ zfs, identity: { kind: 'server', name: 'c', version: '1.2.3' } });
+    expect((await c.sandbox.exec('uname -r')).stdout).toBe('1.2.3\n');
+    expect((await c.sandbox.exec('ps')).exitCode).toBe(0);
+    expect(getProvider('processes')).toBeUndefined();
+    await c.dispose();
   });
 });

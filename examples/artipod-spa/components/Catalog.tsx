@@ -46,9 +46,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
       // its commands rescan the lists (fs:changed after every exec)
       try {
         const { fs } = await import('@/lib/filesystem');
-        const { createSandbox, makeConsoleArtipodCommand } = await import('@artipod/core/sandbox');
-        const { PodEvents: Events } = await import('@artipod/core/host');
-        const { ProcessTable, registerProcessTable, registerProcProvider, makeInventoryProvider } = await import('@artipod/core/proc');
+        const { PodEvents: Events, openConsole } = await import('@artipod/core/host');
         const { catalogInventory } = await import('@/lib/services/inventory');
         const { defineCommand } = await import('just-bash/browser');
         // The safe alternative to rm -rf: erases ONLY artipod state and
@@ -88,18 +86,15 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           if (timer) clearTimeout(timer);
           timer = setTimeout(() => void refreshLocal().then(refreshVerdicts), 300);
         });
-        // The catalog is its own (small) PID namespace: nothing runs here but
-        // this console, so `ps` is honest about it and `kill` has no targets.
-        const processes = new ProcessTable('catalog');
-        const unregisterProcesses = registerProcessTable(processes);
-        // images / lsblk / artipod images: the page's own rows, in the shell and under /proc
-        const inventory = catalogInventory();
-        const unregisterInventory = registerProcProvider(makeInventoryProvider(inventory));
-        const rootSandbox = createSandbox({ zfs: fs, cwd: '/', proc: true, events: consoleEvents, processes, inventory,
+        // A pod-less console (D18): its own small PID namespace (nothing runs
+        // here but this shell), images / volumes / artipod over the page's rows.
+        const rootConsole = openConsole({
+          zfs: fs, cwd: '/', proc: true, events: consoleEvents, inventory: catalogInventory(),
           identity: { kind: 'catalog', name: 'catalog', version: process.env.NEXT_PUBLIC_ARTIPOD_VERSION },
-          extraCommands: [factoryReset, makeConsoleArtipodCommand(inventory, processes)] });
-        disposeConsole = () => { rootSandbox.dispose(); unregisterProcesses(); unregisterInventory(); void processes.dispose(); };
-        setRootSandbox(rootSandbox);
+          extraCommands: [factoryReset],
+        });
+        disposeConsole = () => { void rootConsole.dispose(); };
+        setRootSandbox(rootConsole.sandbox);
       } catch {
         // fs init failed — no console
       }
