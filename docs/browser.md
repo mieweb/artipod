@@ -40,19 +40,22 @@ Snapshots are references (manifest + upper generation), so agent-turn auto-check
 - `dehydrate` evicts layer blobs under storage pressure but keeps indexes/placeholders; state in `/proc/hydration`, progress on `pod.events`.
 - On a LAN with a [site cache manager](linux.md#the-server-manager-), blob fetches hit the local cache first and fall back to WAN.
 
-## Ingest API 🔮 (Phase 7)
+## Ingest API ✅ first slice · 🔮 media (Phase 7)
 
-Files and media enter the pod programmatically; everything funnels into one `ObjectStream` machine (append → replicate → seal → OCI blob):
+Files and media enter the pod programmatically. Shipped today (`pod.ingest`, or `createIngest(zfs, events)` from `@artipod/core/sandbox` for a bare fs):
 
 ```ts
-await pod.put('/media/scan.pdf', file);                                   // File | Blob | bytes | ReadableStream
-await resp.body.pipeTo(pod.createWriteStream('/media/big.bin'));          // any WHATWG stream
-const rec = pod.recordMedia(mediaStream, '/inbox/visit-001.webm',
-                            { timesliceMs: 500 });                        // wraps MediaRecorder
-await rec.stop();                                                         // seal → digest → blob → snapshot
+const { path, size, digest } = await pod.ingest.put('/media/scan.pdf', file, { mime: file.type }); // Blob | File | bytes | string
+
+const w = pod.ingest.open('/inbox/visit-001.webm', { mime: 'video/webm' });                       // MediaRecorder timeslices
+recorder.ondataavailable = (e) => void w.append(e.data);                                          // appends are serialized
+recorder.onstop = async () => { const { digest } = await w.close(); };                            // seal → fs:changed
+// w.abort() discards the partial file
 ```
 
-Notes that save future grief: `getUserMedia` yields a `MediaStream` (tracks, no bytes — no `.getReader()`); `recordMedia` hides the MediaRecorder wiring. While open, the file is readable-as-written at its pod path and `pod.events` reflects growth. Chunk logs spill to OPFS with a bounded memory window; transfers resume from the last acked offset.
+Every chunk reaches the backend as it lands (a crashed tab keeps partial audio/video at its pod path; the file is readable-as-written), `close()` seals it and emits one precise `fs:changed` (`origin: 'ingest'`). `mime` is advisory — ZenFS has no xattrs — and is echoed back for adapters to record. Digests are SHA-256 of the sealed bytes (computed by re-reading on `close()`).
+
+Still design: `recordMedia(mediaStream, path, { timesliceMs })` wrapping the MediaRecorder itself, WHATWG `createWriteStream`, and one `ObjectStream` machine (append → replicate → seal → OCI blob) with chunk logs spilling to OPFS under a bounded memory window and transfers resuming from the last acked offset. Note that saves future grief: `getUserMedia` yields a `MediaStream` (tracks, no bytes — no `.getReader()`); the consumer owns the MediaRecorder until `recordMedia` lands.
 
 ## Devices 🔮 (Phase 7)
 

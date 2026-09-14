@@ -46,6 +46,8 @@ export { makeProcessCommands } from './process-command.js';
 export * from './storage.js';
 export { encryptedMount, type EncryptedFsOptions } from './encrypted-fs.js';
 export { encryptedStoreMount, type EncryptedStoreBacking, type EncryptedStoreMountOptions } from './encrypted-store.js';
+export { createIngest } from './ingest.js';
+export type { Ingest, IngestData, IngestOptions, IngestPutResult, IngestResult, IngestWriter } from './ingest.js';
 export { createGitOps, getAuthor, setAuthor, setCorsProxy, getCorsProxy } from './git.js';
 export type { GitOps, GitStatusResult, StatusEntry } from './git.js';
 export {

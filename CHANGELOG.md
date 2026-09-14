@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Ingest API, first Phase 7 slice** (#72): `pod.ingest.put(path, Blob | File | bytes | string, { mime })`
+  → `{ path, size, digest, mime }`, and `pod.ingest.open(path).append(chunk)` / `close()` /
+  `abort()` for MediaRecorder-style incremental writes (chunks land as they arrive, appends
+  are serialized, `close()` seals and emits one precise `fs:changed`). Also
+  `createIngest(zfs, events)` from `@artipod/core/sandbox` for a bare fs. New
+  `fs:changed` origin `'ingest'`. Docs: `docs/browser.md#ingest-api`.
+- **AgentPod layout as a shipped contract** (#72): `AGENT.md` (+ YAML front matter `name`,
+  `description`, `needs`, `model`), `skills/<name>/SKILL.md`, `tools/*.json`
+  (`McpToolDescriptor`). `@artipod/core/agent` exports `readAgentPod`, `writeAgentPod`,
+  `parseFrontmatter`, `serializeFrontmatter`, `parseToolFile`, `AGENT_POD_LAYOUT` and the
+  `AgentPod`/`AgentFrontmatter`/`SkillFrontmatter` types. Docs: `docs/agentpod.md`.
+
+### Changed
+
+- **`scripts/devlink.mjs` is opt-in** (#72): the post-build global `npm link` runs only with
+  `ARTIPOD_DEVLINK=1`; library consumers whose install triggers `prepare` no longer get a
+  global `artipod` link as a side effect. `ARTIPOD_NO_DEVLINK` still forces it off.
+- README gains an "Installing as a library" section documenting the exact peer pins
+  (`just-bash` 3.2.0, `@zenfs/core` 2.4.4, `@zenfs/dom` 1.2.5) and why.
+
 ## [0.11.0] - 2026-09-14
 
 ### Added

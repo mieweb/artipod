@@ -25,6 +25,7 @@ import { PodEvents } from '../events.js';
 import { ArtiMount } from '../artimount.js';
 import type { PodFs } from '../podfs.js';
 import { createSandbox, type CreateSandboxOptions } from '../sandbox/index.js';
+import { createIngest, type Ingest } from '../sandbox/ingest.js';
 import type { Sandbox, ZenFsLike } from '../sandbox/types.js';
 import { PodPathResolver, createPodFileTools } from '../tools/podFileTools.js';
 import type { ToolHandler } from '../tools/types.js';
@@ -259,6 +260,8 @@ export interface ZenFsPod {
   readonly namespace: import('../proc/namespace.js').Namespace;
   /** Shortcut for `namespace.processes`. */
   readonly processes: import('../proc/processes.js').ProcessTable;
+  /** Blob/stream entry into the pod (`put`, `open().append()`); emits `fs:changed`. */
+  readonly ingest: Ingest;
   /** Push the overlay's changes now (the auto-push path, awaitable). */
   pushBasis(): Promise<import('../manager/overlay-sync.js').OverlayPushResult | null>;
   /**
@@ -480,6 +483,7 @@ export async function createZenFsPod(
     basis,
     namespace,
     processes: namespace.processes,
+    ingest: createIngest(zfs, events),
     pushBasis,
     agentLoopOptions(opts?: { autoSnapshot?: boolean }) {
       if (opts?.autoSnapshot === false) return {};

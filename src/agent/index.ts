@@ -34,6 +34,25 @@ export type {
 export { LocalModelClient, webGpuAvailable } from './local/client.js';
 export type { LocalModelClientOptions } from './local/client.js';
 export {
+  AGENT_POD_LAYOUT,
+  parseFrontmatter,
+  parseToolFile,
+  readAgentPod,
+  serializeFrontmatter,
+  writeAgentPod,
+} from './agent-pod.js';
+export type {
+  AgentDefinition,
+  AgentFrontmatter,
+  AgentPod,
+  AgentPodFs,
+  AgentSkill,
+  AgentTool,
+  Frontmatter,
+  FrontmatterValue,
+  SkillFrontmatter,
+} from './agent-pod.js';
+export {
   CURATED_MODELS,
   DEFAULT_LOCAL_MODEL,
   listLocalModels,

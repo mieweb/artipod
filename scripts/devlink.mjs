@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// Dev convenience: after a build, make the global `artipod` command point at
-// this checkout (npm link), so `artipod serve` works instead of
-// `node dist/cli.js serve`. Skipped in CI and when already linked here;
-// failures (e.g. global-prefix permissions) warn but never break the build.
+// Dev convenience (OPT-IN): after a build, make the global `artipod` command
+// point at this checkout (npm link), so `artipod serve` works instead of
+// `node dist/cli.js serve`. Runs only with ARTIPOD_DEVLINK=1 — library
+// consumers whose install triggers our `prepare` build must never get a
+// global link as a side effect. Skipped when already linked here; failures
+// (e.g. global-prefix permissions) warn but never break the build.
 import { execSync } from 'node:child_process';
 import { lstatSync, readlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-if (process.env.CI || process.env.ARTIPOD_NO_DEVLINK) process.exit(0);
+if (process.env.ARTIPOD_DEVLINK !== '1' || process.env.CI || process.env.ARTIPOD_NO_DEVLINK) process.exit(0);
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -26,7 +28,7 @@ try {
     // not linked yet
   }
   execSync('npm link --no-audit --no-fund', { cwd: repoRoot, stdio: ['ignore', 'ignore', 'pipe'] });
-  console.log("devlink: global `artipod` now runs this checkout (set ARTIPOD_NO_DEVLINK=1 to opt out)");
+  console.log("devlink: global `artipod` now runs this checkout (unset ARTIPOD_DEVLINK to stop)");
 } catch (e) {
   console.warn(`devlink: npm link skipped (${e.message.split('\n')[0]}) — use \`node dist/cli.js\` or link manually`);
 }

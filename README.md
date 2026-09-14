@@ -210,8 +210,24 @@ Single package, ESM subpath exports (browser/node split via export conditions):
 @artipod/core/manager    pod hosting, PodStore, keyring, leases, policy
 @artipod/core/server     fetch-style hosting handlers: pod store, exec, git/OCI proxies (node-only)
 @artipod/core/oci        blob store, layer FS, snapshots, transports
+@artipod/core/apps       browser app runtime (SPA pods, admission, service worker)
 @artipod/core/docker     hardened Docker execution (node-only)
 ```
+
+### Installing as a library
+
+```sh
+npm install @artipod/core just-bash@3.2.0 @zenfs/core@2.4.4 @zenfs/dom@1.2.5 isomorphic-git fflate diff
+```
+
+The filesystem and shell peers are **exact pins** on purpose: `@zenfs/core` 2.4.4 and
+`just-bash` 3.2.0 are the versions the encrypted mounts, `/proc` reconcile and shell session
+recovery are verified against, and both projects have shipped behavior changes in patch
+releases. pnpm users with strict peers must match them exactly; a caret range will be
+restored once a compatibility test matrix exists. `dockerode` is an optional peer (node-only
+`/docker`). Building from a git checkout (`npx github:mieweb/artipod`, `file:` deps) runs
+`prepare` → build; the global `npm link` convenience is opt-in with `ARTIPOD_DEVLINK=1` and
+never runs otherwise.
 
 ## Security model in five lines
 

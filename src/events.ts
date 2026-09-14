@@ -24,7 +24,7 @@ export interface FsChangedEvent {
    * undefined = coarse "anything may have changed" (after a shell command).
    */
   paths?: string[];
-  origin: 'exec' | 'tool' | 'editor' | 'git' | 'agent' | 'external';
+  origin: 'exec' | 'tool' | 'editor' | 'git' | 'agent' | 'ingest' | 'external';
 }
 
 export interface EditRequestEvent {
