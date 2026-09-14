@@ -251,6 +251,13 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   await store.init();
 
   const identity = opts.keyless ? null : await readStoreIdentity(storeDir);
+  // --keyless over an encrypted layout is a BLIND HOST: ciphertext syncs, but
+  // no plaintext may be written beside it (the at-rest invariant holds
+  // without the key).
+  const blind = opts.keyless && (
+    (await stat(join(storeDir, 'store-id.json')).then(() => true, () => false)) || (await hasCiphertextBlobs(storeDir))
+  );
+  if (blind) store.enableBlindHost();
   let broker: { authority: Authority; podId: string; capTtlMs: number; dir: string; created: boolean } | null = null;
   if (!opts.keyless && (opts.encrypt || identity)) {
     const capTtlMs = opts.keyTtl ? parseKeyTtl(opts.keyTtl) : DEFAULT_KEY_TTL_MS;
@@ -406,6 +413,8 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
       `            authority ${tildify(broker.dir)}${broker.created ? ' (created)' : ''} · pod ${broker.podId} · lease cap ${opts.keyTtl ?? '1h'}\n`,
     );
     stdout.write(`            login: POST ${url}/api/keys/login → lease + KEK · /v2 is off while encrypted\n`);
+  } else if (blind) {
+    stdout.write(`  keys:     BLIND HOST (--keyless) — encrypted layout, no key here: ciphertext syncs byte-exact, plaintext writes are refused\n`);
   }
   if (relayHosts.length > 0) stdout.write(`  relay:    ${relayHosts.join(', ')}\n`);
   if (token || readToken) {

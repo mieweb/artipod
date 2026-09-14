@@ -221,6 +221,16 @@ describe('withCors', () => {
   });
 });
 
+describe('reserved runtime prefix', () => {
+  it('/_artipod/run/… is 404 even on the headless fallback path (never the landing page)', async () => {
+    const app = createArtipodApp({ store: new MemoryPodStore(), fallback: async () => json({ landing: true }) });
+    const res = await app(new Request(`${base}/_artipod/run/11111111-1111-4111-8111-111111111111/app/index.html`));
+    expect(res.status).toBe(404);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect((await app(new Request(`${base}/anything-else`))).status).toBe(200);
+  });
+});
+
 describe('staticTokenAuth matrix (S5)', () => {
   const auth = staticTokenAuth({ rw: () => 'rw-secret', ro: () => 'ro-secret' });
   const app = createArtipodApp({

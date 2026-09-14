@@ -404,47 +404,51 @@ export async function createZenFsPod(
   const autoPushOpt = options.sync?.autoPush;
   const debounceMs = typeof autoPushOpt === 'object' ? (autoPushOpt.debounceMs ?? 2000) : 2000;
   let pushTimer: ReturnType<typeof setTimeout> | null = null;
-  let pushing = false;
-  let pushQueued = false;
-  const pushBasis = async () => {
+  // One push at a time. A call during an in-flight push AWAITS it and then one
+  // follow-up push (changes that landed meanwhile) — so a close-time flush
+  // really flushes instead of returning null and re-arming a timer.
+  type PushResult = import('../manager/overlay-sync.js').OverlayPushResult | null;
+  let inflight: Promise<PushResult> | null = null;
+  let followUp: Promise<PushResult> | null = null;
+  let podDisposed = false;
+  const pushBasis = async (): Promise<PushResult> => {
     const remote = options.sync?.remote;
-    if (!basis || !hydrator || !remote) return null;
+    if (!basis || !hydrator || !remote || podDisposed) return null;
     if ((await import('../oci/settings.js').then((m) => m.readPodSettings(zfs))).offline) {
       events.emit('sync:push', { ref: basis.ref, ok: false, layers: 0, movedBytes: 0, error: "offline mode is on ('artipod offline off' to re-enable)" });
       return null;
     }
     const overlay = hydrator.overlays.get(basis.ref);
     if (!overlay) return null;
-    if (pushing) {
-      pushQueued = true;
-      return null;
+    if (inflight) {
+      followUp ??= inflight.then(() => { followUp = null; return pushBasis(); });
+      return followUp;
     }
-    pushing = true;
-    try {
-      const result = await pushOverlay({
-        store: ociStore,
-        zfs,
-        ref: basis.ref,
-        upperAt: overlay.upperAt,
-        deletions: hydrator.overlayDeletions(basis.ref),
-        actor,
-        remote,
-      });
-      if (result.pushed) {
-        events.emit('sync:push', { ref: basis.ref, ok: true, layers: result.overlayLayers, movedBytes: result.sync?.movedBytes ?? 0 });
+    const run = async () => {
+      try {
+        const result = await pushOverlay({
+          store: ociStore,
+          zfs,
+          ref: basis!.ref,
+          upperAt: overlay.upperAt,
+          deletions: hydrator.overlayDeletions(basis!.ref),
+          actor,
+          remote,
+        });
+        if (result.pushed) {
+          events.emit('sync:push', { ref: basis!.ref, ok: true, layers: result.overlayLayers, movedBytes: result.sync?.movedBytes ?? 0 });
+        }
+        return result;
+      } catch (e) {
+        console.warn(`artipod: overlay push for '${basis!.ref}' failed — ${(e as Error).message}`);
+        events.emit('sync:push', { ref: basis!.ref, ok: false, layers: 0, movedBytes: 0, error: (e as Error).message });
+        return null;
+      } finally {
+        inflight = null;
       }
-      return result;
-    } catch (e) {
-      console.warn(`artipod: overlay push for '${basis.ref}' failed — ${(e as Error).message}`);
-      events.emit('sync:push', { ref: basis.ref, ok: false, layers: 0, movedBytes: 0, error: (e as Error).message });
-      return null;
-    } finally {
-      pushing = false;
-      if (pushQueued) {
-        pushQueued = false;
-        schedulePush();
-      }
-    }
+    };
+    inflight = run();
+    return inflight;
   };
   const schedulePush = () => {
     if (pushTimer) clearTimeout(pushTimer);
@@ -546,6 +550,7 @@ export async function createZenFsPod(
       return tools;
     },
     dispose() {
+      podDisposed = true;
       if (pushTimer) clearTimeout(pushTimer);
       offAutoPush?.();
       // Unmount overlays — a later session must not read this one's stale view.

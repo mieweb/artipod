@@ -126,6 +126,24 @@ describe('blind host (keyless serve, zero broker code)', () => {
     const raw = (await zfs.promises.readFile(`/enc-store/blobs/sha256/${blobFile}`)) as Uint8Array;
     expect(isEncryptedBlob(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength))).toBe(true);
   });
+
+  it('a blind host (--keyless over an encrypted layout) accepts ciphertext writes and refuses plaintext ones', async () => {
+    await zfs.promises.mkdir('/blind-store', { recursive: true });
+    const writing = new OciLayoutPodStore(zfs.promises as unknown as PodFs, '/blind-store');
+    await writing.init();
+    writing.enableEncryption(await generateBlobKey());
+    await writing.putBlob(text('already here'));
+    const blind = new OciLayoutPodStore(zfs.promises as unknown as PodFs, '/blind-store');
+    blind.enableBlindHost();
+    await expect(blind.putBlob(text('plaintext beside ciphertext'))).rejects.toThrow('only ciphertext');
+    // what encrypted sync moves: an envelope addressed by its own digest
+    const files = (await zfs.promises.readdir('/blind-store/blobs/sha256')) as string[];
+    const cipherFile = files.find((f) => !f.endsWith('.alias'))!;
+    const raw = (await zfs.promises.readFile(`/blind-store/blobs/sha256/${cipherFile}`)) as Uint8Array;
+    const envelope = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+    await zfs.promises.unlink(`/blind-store/blobs/sha256/${cipherFile}`);
+    await expect(blind.putBlob(envelope)).resolves.toBe(`sha256:${cipherFile}`);
+  });
 });
 
 describe('/api/keys (broker surface)', () => {

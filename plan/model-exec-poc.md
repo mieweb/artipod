@@ -781,6 +781,30 @@ M0 started on 2026-09-05 at the owner's request. No phase gate is earned yet. Fo
   16. `/proc` refresh did O(images) `imageDetail()` before every command →
       cached per `ref@digest`, misses in parallel; `images -v` stays live.
   Gates: 661 core tests, `./apps` 19.4 KB, SPA green.
+- Third pass (09-14, 3 inline + 8 suppressed in the review body):
+  17. STOP/CONT while `unknown`/`error` → already covered by the EBUSY gate
+      (13); replied.
+  18. `--keyless` over an encrypted layout wrote plaintext beside ciphertext
+      → `OciLayoutPodStore.enableBlindHost()`: writes accept only
+      `APODENC1` envelopes; serve enables it when `store-id.json` or `.alias`
+      twins exist, banner says BLIND HOST.
+  19. Aborted line left the shell row `running` → exec() resets the row and
+      emits `exec:end` (130) on rejection.
+  20. SW update race (`skipWaiting`/`clients.claim` empties the session
+      map) → wait for installing/waiting to settle, grant to
+      `navigator.serviceWorker.controller`.
+  21. Headless fallback served the landing page at `/_artipod/run/…` →
+      reserved in `createArtipodApp` dispatch before UI/fallback (404,
+      no-store).
+  22. Boot push + immediate `schedule()` could overlap → interval armed by
+      `rearm` after the run completes.
+  23. `pod.dispose()` while a push is in flight → `pushBasis()` during an
+      in-flight push awaits it plus one follow-up (close-time flush really
+      drains); `dispose()` sets a flag so nothing re-arms; close() stops the
+      task before flushing.
+  Already fixed earlier: split escapes (14), slug collisions (15), cached
+  detail (16); SPA `inventory.ts:66` is bounded by the core cache.
+  Gates: 664 core tests, `./apps` 19.5 KB, SPA green.
 
 ### 2026-09-13 - MC follow-up: the namespace is the common object
 

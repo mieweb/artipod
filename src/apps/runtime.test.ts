@@ -40,14 +40,16 @@ describe('selected pod runtime', () => {
       port1 = new Port(); port2 = new Port();
       constructor() { this.port1.peer = this.port2; this.port2.peer = this.port1; }
     });
+    // the controller IS the active worker (settled registration); grants go to it
+    const active = { postMessage(message: { type: string }, ports?: Port[]) {
+      if (message.type === 'grant' && ports) {
+        grants.push(ports[0]);
+        if (acknowledge) ports[0].postMessage({ type: 'ready' });
+      }
+    } };
     vi.stubGlobal('navigator', { serviceWorker: {
-      controller: {}, ready: Promise.resolve(),
-      register: async () => ({ active: { postMessage(message: { type: string }, ports?: Port[]) {
-        if (message.type === 'grant' && ports) {
-          grants.push(ports[0]);
-          if (acknowledge) ports[0].postMessage({ type: 'ready' });
-        }
-      } } }),
+      controller: active, ready: Promise.resolve(),
+      register: async () => ({ active }),
     } });
     runtime = createBrowserRuntime(files, '/selected');
   });

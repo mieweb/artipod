@@ -177,7 +177,18 @@ export function createSandbox(opts: CreateSandboxOptions): Sandbox {
         if (opts.proc) notices.push(...(await refreshProc(opts.zfs)));
         history.push(line);
       }
-      const r = await runLine(line, execOpts);
+      let r: Awaited<ReturnType<typeof runLine>>;
+      try {
+        r = await runLine(line, execOpts);
+      } catch (error) {
+        // An aborted (Ctrl+C) line rejects: the shell row and the bus must
+        // still see it end, or `ps` reports this shell as running forever.
+        if (live) {
+          shellProcess?.update({ state: 'idle', detail: { cwd } });
+          opts.events?.emit('exec:end', { line, exitCode: 130, durationMs: Date.now() - startedAt });
+        }
+        throw error;
+      }
       if (live) {
         if (r.env) {
           const { BASH_HISTORY: _history, ...rest } = r.env;

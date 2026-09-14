@@ -202,6 +202,22 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string, opti
         }
         if (current !== generation || disposed) throw new Error('Launch cancelled');
         const registration = await deadline(navigator.serviceWorker.register(options.worker ?? '/artipod-runtime-sw.js', { scope: '/' }), 'Runtime worker registration');
+        // An updated worker (skipWaiting + clients.claim) replaces the active
+        // one with a fresh, empty session map: let the update settle first,
+        // then grant to the worker that actually controls this page.
+        const pending = registration.installing ?? registration.waiting;
+        if (pending) {
+          await deadline(new Promise<void>(resolve => {
+            const settled = () => {
+              if (pending.state === 'activated' || pending.state === 'redundant') {
+                pending.removeEventListener('statechange', settled);
+                resolve();
+              }
+            };
+            pending.addEventListener('statechange', settled);
+            settled();
+          }), 'Runtime worker update');
+        }
         if (!registration.active) await deadline(navigator.serviceWorker.ready, 'Runtime worker activation');
         if (!navigator.serviceWorker.controller) {
           await deadline(new Promise<void>(resolve => {
@@ -209,7 +225,7 @@ export function createBrowserRuntime(files: ApplicationFiles, root: string, opti
           }), 'Runtime worker control');
         }
         if (current !== generation || disposed) throw new Error('Launch cancelled');
-        worker = registration.active;
+        worker = navigator.serviceWorker.controller ?? registration.active;
         if (!worker) throw new Error('Runtime worker unavailable');
         session = crypto.randomUUID();
         const admitted = session;

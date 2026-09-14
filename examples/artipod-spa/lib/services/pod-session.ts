@@ -308,8 +308,10 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       void io.patch(route.id, { unsynced: false });
     }
   });
-  void scheduler.run(PUSH_TASK); // boot retry (offline session left work behind)
-  scheduler.schedule(PUSH_TASK, 15_000); // slow interval; re-armed after each run
+  // Boot retry (an offline session left work behind). The slow 15 s interval
+  // is armed by `rearm` below once this run has COMPLETED — scheduling here
+  // would flip the task to `scheduled` mid-run and let a second push overlap.
+  void scheduler.run(PUSH_TASK);
   const pushProcess = processes.spawn({ kind: 'task', name: PUSH_TASK, state: 'idle', signal: { TERM: () => {
     pushTerminated = true;
     scheduler.cancel(PUSH_TASK);
@@ -388,9 +390,13 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       runtime.dispose();
       window.removeEventListener('pagehide', stopPreview);
       const closing = (async () => {
+        // Nothing new may start pushing from here on; then flush.
+        pushTerminated = true;
+        scheduler.cancel(PUSH_TASK);
         // Flush-on-close (U5): a mid-flight or pending push finishes BEFORE the
-        // pod dies — the aborted-push residue from reload-navigation, fixed
-        // properly. Offline or ro: nothing to flush; the registry flag stands.
+        // pod dies — `pod.pushBasis()` awaits an in-flight push plus one
+        // follow-up, so this really drains. Offline or ro: nothing to flush;
+        // the registry flag stands.
         if (route.isRef && route.mode === 'rw' && !svc.forcedOffline) {
           try {
             const result = await pod.pushBasis();
@@ -405,7 +411,6 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         for (const off of offs) off();
         unsubBroker();
         rearm();
-        scheduler.cancel(PUSH_TASK);
         if (probeTimer) clearTimeout(probeTimer);
         // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
         // keys, hydration, the process namespace) unregister — the next

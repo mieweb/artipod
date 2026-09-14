@@ -136,6 +136,19 @@ describe('session state reconstruction across exec calls', () => {
     // Either shape is fine as long as the loop terminated promptly.
     expect(r).toBeTruthy();
   }, 10_000);
+
+  it('an aborted line still returns the shell row to idle (ps must not say running forever)', async () => {
+    const { openNamespace } = await import('../proc/namespace.js');
+    const namespace = openNamespace({ identity: { kind: 'test', name: 't' }, proc: false });
+    const shell = createSandbox({ zfs, namespace });
+    const controller = new AbortController();
+    const pending = shell.exec('while true; do :; done', { signal: controller.signal });
+    controller.abort();
+    await pending.catch(() => undefined);
+    expect(namespace.processes.list().find((p) => p.kind === 'shell')?.state).toBe('idle');
+    shell.dispose();
+    await namespace.dispose();
+  }, 10_000);
 });
 
 describe('human-shell polish (Phase 1.5)', () => {
