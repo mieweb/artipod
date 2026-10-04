@@ -1,0 +1,43 @@
+{
+  "name": "artipod-checkpoints",
+  "displayName": "Artipod Workspace Checkpoints",
+  "description": "Opt-in whole-workspace checkpoints for Ozwell Desktop's native Chat restore flow.",
+  "version": "0.1.0",
+  "publisher": "artipod",
+  "private": true,
+  "engines": { "vscode": "^1.100.0" },
+  "main": "./extension.js",
+  "extensionKind": ["workspace"],
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": { "supported": false }
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:_artipod.checkpoints.capture",
+    "onCommand:_artipod.checkpoints.restore",
+    "onCommand:_artipod.checkpoints.fork",
+    "onFileSystem:artipod"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Artipod Checkpoints",
+      "properties": {
+        "artipod.checkpoints.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "Use Artipod to checkpoint the complete local workspace for Ozwell Desktop Chat. Requires Ozwell's checkpoint core patch and a single trusted local folder. Includes terminal changes and all files, including Git metadata. Stop background writers before restoring."
+        }
+      }
+    },
+    "commands": [
+      { "command": "artipod.openMirror", "title": "Artipod: Open Active File in Workspace Mirror" }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "prepare-backend": "node scripts/prepare-backend.js",
+    "vscode:prepublish": "npm run prepare-backend"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@artipod/workspace-checkpoints",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Local content-addressed workspace checkpoint prototype",
+  "type": "module",
+  "types": "./src/checkpoints.d.ts",
+  "exports": {
+    ".": "./src/checkpoints.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
