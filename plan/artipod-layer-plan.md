@@ -1,0 +1,586 @@
+# artipod layer plan — making `artipod/` the single source of truth
+
+**Status**: Living implementation plan — the implementer updates this file as work proceeds (see §0)
+**Date**: 2026-08-30
+**Owner / Implementer**: horner (phase gates self-reviewed)
+**Supersedes / resolves**:
+- `just-bash-plan.md` §8 Q5 (package home) → **decided: fold into `mieweb/artipod`**
+- `plan-artipodSync.prompt.md` §5 (Git + LFS/CAS sync model) → **replaced by OCI layers** ([horner/artipod-sync#1](https://github.com/horner/artipod-sync/issues/1)); git remains for in-pod text repos
+
+## 0. How to work this plan (read me first)
+
+This file is the single source of truth for progress. You (the implementer) keep it current: check boxes, fill worklogs, flip the tracker. If the plan and reality disagree, **fix the plan in the same PR as the code** — never silently diverge.
+
+Read order: §1 (goal) and §6 (decisions already made) first; skim §2–§3 for the why/what; then work §4 phase by phase. Re-read the §3 subsection relevant to your current phase before starting it.
+
+**Initial scope: Phases 0–6.6.** Phase 7 (live streams) is designed but out of scope until 0–6.6 ship — do not start it without re-planning. The target-state system is documented in `docs/` + `README.md` (status-bannered ✅/🔮); when implementation diverges from a doc, fix the doc in the same PR.
+
+### Setup
+
+- Sibling checkouts expected next to this repo: `../just-bash`, `../ozwell-artipod`, `../ui` (read-only references — **never edit `../just-bash`**, it is upstream). The artipod-sync app lives **in this repo** at `examples/artipod-sync/` since the sync-demo-plan Phase A import (it was `../artipod-sync` during Phases 2–6.6; historical worklog references keep the old path).
+- Node 20 LTS baseline (`engines` requires ≥20 since Phase 1 — ZenFS needs the stable `globalThis.crypto`, absent on EOL Node 18). Docker running locally from Phase 3 on. npm publish access to the `artipod` org is needed only at first publish (ask first).
+- Baseline before touching anything: `npm ci && npm test` here **and** in `../artipod-sync` — record both results in the Phase 0 worklog.
+
+### Working rules
+
+1. **Order**: phases strictly 0 → 7; within a phase, top to bottom. Do not start phase N+1 until the phase-N gate commit is merged (or the owner explicitly approves overlap).
+2. **Branches**: one branch per phase, named as in the tracker. PRs target `mieweb/artipod` `main` (+ a consuming PR in `horner/artipod-sync` where the phase says so).
+3. **Commits**: small conventional commits (`feat(sandbox): …`, `test(oci): …`, `docs(plan): …`); roughly one per checked box. Checking a box happens **in the same commit** as the code that earns it.
+4. **Phase gate (required)**: when every box including *Done when* is checked — worklog updated, tracker row flipped — finish with a commit `docs(plan): phase N gate`. At minimum, this commit exists at every phase transition.
+5. **Verification**: never check a *Done when* box without running its check; paste the command + one-line result into the worklog.
+6. **Deviations**: small (file name, signature tweak) → edit the plan item + worklog note. Architectural (would change §3 or §6) → stop and get owner sign-off first.
+7. **Blocked?** After a genuine attempt, write the blocker into the worklog and raise it. Don't thrash silently.
+
+### Ask-first list (owner sign-off required)
+
+- npm publishes — owner runs them (or grants access): placeholder `@artipod/core@0.0.1` immediately (decided), first real `0.1.0` at the Phase 0 gate. Also owner-only: configuring npmjs **trusted publishing** for `@artipod/core` — the existing `.github/workflows/publish.yml` is set up for `@mieweb/artipod` and will fail on the renamed package until that's done.
+- Anything touching the deployed artipod-sync service (`deploy/artipod-sync.service`, prod env, default registry allowlists).
+- Deleting the re-export shims from artipod-sync (scheduled one release after Phase 2).
+
+### Phase tracker (keep current)
+
+| Phase | Branch | Status | PR |
+|---|---|---|---|
+| 0 — repo prep | `phase-0-esm-vitest` | done (owner npm actions pending) | [#33](https://github.com/mieweb/artipod/pull/33), [#34](https://github.com/mieweb/artipod/pull/34) |
+| 1 — fs injection | `phase-1-podfs-injection` | done | [#35](https://github.com/mieweb/artipod/pull/35) |
+| 2 — import sandbox/agent/proc | `phase-2-import-sandbox` | done (shim deletion + ui PR landing pending) | [#37](https://github.com/mieweb/artipod/pull/37)+[#38](https://github.com/mieweb/artipod/pull/38), [horner/artipod-sync#2](https://github.com/horner/artipod-sync/pull/2), [mieweb/ui#404](https://github.com/mieweb/ui/pull/404) |
+| 3 — manifest + realizers | `phase-3-manifest-realizers` | done | mieweb/artipod#39, [horner/artipod-sync#3](https://github.com/horner/artipod-sync/pull/3) |
+| 4 — OCI store | `phase-4-oci-store` | done | mieweb/artipod#40, [horner/artipod-sync#4](https://github.com/horner/artipod-sync/pull/4) |
+| 5 — snapshots + commit | `phase-5-snapshots` | done | mieweb/artipod#41, [horner/artipod-sync#5](https://github.com/horner/artipod-sync/pull/5) |
+| 6 — sync + manager | `phase-6-sync-manager` | done | mieweb/artipod#42, horner/artipod-sync#6 |
+| 6.5 — encryption & authority | `phase-6.5-authority` | done | mieweb/artipod#45 |
+| 6.6 — lazy hydration + site cache | `phase-6.6-hydration` | done | mieweb/artipod#46 |
+| 7 — live streams | `phase-7-live-streams` | stretch — out of initial scope | |
+
+### Reference map
+
+| You need | Where |
+|---|---|
+| just-bash `IFileSystem` contract + the contract test to mirror | `../just-bash/packages/just-bash/src/fs/interface.ts`, `interface.contract.test.ts` |
+| just-bash custom-command API (buffered ctx — why Phase 7 streams are host-side) | `../just-bash/packages/just-bash/src/custom-commands.ts` |
+| Sandbox/adapter/commands to move in Phase 2 | `../artipod-sync/lib/sandbox/` (+ its `*.test.ts`) |
+| Agent loop, clients, ONNX worker to move in Phase 2 | `../artipod-sync/lib/agent/` |
+| `/proc` provider framework to move in Phase 2 | `../artipod-sync/lib/proc/` + its `README.md` |
+| Session/proxy patterns to mine for `/manager` in Phase 6 | `../artipod-sync/lib/server/` |
+| Components to thin into `/host` shells in Phase 2 | `../artipod-sync/components/Terminal.tsx`, `Editor.tsx`, `FileTree.tsx` |
+| VS Code-schema tools + prompts (already in this repo) | `src/tools/`, `src/prompts/` |
+| Docker hardening that must not regress | `src/containerUtils.ts`, `src/containerRuntime.ts` (podman detection), `container/` |
+| OCI design source of truth (Phases 4–6) | [horner/artipod-sync#1](https://github.com/horner/artipod-sync/issues/1) |
+| Encryption, keyring, leases, offline grants, delegation (normative) | `docs/encryption.md` |
+| Agent confinement, sudo, approvals, admin policy (normative) | `docs/security-model.md` |
+| Runtime/isolate/console target-state docs | `docs/browser.md`, `docs/linux.md`, `docs/bash-isolate.md`, `docs/console.md` |
+| Verified just-bash session facts, security notes, upstream-PR candidates | `../artipod-sync/just-bash-plan.md` §5, §8, §10 |
+
+## 1. Goal
+
+`artipod/` (published as **`@artipod/core`** from the new `artipod` npm org; GitHub home stays `mieweb/artipod`) becomes the canonical **artipod layer**: a virtual-filesystem-centric pod abstraction with exactly three consumer surfaces:
+
+1. **AI reasoning** — context building (`buildPrompt`), VS Code-compatible tools, prompts, agent loop, all operating on the pod's virtual fs.
+2. **OCI revision control** — pod contents are OCI image/volume layers + a writable upper; snapshots, checkout, diff, commit per issue #1.
+3. **Browser ↔ server synchronization** — commit/push/pull of OCI layers through pluggable transports; the same layer code runs in both runtimes.
+
+`artipod-sync` stays a Next.js **app** (terminal, editor, tree, agent panel, storage UI, server routes) consuming `@artipod/core`. `ui/` becomes the second consumer (Phase 6 of just-bash-plan).
+
+## 2. Where the two repos stand today (difference review)
+
+| Concern | `artipod/` (`@mieweb/artipod`, branch `feature/vscode-tool-compatibility`) | `artipod-sync/` (horner, main) | Convergence direction |
+|---|---|---|---|
+| FS substrate | Direct `node:fs.promises` inside `ArtiMount` | ZenFS (IndexedDB / OPFS / memory) + `ZenFsAdapter` → just-bash `IFileSystem` | Inject a node-shaped promises fs into `ArtiMount`; ZenFS provides it in browser/server-virtual, `node:fs/promises` on real disk |
+| Mount model | `ArtiMount(name, rootPath)`; `ArtiPod` = `Map<string, ArtiMount>` | Single ZenFS `/` mount (+ `/proc`, `/sessions/<id>` server-side) | Declarative **pod manifest** (mount table) realized per runtime; mount paths are app/harness-chosen (Decision #3) — docker's `/context/<name>` survives as that realizer's default template |
+| Execution | Docker via dockerode (seccomp, CapDrop ALL, ReadonlyRootfs, tmpfs, limits) | just-bash sandbox (`lib/sandbox/`), execution limits, browser + Node | Two execution backends of one pod: `just-bash` (everywhere), `docker` (Node + real dirs). Later: container2wasm via 9P (issue #1) |
+| AI tools | VS Code-schema tools: `read_file` (V1/V2), `create_file`, `list_dir`, `create_directory`, `replace_string_in_file`, `multi_replace_string_in_file`, `apply_patch`; `ToolRegistry`; OpenAI defs | `bash`, `read_file`, `write_file`, `list_files`; OpenAI **and** MCP serializers; 16 KiB truncation | artipod's schemas win (VS Code-trained models); add `bash` tool; adopt dual serializers + truncation from sync |
+| Prompts / context | `buildPrompt()` XML context; `AGENT_INSTRUCTIONS`, `TOOL_USE_INSTRUCTIONS`, … | Ad-hoc system prompt in AgentPanel | artipod prompts + `buildPrompt` are the AI-reasoning surface for both |
+| Agent loop | None (templates only) | `ToolCallingLoop`, `OzwellClient`, local ONNX (`lib/agent/local/`, WebGPU worker) | Move loop + clients into the artipod layer |
+| Revision control | None | git (isomorphic-git): clone→push incl. PAT auth | git stays as an **in-pod** tool for repos; **pod-level** revision control = OCI snapshots (issue #1) |
+| Sync | None | `components/wtf.md` sketch: client/server pod sync via git remote | OCI transports: direct registry, self-hosted proxy, OCI layout import; layers pushed/pulled, not files |
+| Host-state introspection | None | `/proc` provider framework (`lib/proc/`), `lsmod`/`modprobe` | Move under the artipod layer (pod introspection for humans *and* models) |
+| Server surface | `examples/web-demo` (Express + SQLite demo) | `/api/exec` (session sandboxes, hardened limits), `/api/git` CORS proxy | Routes stay app-level in artipod-sync; logic (`lib/server/`) moves or stays thin |
+| Tests | Jest + ts-jest | Vitest (contract tests for adapter, sandbox, git, proc, agent, server) | **Vitest** for the merged package (ESM + browser parity) |
+| Packaging | Single CJS-ish package → `dist/` | Next app, `@/lib` path alias | `@artipod/core` with **ESM subpath exports**; node-only code isolated (`/docker`) |
+| Repo/org | `mieweb/artipod` | `horner/artipod-sync` | Code moves via PRs into `mieweb/artipod` |
+
+### Known collisions to resolve deliberately
+
+1. **`read_file` schema collision** — artipod's VS Code shape (`filePath`+`startLine/endLine` or `offset/limit`) vs sync's minimal shape. Keep artipod's; delete sync's on migration (its `bash`/truncation behavior is the part worth keeping).
+2. **`ToolRegistry` is single-mount** — constructed with one `ArtiMount`; sync tools are sandbox-cwd-relative. Needed: pod-level registry resolving paths against each mount's declared root — no fixed prefix scheme (Decision #3).
+3. **Result envelopes differ** — artipod returns structured `ToolResult` objects; sync tools return LLM-ready strings. Keep structured results as the source of truth + serializers (OpenAI string / MCP content) on top.
+4. **Docker cannot bind virtual mounts** — a browser pod's IndexedDB-backed fs can't bind-mount into a container. That's not a bug: it's use case 3 (sync to server first, then execute with the docker backend). Document as an explicit constraint of the docker realizer.
+5. **jest → vitest** and **CJS → ESM**: `examples/web-demo` consumes the package via `file:`; it retires to `attic/` in Phase 0. `examples/mcp-server` (added upstream, also `file:../..`) is already `"type": "module"` so the ESM flip helps it — but rebuild it to confirm; `examples/basic` imports `../../src` via ts-node and needs a tsx-era equivalent.
+6. **Version pinning** — `artipod-sync` uses `@zenfs/core ^2.3.11`, `@zenfs/dom ^1.0.0`, `just-bash ^3.2.0`. ZenFS backend API (needed for `OciLayerFS`/`OciViewFS`) is version-sensitive: pin exact versions in `@artipod/core` peerDeps before Phase 4.
+
+### 2026-08-30 addendum — upstream moved before Phase 0 started
+
+The table above describes the repos as of the plan's writing (artipod branch `feature/vscode-tool-compatibility`). Before Phase 0 began, `mieweb/artipod` `main` absorbed that branch (PR #8, **rebased** — same messages, new SHAs; remote branch deleted) plus ~40 more commits, releasing **v0.3.1**. New on main and not reflected above:
+
+- **Podman support** (`src/containerRuntime.ts`): automatic docker/podman detection (`detectRuntime`; machine/rootful/rootless modes).
+- **Read-only mounts**: `new ArtiMount(name, root, readonly)` → bind-mounted `:ro`.
+- **Main mount (breaking ctor change)**: `ArtiPod` now takes an options object; `useMainMount` defaults true and auto-creates a writable `main` mount under `workspaceDir`; `initialize()` is part of the lifecycle.
+- **`run_in_terminal` tool** added to the VS Code-schema tool set (`src/tools/podTools.ts`, `PodToolRegistry`).
+- **`examples/basic` + `examples/mcp-server`** (Hono-less MCP stdio server on `@modelcontextprotocol/sdk`, `file:../..` dep, already ESM).
+- **CI exists**: `.github/workflows/nodejs.yml` (lint/build/jest/coverage on Node 18+20, docker tests included) and `publish.yml` (npm trusted publishing for `@mieweb/artipod` on release).
+- Baseline moved: **161** jest tests (was 116).
+
+Nothing upstream contradicts the convergence direction — podman/ro-mounts/main-mount slot into the docker realizer + manifest work (Phase 3), `run_in_terminal` joins the tool surface Phase 1 rationalizes. Phase 0 items below were adjusted in place; the plan/docs landed via `docs/layer-plan-landing` instead of the original merge step.
+
+## 3. Target architecture
+
+```mermaid
+graph TB
+    subgraph Manifest["Pod manifest (declarative)"]
+        MAN["root image? + mounts[]<br/>{name, path, source, mode: ro|cow|rw}"]
+    end
+
+    subgraph Realizers
+        RZ[realizeZenFs — browser + Node]
+        RD[realizeDocker — Node, real dirs]
+    end
+
+    subgraph ZenGraph["ZenFS graph (per pod)"]
+        OCI[".artipod/oci blob store<br/>(manifests, layers by digest)"]
+        LFS[OciLayerFS — one layer, ro]
+        VIEW[OciViewFS — ordered layers,<br/>whiteouts, opaque dirs]
+        COW[ZenFS CopyOnWrite upper<br/>(the writable workspace)]
+        IDB[(IndexedDB / OPFS / memory / disk)]
+    end
+
+    subgraph Layer["artipod layer (@artipod/core)"]
+        CORE[core: ArtiPod, ArtiMount(fs-injected)]
+        TOOLS[tools: VS Code-schema + bash<br/>OpenAI + MCP serializers]
+        PROMPTS[prompts + buildPrompt]
+        SBX[sandbox: just-bash + ZenFsAdapter<br/>+ git/edit/storage/module cmds]
+        AGENT[agent: ToolCallingLoop,<br/>Ozwell + local ONNX clients]
+        PROC[proc: /proc providers]
+        OCIM[oci: store, snapshots,<br/>commit, transports]
+        DOCKER[docker: containerUtils<br/>(node-only entry)]
+    end
+
+    subgraph Consumers
+        SYNCAPP[artipod-sync (Next app):<br/>Terminal, Editor, Tree, AgentPanel,<br/>/api/exec, /api/git, /api/oci]
+        UI[ui/src/components/AI]
+        DEMO[examples/web-demo]
+    end
+
+    MAN --> RZ --> COW
+    MAN --> RD
+    VIEW --> COW
+    LFS --> VIEW
+    OCI --> LFS
+    COW --> IDB
+    CORE --> MAN
+    SBX --> COW
+    TOOLS --> CORE
+    AGENT --> TOOLS
+    OCIM --> OCI
+    SYNCAPP --> Layer
+    UI --> Layer
+    DEMO --> Layer
+```
+
+Design rules carried over (unchanged):
+
+- **One store, coherent views** — shell, git, tools, editor, tree all see the same ZenFS graph.
+- **`lib/sandbox`-style framework-freedom** — nothing in the layer imports React/Next/`window` at module top level.
+- **git is a trusted host command**, outside just-bash's network firewall; PATs never live in the sandbox fs.
+- **Container hardening posture** (seccomp, CapDrop, ReadonlyRootfs) is unchanged for the docker backend.
+
+### Package layout (subpath exports, ESM)
+
+```
+@artipod/core            core: ArtiPod, ArtiMount, manifest types, pod events (isomorphic)
+@artipod/core/tools      tool registry, VS Code-schema tools, bash tool, serializers
+@artipod/core/prompts    templates + buildPrompt helpers
+@artipod/core/sandbox    just-bash sandbox, ZenFsAdapter, custom commands, storage backends
+@artipod/core/agent      loop, clients (ozwell, local ONNX), tool bindings
+@artipod/core/proc       /proc provider framework
+@artipod/core/host       headless UI controllers: TerminalSession, FileBuffer, TreeSource
+@artipod/core/console    Ctrl+~ drop-in overlay console (docs/console.md)
+@artipod/core/manager    PodStore + pod/session hosting + keyring/leases/policy (Phases 6–6.5)
+@artipod/core/oci        blob store, layer index, OciLayerFS, OciViewFS, snapshots, transports
+@artipod/core/docker     containerUtils (node-only; never imported by browser entries)
+```
+
+Single package with subpaths (like `@mieweb/ui/kerebron`) rather than a monorepo — fewer moving parts, one version, and the browser/node split is handled by export conditions. Scope: the `artipod` npm org (created 2026-08-30); `@artipod/core` mirrors the `@zenfs/core` convention, and issue #1's satellites (`@artipod/oci-9p`, `@artipod/container2wasm`) become sibling packages when they materialize. Revisit the single-package call only if `oci` grows a wasm dependency.
+
+### Browser UI surfaces — headless core, thin shells
+
+The terminal window, editor, and file navigation do **not** move into the package as React components. The package ships framework-free controllers (`/host`); apps keep thin `'use client'` shells. Today all three artipod-sync components embed reusable logic in React and wire coherence by hand (FileTree's manual Refresh button, Editor blind to shell-made changes, Terminal's `registerWriter` hand-off for agent echo) — that logic is what gets extracted.
+
+**The unifier: pod events (core).** `pod.events` emits `exec:start` / `exec:end` (rides the existing `createSandbox` `beforeExec`/`afterExec` hooks, same slot `/proc` uses), `fs:changed` (from tool writes, `FileBuffer.save`, git ops; plus a coarse invalidate after every `exec:end`, since bash can touch anything), `edit:request` (generalizes the current `onEdit` callback), `agent:tool-call` (replaces `registerWriter`), and later `snapshot:*` / `sync:*`. Do **not** rely on ZenFS `fs.watch` — command-boundary invalidation is the contract.
+
+| Surface | Headless in `/host` | Stays in the app (artipod-sync now, `ui` bindings in Phase 2's Storybook proof) |
+|---|---|---|
+| Terminal | `TerminalSession`: line discipline (buffer, history ↔ `BASH_HISTORY`, common-prefix tab completion via `sandbox.complete()`, Ctrl+C abort, prompt from cwd, `\n`→`\r\n` normalization). I/O contract: `handleData(data)` in, `write(text)` out — anything xterm-shaped satisfies it; tests use a fake | xterm instantiation, addons (fit, web-links), theme, banner, the `<div ref>` |
+| Editor | `FileBuffer`: `open(pod, path)` → content, `save()`, `isDirty`, external-change detection (subscribe `fs:changed` for own path → reload-if-clean / warn-if-dirty), language-from-extension helper. Editor-agnostic: Monaco here, kerebron RichEditor or CodeMirror in `ui` | Monaco (`@monaco-editor/react`), save/close chrome, dirty dot, error banner |
+| File nav | `TreeSource(pod)`: `getItem(path)` / `getChildren(path)` + `onDidChange` invalidation from `fs:changed` — structurally matches react-complex-tree's `TreeDataProvider` (incl. its change-listener slot) without importing its types. Roots come from the pod manifest (each mount's declared `path`), not a hardcoded `/repo` | react-complex-tree environment, styling, selection → `edit:request` |
+
+App-level concerns that stay out of the package entirely: Next SSR guards (`dynamic(…, { ssr: false })` for xterm/Monaco — `/host` itself must stay import-safe in Node for tests), URL deep-linking (e.g. `?file=/context/src/x.ts` — pod-relative paths make links shareable across browser/server pods), tab layout, and the multi-tab read-only mode (UI must respect `isPrimaryTab` from storage init; controllers should accept a `readOnly` flag so Editor/Tree disable mutations in secondary tabs).
+
+### Security & authority model (normative detail in docs/)
+
+Four rules, specified fully in [../docs/encryption.md](../docs/encryption.md) and [../docs/security-model.md](../docs/security-model.md):
+
+1. **Ciphertext at rest, keys on lease.** Layers *and* the writable upper are chunked-AEAD encrypted; usable KEKs live only in a memory keyring under a TTL lease (`/proc/keys` shows expiries). Lock = key evaporates; login restores. Offline = signed device-wrapped grants (e.g. 24 h) with ceremony-gated unlock.
+2. **Authority is a certificate chain.** Home base can delegate scoped, offline-verifiable authority to site/ship/station managers (lease issuance, grant validation, policy enforcement) — this is what makes the rig/interplanetary/relay profiles work; relays can stay blind (ciphertext only, digests verify end-to-end).
+3. **The agent is confined to its pod; `sudo` is the only escape.** Privileged verbs raise `approval:request`; a human must approve; the human's approval only counts if signed admin policy grants them the approver role; banned classes fail EPERM without prompting; approvals mint scoped TTL capabilities; everything audited into pod provenance. For agents this boundary is *real* (they act only through the tool layer); for humans it is ceremony + cryptography — never claim more.
+4. **Encryption is per-pod opt-in from Phase 4, default off until 6.5** — core phases never block on crypto.
+
+## 4. Phases
+
+Each phase = one reviewable PR series into `mieweb/artipod` (+ a consuming PR in `horner/artipod-sync` where noted). Phases run strictly in order and each ends with the gate commit from §0. Every phase has a **Done when** checklist (run the check, then tick) and a **Worklog** (append dated notes: decisions, deviations, gotchas, verification output).
+
+### Phase 0 — Decisions + repo prep
+
+> **Branch** `phase-0-esm-vitest` · **Status** _not started_
+
+- [x] **Decided — do first:** ~~PR + merge `feature/vscode-tool-compatibility` → `main`~~ Overtaken by events: upstream already merged it (PR #8, rebased) and `main` moved to v0.3.1 — see §2 addendum. Replacement action done instead: cherry-picked the two plan/docs commits onto `docs/layer-plan-landing` (README conflict resolved per Decision #11 — target-state README kept, v0.3.1 README archived as `attic/v0.3-node.README.md`, quick-start updated to the options-object API) → PR → `main`. `phase-0-esm-vitest` branches from that updated `main`.
+- [x] Ratify decisions: repo home = `mieweb/artipod`, npm name = **`@artipod/core`** (org created 2026-08-30); ESM + subpath exports; vitest replaces jest; exact-pin `just-bash` (3.2.0), `@zenfs/core` (2.4.4), `@zenfs/dom` (1.2.5) as peer deps matching artipod-sync's lockfile — added as **optional** peerDependencies (deviation: optional until `/sandbox` code actually consumes them in Phase 2, so plain node consumers aren't forced to install ZenFS).
+- [x] Add the missing `LICENSE` file (MIT, matching package.json), fill `author` (Medical Informatics Engineering, LLC); also added `repository`/`homepage`/`bugs` fields — npm provenance via the existing trusted-publishing workflow requires the repository match.
+- [ ] Owner publishes the `@artipod/core@0.0.1` placeholder to reserve the name (ask-first — flagged to owner; trusted-publishing config for the new name is also owner-side).
+- [x] Convert `artipod/` build to **pure ESM** with `exports` map (no dual CJS build); migrate jest specs to vitest (mechanical: `jest.fn` → `vi.fn`) — in practice zero `jest.*` calls existed; the whole migration was import extensions + config.
+- [x] Retire `examples/web-demo` to `attic/` — superseded by the Phase 6 north-star demo (browser demo pod → clone → push/pull to server → snapshot/compact). `examples/basic` + `examples/mcp-server` stay but must survive the ESM flip (mcp-server: rebuild against the ESM package; basic: ts-node → tsx or node --import).
+- [x] CI: convert `.github/workflows/nodejs.yml` from jest to vitest (keep lint/build/coverage lanes) — conversion is transitive: the workflow invokes `npm test`/`npm run test:coverage`, whose scripts now run vitest; workflow file unchanged. `publish.yml` left pointed at the renamed package; do **not** cut a release until the owner configures trusted publishing for `@artipod/core` (ask-first). Add a browser-ish lane later (Phase 2) via vitest + happy-dom or Playwright.
+
+**Done when:**
+
+- [x] `npm test` green under vitest/ESM (same suites that passed under jest — no skipped tests without a worklog note) — verified: 5 files / **161 tests** passed, 0 skipped (same count as jest baseline)
+- [x] Built output is ESM with an `exports` map; importing the built package from a scratch `node` ESM script works — verified: `/tmp/artipod-esm-smoke` installs the package and imports `@artipod/core` + `/tools` + `/prompts` subpaths
+- [x] `examples/web-demo` moved to `attic/`; README points at the Phase 6 north-star demo — verified: `examples/README.md` web-demo section now points at `attic/web-demo` + the plan's Phase 6 demo
+- [x] CI runs vitest on push — verified: PR #34 checks green on Node 18.x + 20.x (≈2m40s each; nodejs.yml unchanged — its `npm test`/`npm run test:coverage` steps now invoke vitest)
+
+**Worklog:**
+
+- 2026-08-30 — handoff baseline (§0 setup, recorded pre-work): artipod `npm test` → Jest, 5 suites / 116 tests green (incl. Docker container tests, Docker running); artipod-sync `npm test` → Vitest, 10 files / 101 tests green.
+- 2026-08-30 — pre-phase reconciliation: found upstream had merged `feature/vscode-tool-compatibility` (PR #8, rebased SHAs) and advanced `main` to v0.3.1 (§2 addendum: podman, ro-mounts, main-mount breaking ctor, `run_in_terminal`, examples/basic+mcp-server, CI+publish workflows). Cherry-picked 7c75e8e + 6353955 onto `docs/layer-plan-landing`; only conflict was README.md, resolved per Decision #11 (target-state kept; v0.3.1 README → `attic/v0.3-node.README.md`; quick-start rewritten for the options-object ctor + podman mention).
+- 2026-08-30 — re-baseline on reconciled branch (= main v0.3.1 + docs): `npm ci && npm test` → jest 5 suites / **161 tests** green, 38.9s (Docker 29.4.0 up; node v22.18.0 / npm 10.9.3; engines ≥18 satisfied).
+- 2026-08-30 — ESM conversion: `type: module`, tsconfig → `module/moduleResolution NodeNext`, `target ES2022`, `types [node, vitest/globals]`; 55 relative imports given `.js` extensions (54 from the grep sweep + one type-only `import('./artimount')` in types.ts that TS2835 caught); directory imports `./tools`/`./prompts` → explicit `/index.js`. Zero CJS-isms existed in src (no `__dirname`/`require`).
+- 2026-08-30 — package identity: `@artipod/core@0.1.0`, exports map (`.`, `./tools`, `./prompts`, `./package.json`), `repository`/`homepage`/`bugs` added (trusted-publishing provenance needs the repository match), author = Medical Informatics Engineering, LLC, LICENSE (MIT) added. Peers exact-pinned from artipod-sync lockfile: just-bash 3.2.0 / @zenfs/core 2.4.4 / @zenfs/dom 1.2.5, marked optional (see item note).
+- 2026-08-30 — vitest migration: jest.config.js deleted; vitest.config.ts with `globals: true`, node env, v8 coverage (text/lcov/html → `coverage/`). Specs used zero `jest.*` APIs; per-test `120000` timeout third-args carry over 1:1 (vitest hookTimeout default 10s ≥ jest's 5s). Verification: `npm run lint` clean, `npm run build` clean, `npm test` → **161/161** in 36.2s, `npm run test:coverage` → lcov.info 38 KB written.
+- 2026-08-30 — examples: `examples/web-demo` → `attic/web-demo` (`.gitignore` gained attic equivalents of the examples ignores); `examples/mcp-server` reinstalled + rebuilt against the ESM package, `import('artipod')` resolves; `example:basic` script switched ts-node → tsx (runs the full demo incl. a container start — note: first `npx tsx` run prompts interactively to install tsx). CI workflow untouched by design: script names are stable, so nodejs.yml now runs vitest transitively; publish.yml untouched — owner must configure npmjs trusted publishing for `@artipod/core` before any release.
+- 2026-08-30 — phase 0 gate (PR #34, CI green both Node lanes). Deviation, rule 6: gate taken with one box open — the owner-side `@artipod/core@0.0.1` placeholder publish (+ trusted-publishing config). It is an npm-side action that doesn't gate Phase 1 code; flagged to owner in the PR body and directly.
+
+### Phase 1 — Make the core isomorphic (fs injection)
+
+> **Branch** `phase-1-podfs-injection` · **Status** _not started_
+
+The one structural refactor everything else depends on. `ArtiMount` already uses only the `fs.promises` shape — ZenFS exposes exactly that.
+
+- [x] Define `PodFs` = minimal node-shaped promises interface (readFile, writeFile, mkdir, readdir(+withFileTypes), stat, rm, rename) in core (`src/podfs.ts`; lstat deferred until something needs symlink awareness).
+- [x] `ArtiMount` takes `fs: PodFs` (4th constructor param; `nodePodFs()` default keeps existing callers working — deviation: the default lives in artimount.ts via static import rather than a separate node entry; the browser/node export-condition split arrives with Phase 2/3). Bonus: boundary-exact traversal guard (`/a` no longer admits `/aX`), `write()` widened to `Uint8Array`, docker code isolated under `src/docker/` with a `./docker` subpath export.
+- [x] Pod-level `ToolRegistry`: `PodToolRegistry` now accepts a declarative `mountTable` (`{path, mount}[]`, absolute app-chosen paths, longest-prefix resolution, virtual directory listings above mount points, apply_patch header rewriting confined to a single mount) — core enforces no prefix scheme (Decision #3); `MountToolRegistry` stays as the single-mount sugar.
+- [x] Add `bash` tool (schema + truncation semantics ported from `artipod-sync/lib/agent/tools.ts`) — execution delegated to an injected `BashExecutor` (`containerBashExecutor(pod)` default until the Phase 2 sandbox lands).
+- [x] Port the OpenAI + MCP dual serializers onto artipod's `ToolDefinition`s (`toOpenAiTools` / `toMcpTools`).
+- [x] Contract test: the full tools suite runs twice — over `node:fs/promises` (tempdir) and over ZenFS `InMemory` — same assertions (`src/__tests__/contract.spec.ts`, `describe.each` over the two providers).
+
+**Done when:**
+
+- [x] One shared contract suite for tools + `buildPrompt` runs twice — over `node:fs/promises` (tempdir) and over ZenFS `InMemory` — with identical assertions, green — verified: vitest 197/197, contract suite runs `describe.each` over both providers
+- [x] `buildPrompt` output byte-identical across both fs implementations (fixture snapshot) — verified: `toBe` across providers + snapshot written to `__snapshots__/contract.spec.ts.snap`
+- [x] `grep -rn "node:fs\|from 'fs'" src/` shows **import** hits only in `src/docker/`, the `nodePodFs` adapter, and the docker-backend spec (`containerExecution.spec.ts`, which exercises chmod-dependent container behavior); remaining textual hits are doc comments — wording amended per rule 6
+- [x] `bash` tool schema + 16 KiB truncation behavior covered by ported tests — verified: truncation head/tail/marker tests + JSON content body + schema shape in contract.spec.ts
+
+**Worklog:**
+
+- 2026-08-30 — implemented in one PR (#35): podfs.ts + nodePodFs.ts; ArtiMount/ArtiPod fs injection (auto main mount inherits pod fs); containerUtils/containerRuntime → src/docker/ (+ `./docker` export); PodToolRegistry mountTable (longest-prefix resolver, virtual dirs above mounts, cross-mount multi_replace per-owning-mount, apply_patch single-mount header rewrite); bash tool + BashExecutor (container default); serializers; contract suite (node tempdir × ZenFS InMemory) + buildPrompt snapshot. @zenfs/core 2.4.4 devDep (peer already pinned in Phase 0).
+- 2026-08-30 — security fix en route: ArtiMount traversal guard was prefix-sloppy (`resolved.startsWith(rootPath)` admits `/rootX`); now boundary-exact with a pinned contract test on both backends.
+- 2026-08-30 — tools.spec updated: PodToolRegistry now always carries `bash` alongside `run_in_terminal` (2 tools); zero other spec changes beyond import extensions/adapters.
+- 2026-08-30 — verification: `tsc --noEmit` clean; lint clean; vitest **197/197** (was 161 — +36 contract/truncation/serializer/resolver tests); build clean.
+- 2026-08-30 — post-merge CI fix (`fix/node-20-baseline`, PR #36): PR #35's CI failed only on the **Node 18** lane — `@zenfs/core` polyfills read `globalThis.crypto.randomUUID` at import, which EOL Node 18 lacks; Node 20's tests passed (its job died on fail-fast cancellation of the coverage step). Matrix now 20.x + 22.x, `engines` ≥20. Process note: PR #35 was merged while checks were red because a `| tail` pipe swallowed the checks-watch exit code — don't pipe `gh pr checks --watch`; merge gates on its raw exit from now on.
+
+### Phase 2 — Move sandbox, agent, proc into `@artipod/core` (executes just-bash-plan Phase 6)
+
+> **Branch** `phase-2-import-sandbox` · **Status** _done_ · includes a consuming PR in `horner/artipod-sync`
+
+- [x] Move `artipod-sync/lib/sandbox/` → `@artipod/core/sandbox` (incl. `zenfs-adapter`, `git-command`, `edit-command`, `notes/storage/module` commands, `storage.ts`, `table.ts`) with their vitest suites. Also pulled in `git.ts`/`git-auth.ts` (git-command's engine) — decoupled from the app fs singleton (factory-only; `NEXT_PUBLIC_GIT_CORS_PROXY` guarded for non-Next bundles).
+- [x] Move `artipod-sync/lib/agent/` → `@artipod/core/agent` (loop, ozwell client, `local/` ONNX worker stack). Replace its `read_file`/`write_file`/`list_files` with bindings to `/tools` (schema collision #1 resolved here). Keep `bash` + truncation. Tests must satisfy Decision #8: scripted fakes only — audit done: `local/` suite touches only parsers/registry/cache math, worker loads transformers from CDN at runtime (types-only devDep), no live calls, no downloads, no default endpoint shipped.
+- [x] Move `artipod-sync/lib/proc/` → `@artipod/core/proc`.
+- [x] Add `pod.events` (core) + extract `/host` controllers (`TerminalSession`, `FileBuffer`, `TreeSource`) from the logic currently embedded in `Terminal.tsx` / `Editor.tsx` / `FileTree.tsx`; rewire those components as thin shells. Acceptance detail: tree auto-refreshes after every command, editor detects external changes to its open file, agent tool-call echo arrives via `agent:tool-call` (no `registerWriter`) — all three verified live (worklog).
+- [x] artipod-sync consumes via workspace/path dep (`file:../artipod` until the npm publish); `lib/sandbox` etc. are re-export shims for one release, then delete (ask-first). `lib/server/`, routes, components stay in the app.
+- [ ] ~~Wire `createSandbox` into the pod: `pod.createSandbox()`~~ — **deferred to Phase 3** (rule-6 deviation): it needs the realized fs, which only exists once manifests + realizers land; a Phase 2 version would hardcode exactly the bespoke init Phase 3 deletes. Tracked as part of the Phase 3 realizer work.
+- [x] **Agent confinement stub (default-deny)**: tools/bash confined to the pod; `sudo` is recognized but returns EPERM with "approval flow lands in Phase 6.5" — pinned by tests (`sudo-command.test.ts`: bare/args/pipeline forms + `approval:request` emission; docs/security-model.md is normative).
+- [x] `/console` module: `installConsole({ sandbox, events, hotkey })` — builtin zero-dep renderer, `` Ctrl+` ``/`Ctrl+~` hotkey, SSR-safe no-op (pinned by test), read-only mode for secondary tabs; consumes only `/host`-style contracts + `pod.events` (docs/console.md). `pod` param arrives with Phase 3's pod↔sandbox unification.
+- [x] `ui/` proof: Storybook story where AIChat drives the sandbox via MCPToolCall rendering (the original Phase 6 acceptance) — mieweb/ui#404 (draft until the package publishes).
+
+**Done when:**
+
+- [x] All moved vitest suites green in this repo (sandbox, agent, proc — same counts as they had in artipod-sync) — verified: the 6 moved test files (sandbox, storage, storage-command, zenfs-adapter, git-command, proc, agent, local) all pass; package total 17 files / **306 tests** (up from 197), artipod-sync keeps its 2 server files / 11 tests green
+- [x] artipod-sync behavior unchanged: clone → pipeline commands → edit → commit → reload persists — no Playwright e2e exists, so recorded as a scripted browser session (worklog): shell pipeline ✓, git clone via /api/git ✓ (clone-into-cwd semantics unchanged), Monaco edit + save ✓, IndexedDB persistence across reload ✓, sudo → EPERM ✓
+- [x] Duplicated tool code deleted from artipod-sync; only re-export shims remain (their deletion is on the ask-first list)
+- [x] Event wiring proven in the app: tree auto-refreshes after every command (zero Refresh clicks), editor detects external changes to its open file (clean-buffer reload verified), agent echo arrives via `agent:tool-call` (scripted fake-LLM run: ⚙ create_file + ⚙ bash echoed in xterm)
+- [x] `ui/` Storybook story runs (AIChat driving the sandbox, MCPToolCall rendering) — verified live: pipeline command exit 0 with output block, sudo renders an error tool call; mieweb/ui#404
+
+**Worklog:**
+
+- 2026-08-30 — move executed: lib/{sandbox,proc,agent} + git/git-auth copied verbatim (~2.9k lines, 6 test files / 90 tests), 72 imports got `.js` extensions, `../git` → `./git`. New subpath exports: `./sandbox` `./proc` `./agent` (+ `./agent/local/worker`, `./host`, `./console`). isomorphic-git + diff join the exact-pinned optional peers; @huggingface/transformers is a types-only devDep (worker loads it from CDN).
+- 2026-08-30 — isomorphism fallout fixed while consuming: (1) node `path`/`crypto` were still imported by artimount/artipod — replaced with dependency-free posix helpers (`pathUtils.ts`) + WebCrypto ids; root-mount (`'/'`) traversal boundary had an `'//'` bug caught by the new agent binding tests. (2) dockerode's ssh2 native addon broke webpack builds — docker backend now lazy-imports with `webpackIgnore`, root entry re-exports docker **types only** (values live in `@artipod/core/docker`), plus a `browser` field stubbing the docker graph. (3) `initFileSystem` now returns the configured `zfs` — under `file:` installs the package resolves its own @zenfs/core copy, and artipod-sync's old `import('@zenfs/core')` bound a second, empty store (found live: `/repo` ENOENT).
+- 2026-08-30 — agent rebinding (collision #1): `createSandboxTools` = core `bash` definition (16 KiB truncation preserved) + `createPodFileTools` over an app-declared mount table (default `'/'`), backed by `sandbox.zfs.promises` as PodFs — shell and tools share one store, pinned by a test. Old write_file/list_files shapes deleted; agent suite updated (8-tool surface).
+- 2026-08-30 — app acceptance (horner/artipod-sync#2), scripted browser session on `npm run dev` + Playwright: tree auto-refresh ✓ (StrictMode gotcha: TreeSource's bus subscription must live in a React effect — effect-cleanup replay had stranded the memoized instance's constructor-time subscription), editor external-change reload ✓, agent echo via `agent:tool-call` ✓ using the new `/api/fake-llm` scripted endpoint (Decision #8), sudo EPERM ✓, IndexedDB persistence ✓, git clone through the proxy ✓. `registerWriter` deleted.
+- 2026-08-30 — ui story (mieweb/ui#404, draft): `@artipod/core` installed via `github:` protocol (package gained a `prepare` build script; pnpm `onlyBuiltDependencies` allowlists it); story drives the real sandbox through the agent bash tool with MCPToolCall rendering. Gotcha for the record: vite/storybook caches optional-peer-dep shims — after adding isomorphic-git/diff, `node_modules/.cache/storybook` must be cleared.
+- 2026-08-30 — package totals: 17 files / **306 tests** green (docker suites included), lint clean, Next production build of artipod-sync green. Shim deletion scheduled one release later (ask-first).
+
+### Phase 3 — Pod manifest + realizers
+
+> **Branch** `phase-3-manifest-realizers` · **Status** _done_
+
+- [x] Manifest type in core (aligned with issue #1's "Artipod mount declaration"):
+
+```ts
+interface PodManifest {
+  root?: { image: string };                    // OCI ref (Phase 4 makes this real)
+  mounts: Array<{
+    name: string;                              // ArtiMount name
+    path: string;                              // app/harness-chosen (Decision #3): /context/src, /patients/12345, …
+    source:                                    // realizer-specific
+      | { kind: 'hostDir'; dir: string }       // node/docker only
+      | { kind: 'backend'; backend: 'indexeddb' | 'opfs' | 'memory' }
+      | { kind: 'volume'; ref: string };       // OCI volume (Phase 4)
+    mode: 'ro' | 'cow' | 'rw';
+  }>;
+}
+```
+
+- [x] `realizeZenFs(manifest)` → ZenFS mount configuration (browser + Node); `realizeDocker(manifest)` → bind each `hostDir` mount at its manifest `path` (the historical fixed `/context/<name>` layout becomes just the default template our apps use); reject virtual sources with a clear error — collision #4. Implementation notes: hostDir → ZenFS `Passthrough` (Node only; actionable browser error), `cow` → `CopyOnWrite` upper over the source (writes never reach the host — pinned by test); zenfs `ro` is tool-layer-enforced until OciViewFS (Phase 4) while docker enforces `:ro` for real — documented. `createZenFsPod` also closes the `pod.createSandbox()` item deferred from Phase 2 (realize-or-**adopt**, pod-scoped sandbox/file-tools/agent-tools).
+- [x] `buildPrompt`/tools/sandbox operate on the realized pod; `/proc/pod/manifest.json` provider exposes it to shell + model (`registerPodManifestProvider`, replace-on-re-realize).
+- [x] artipod-sync boots from a manifest (its current single-`/` layout expressed as one `rw` mount) instead of bespoke init — adopt mode: `initFileSystem` keeps backend choice/migration/tab-lock, the pod wraps the returned store.
+
+**Done when:**
+
+- [x] Contract test: the same manifest produces the same file view in a browser-style (ZenFS) sandbox and a Node sandbox — verified two ways: zenfs realizer's `find /context/src` equals the host walk (zenfs-realizer.test), and the identical hostDir manifest realized via docker lists the identical view at the manifest paths (manifestDocker.spec)
+- [x] Docker realizer runs a command against `hostDir` mounts with the existing hardening tests still green — manifestDocker.spec runs against the hardened container (seccomp profile), full suite 20 files / 327 tests green
+- [x] A manifest with a virtual source fails fast on the docker realizer with an actionable error (test) — realizeDocker + ArtiPod.fromManifest both pinned ("sync the pod to this host first")
+- [x] artipod-sync boots from a manifest (its current single-`/` layout expressed as one `rw` mount) — verified live: `/proc/pod/manifest.json` renders in the shell with formatVersion 1 and the actually-chosen backend
+
+**Worklog:**
+
+- 2026-08-30 — implemented: `src/manifest.ts` (formatVersion 1 per §5 schema-regret mitigation, `application/vnd.artipod.manifest.v1+json`, normalizing validation, serialize/parse round-trip), `src/realize/docker.ts` (pure bind mapping, no dockerode — exportable from the root safely), `src/realize/zenfs.ts` (realizeZenFs + createZenFsPod), `src/proc/pod-provider.ts`. ZenFS 2.4.4 ships `Passthrough` and `CopyOnWrite` — hostDir and cow both work first try (cow isolation pinned: sandbox overwrite leaves the host file untouched). `ArtiPod.fromManifest` + manifest-declared container paths (`containerPaths` map; `/context/<name>` remains the non-manifest default).
+- 2026-08-30 — tests: 13 realizer tests (validation, parity contract, cow, /proc/pod, tools over mount table incl. ro create_file denial, adopt mode, Phase-4 deferrals) + 4 docker contract tests (manifest-path binds, `:ro` boundary enforcement + rw write-through, prompt echo, virtual fail-fast). Package: 20 files / **327 tests**. Caught by the build: `*.test.ts` files had been compiling into dist since Phase 2 — excluded now.
+- 2026-08-30 — artipod-sync boots from a manifest (horner/artipod-sync#3, merged): adopt mode + `/proc` now mounted by default; verified live in the browser (manifest.json in the shell; the secondary-tab read-only guard incidentally proven while doing it — a stale background tab held the Web Lock and got the read-only banner).
+
+### Phase 4 — OCI store + layer filesystems (issue #1 steps 1–5)
+
+> **Branch** `phase-4-oci-store` · **Status** _done_ · all items shipped in `src/oci/` — see worklog; item-level notes: blob store ✅ (immutable, verify-on-read); superblock ✅; ciphertext format ✅ (chunked AES-256-GCM, dual digests, `store.enableEncryption` opt-in — default off, keyring in 6.5; per-generation upper encryption follows the upper itself in Phase 5); tar indexer ✅ (ustar/PAX/GNU, DecompressionStream + fflate fallback); published layer indexes ✅ (generated at pull; commit-time generation joins Phase 5's `artipod commit`; Range pass-through in the proxy ✅, byte-offset resume deferred with 6.6's hydration); OciLayerFS/OciViewFS ✅ (single IndexFS implementation — a layer mount is the one-layer view; whiteouts, opaque dirs, `--through N`, symlink+hardlink resolution; EROFS on writes); CoW-upper-as-workspace lands with snapshots in Phase 5 (the realizer's `cow` mode already stacks CopyOnWrite over sources); transports ✅ (direct w/ anonymous token dance, `/api/oci` proxy w/ init-injected default-deny allowlist, OCI layout); `artipod` command ✅.
+
+All inside `@artipod/core/oci`, implemented as ZenFS backends so every consumer (shell, tools, git, editor) sees them for free:
+
+- [x] Blob store under `/.artipod/oci/{blobs,indexes,refs,snapshots,upper}` — digest-addressed, originals immutable and verifiable.
+- [x] **Pod superblock** (cleartext, per store): opaque pod ID, cipher suite, key-envelope refs, timestamps — enumeration without keys (docs/encryption.md#at-rest-format).
+- [x] **Ciphertext blob format** (per-pod opt-in flag, default off until 6.5): chunked AES-256-GCM (~4 MiB, per-chunk nonce+tag, encrypted index), dual digests (plaintext diff ID + ciphertext address), decrypt-on-read chunk store *below* `OciLayerFS`; the CoW upper encrypts per generation under the same envelope.
+- [x] Tar indexer (`LayerEntry[]` per issue) + decompress-once policy (keep compressed original + uncompressed content-addressed twin). Browser gzip via `DecompressionStream` with `fflate` fallback — just-bash's gzip is Node-only, do not reuse.
+- [x] **Published layer indexes**: each layer's `LayerEntry[]` index ships as a small digest-addressed artifact beside the manifest (`application/vnd.artipod.layer.index.v1+json`), generated at commit/push — so the complete namespace is knowable with zero layer blobs (the Phase 6.6 hydration substrate). Foreign images without published indexes: a site cache or full pull generates them. `/api/oci` proxy passes `Range` through for byte-offset **resume** of interrupted blob downloads (blobs verify whole — no partial-verification machinery).
+- [x] `OciLayerFS` — read-only ZenFS backend over one indexed layer (`/mnt/oci/layers/<n>` inspection mounts).
+- [x] `OciViewFS` — single flattened read-only view over ordered layers with OCI whiteout semantics (`.wh.*`, `.wh..wh..opq`, `--through N`).
+- [x] `CopyOnWrite` upper on top of the view = the pod workspace (manifest `root.image` + `volume` sources become real).
+- [x] Transports behind one interface (`resolve`/`fetchBlob`): `DirectRegistryTransport`, `ArtipodRegistryProxyTransport` (new `/api/oci` route in artipod-sync; **allowlist injected at initialization, default empty = deny all**; the hosted demo config enables docker.io + ghcr.io + quay.io), `OciLayoutTransport` (import a local layout, incl. from a `hostDir` mount).
+- [x] Shell surface via `defineCommand('artipod', …)` in the sandbox: `image pull|ls|inspect|history|mount [--through N]`, `layer mount|inspect`.
+
+**Done when (from the issue):**
+
+- [x] `artipod image pull docker.io/library/alpine:3.22` succeeds through the proxy in a browser — verified live (anonymous token dance, linux/amd64 selection, 519 entries indexed)
+- [x] Mount the view; `cat /etc/os-release` returns Alpine content — verified live (Alpine 3.22.5)
+- [x] `artipod image mount … --through 2` shows the truncated history view — alpine:3.22 ships a single layer, so live truncation was shown with `--through 0` (empty view); the 2-layer `--through` semantics (VERSION_ID 1 vs 2) are pinned by unit tests
+- [x] Digests verify on pull; a tampered blob is rejected (test) — pinned at pull (descriptor digests + config diff_ids) and at rest (verify-on-read; corruption test)
+- [x] Blobs and refs survive a full page reload — verified live (refs listed, remount + grep after reload; 4 blobs on disk) and by store re-instantiation tests
+
+**Worklog:**
+
+- 2026-08-30 — shipped `src/oci/`: digest.ts (WebCrypto sha256, verify = the tamper gate), gzip.ts (DecompressionStream + fflate fallback), tar.ts (ustar/PAX/GNU indexer, whiteout markers preserved for the merge), cipher.ts (chunked AES-256-GCM per docs/encryption.md — dual digests, per-chunk nonce+tag; keyring custody is 6.5's), store.ts (immutable digest-addressed blobs, cleartext superblock, decompress-once twins by diff ID, published index artifacts, refs; encrypted pods stay plaintext-addressed via `.alias` files), view.ts (mergeLayerEntries + OciViewFS as a zenfs IndexFS subclass — a layer mount is the one-layer view), transport.ts (direct registry with anonymous bearer-token dance; the proxy transport rewrites ALL absolute URLs incl. the token service through `/api/oci/<host>`; OCI layout), pull.ts (verifies descriptor digests AND config diff_ids; multi-arch index selection), command.ts. ZenFS backend notes: `Index.fromJSON` accepts partial InodeLike at runtime; `ErrnoError.With` doesn't exist in 2.4.4 (ctor takes the code); node Buffers normalized to Uint8Array views at the store boundary.
+- 2026-08-30 — tests: 15 new (crafted-tar fixtures via a minimal ustar writer incl. PAX; scripted fake registry with 401→token flow; whiteout/opaque/--through; hardlink+symlink; EROFS; tamper rejection at pull and at rest; encrypted-store aliasing; reload survival). Package total: 22 files / **338 tests**.
+- 2026-08-30 — app half (horner/artipod-sync#4, merged): GET-only `/api/oci/<host>/<path>` relay, allowlist injected at init (`ARTIPOD_OCI_ALLOWED_HOSTS`, default empty = deny all), Accept/Authorization/Range forwarded; `.env.development` enables registry-1.docker.io/auth.docker.io/ghcr.io/quay.io; the pod wires `ArtipodRegistryProxyTransport`. Live acceptance in the browser: alpine:3.22 pulled (3.7 MB layer, 519 entries), mounted, os-release read, `--through 0` truncation, refs/blobs intact after a full reload.
+- 2026-08-30 — deferred forward, recorded: CoW-upper-as-workspace + commit-time index generation → Phase 5 (`artipod commit`); byte-offset resume → 6.6 (the proxy already passes Range); per-generation upper encryption follows the upper in Phase 5; a `--through 2` live demo needs a multi-layer image (unit tests pin the semantics).
+
+### Phase 5 — Snapshots + commit = pod revision control (issue #1 steps 6–7)
+
+> **Branch** `phase-5-snapshots` · **Status** _done_
+
+- [x] Snapshot manifests (references, not copies) — shape deviation (rule 6): today's app pods have no image base under the workspace, so the shipped manifest is `{ id, parent, diff: { diffId, size, entryCount }, roots }` — a parent-linked chain of indexed diff layers (OCI whiteouts for deletions) plus a cumulative index for O(1) diffs. The `image.{manifestDigest,layers,through}` half joins when Phase 6 puts image bases under workspaces; `upper.generation` IS the diff chain.
+- [x] `artipod snapshot create|ls|checkout|mount|diff` — checkout materializes a **new writable branch** (git-commit-like) and never destroys later history (HEAD does not move); `mount` is a zero-copy read-only OciViewFS of the merged chain.
+- [x] `artipod commit --tag` — freezes the workspace into a tar+gzip layer with a `application/vnd.artipod.volume.v1+json` config in a standard image manifest (mountable by `artipod image mount`, pushable by Phase 6); `artipod gc` mark-and-sweeps unreachable blobs/twins/indexes with byte accounting.
+- [x] `artipod compact` — squashes the snapshot chain into a single diff layer (new manifest, parent null; superseded manifests deleted so their blobs become `gc`-able).
+- [x] **AI-reasoning tie-in:** agent-loop hook (default **on**) via `pod.agentLoopOptions()` riding the new `beforeToolTurn` loop option — snapshots before each tool-executing turn (skipIfClean suppresses no-op turns); rewind = mount/checkout the pre-turn snapshot (pinned by test: pre-turn-2 view has t1 but not t2). Opt-out flag + `compact`/`gc` bound storage.
+
+**Done when:**
+
+- [x] edit → `snapshot create` → keep editing → `checkout` the snapshot → both branches mountable simultaneously — pinned: ro mount serves v1 while the live tree holds v2 and the writable branch diverges independently
+- [x] `snapshot diff` between the two branches lists exactly the expected paths — pinned: exact added/modified/deleted sets, snapshot↔snapshot and snapshot↔worktree, plus the shell surface
+- [x] Agent-turn auto-snapshots appear in `snapshot ls` (and the opt-out flag suppresses them) — pinned with a scripted fake client: one snapshot per tool-executing turn, rewind view correct; `autoSnapshot: false` yields zero
+- [x] `compact` squashes a chain into one diff layer; `gc` reclaims the superseded blobs (byte counts verified) — pinned: 3-snapshot chain → 1 manifest (parent null, merged view equals final state), gc deletes >0 objects and >0 bytes while ref-reachable volumes survive
+
+**Worklog:**
+
+- 2026-08-30 — shipped `src/oci/snapshot.ts` (SnapshotManager: create/list/diff/mount/checkout/commit/compact/gc) + `writeTar` in tar.ts (production ustar writer w/ PAX long names + whiteout entries) + `gzip()` in gzip.ts. Snapshot = diff layer vs parent (walk workspace, compare content digests against the parent's cumulative index; deletions become `.wh.` entries) — reuses Phase 4's index/merge/mount machinery wholesale, so `snapshot mount` is a zero-copy OciViewFS. Costs stated honestly: create hashes the workspace (fine at browser-pod scale; Phase 6.6's layer-granular model improves it), checkout copies bytes into the new branch dir (explicit act).
+- 2026-08-30 — agent auto-snapshot: new `beforeToolTurn` option on ToolCallingLoop; `pod.agentLoopOptions()` implements default-ON with `skipIfClean`; artipod-sync AgentPanel spreads it (horner/artipod-sync#5, merged). Rewind pinned by test (pre-turn-2 mount sees turn-1's file only).
+- 2026-08-30 — walk excludes `/.artipod`, `/proc`, `/mnt`, `/dev`, `/branches` (checkout target) by default; roots = the pod's rw mount paths. 8 new tests; package total 23 files / **346 tests**. Wiring gotcha for the record: a multi-edit partially matched and dropped `snapshots` from the command context — caught because the shell subcommands fell through to usage; exit-code-visible verification saved it again.
+
+### Phase 6 — Browser ↔ server synchronization
+
+> **Branch** `phase-6-sync-manager` · **Status** _done_ (mieweb/artipod#42 · consuming PR horner/artipod-sync#6)
+
+- [x] `artipod clone|push|pull <ref>` — clone materializes a ref as a new local pod (browser or server); push/pull exchange volume/image manifests + missing blobs by digest through a transport (registry or `/api/oci` proxy). Digest-addressed blobs make resumable, dedup'd sync trivial (only missing digests move). _Deviation (rule 6): `clone` materializes into a directory tree inside the current pod's fs (`/clones/<name>`) rather than spawning a separate pod — one pod per store today; multi-pod stores arrive with 6.5/6.6 managers. push/pull run against `sync.remote` (a `PodStore`), not raw transports; `pull` reuses the one verify-everything `pullImage` path via `storeTransport`._
+- [x] `/manager` + `PodStore`: a **pod manager** is whatever hosts pods (the artipod-sync server, a future daemon, the browser tab itself). Each manager configures durability via the `PodStore` interface — shipped impls: ZenFS-on-disk (`ZenFsPodStore` = `OciStore`), plain dir with OCI image layout (`OciLayoutPodStore`), HTTP client (`HttpPodStore`). The hosted artipod-sync manager uses the **OCI image-layout directory** store first (Decision #6: verified skopeo/crane-shaped on disk — `oci-layout`, annotated `index.json`, `blobs/sha256/`). The generic pod/session hosting from `lib/server/exec-sessions.ts` graduated as `PodSessionHost`; HTTP wiring, auth, and rate-limit numbers stayed in the app (its 11 tests unchanged). _Deviation (rule 6): the remote-**registry** PodStore impl is deferred — registry PULL already exists via `DirectRegistryTransport`/proxy, and push-to-registry has no consumer until a hosted registry appears._
+- [x] Sync semantics: anti-entropy exchange of digest-addressed blobs + refs (`syncRef`/`syncAllRefs` — only missing digests move, any order/direction, idempotent convergence; verified both directions in `manager.test.ts` and live: `3 blobs moved` → `0 moved, 3 already there`). Divergent writable uppers are **branches** resolved by explicit merge/checkout (no auto-merge in v1); live per-document co-editing CRDTs stay orthogonal.
+- [x] Server pod: `/api/exec` sessions run on `PodSessionHost` (manifest-driven chroot pods over one shared ZenFS store); a synced ref materializes the same workspace server-side via `materializeImage` (north-star stage 3).
+- [x] Round-trip flow (replaces wtf.md's git-remote sketch as the *pod* sync mechanism): browser `commit` → `push` → server `pull` + heavy execution (docker backend, real tools) → server `commit` → browser `pull` → new layer appears read-only next to the workspace. Scripted end-to-end in `src/__tests__/northStar.spec.ts`.
+- [x] Defer (explicitly out of scope for v1, tracked in issue #1 comments): eStargz lazy pull, chunked layers, 9P/container2wasm. (Encryption/envelopes moved into scope as Phase 6.5; `ArtipodPeerTransport` returns in Phase 7 as the P2P leg of live streams.)
+
+**Done when — the north-star demo (the `examples/web-demo` replacement), each step scripted or recorded:**
+
+- [x] Browser creates a demo pod → edits offline → `artipod snapshot create` (northStar.spec.ts stage 1)
+- [x] `artipod clone` into a second local pod (stage 2: `/clones/notes` — writable, edits don't leak back)
+- [x] Reconnect → `push`; server manager `pull`s and runs a containerized job (docker realizer) over the same content (stages 2–3: push counters `3 moved/0 skipped` then `0/3`; server `wc -w` in a real container → `3`)
+- [x] Server `commit`s a derived layer → browser `pull`s it and mounts it read-only next to the workspace (stages 4–5: `field/notes:derived`, EROFS on write, live tree untouched)
+- [x] `artipod compact` squashes the browser pod's history (stage 6: one snapshot, origin `compact`)
+
+Also verified live against the running app (dev server :3500): terminal `commit → push → re-push` with the expected counters, `.artipod-store/` OCI layout on disk, `GET /api/pods/refs`, `refs?name=`, blob fetch and 404 paths via curl.
+
+**Worklog:**
+
+- `/manager` module: `pod-store.ts` (`PodStore`, `ZenFsPodStore`, `OciLayoutPodStore`), `sync.ts` (`walkImageDigests`, `syncRef`/`syncAllRefs`, `storeTransport`, `materializeImage`), `http-store.ts` (`HttpPodStore` — HEAD/GET/PUT `blobs/<digest>`, GET/PUT `refs`, digests verified client-side), `session-host.ts` (`PodSessionHost` + `SESSION_ID_PATTERN`). Exported as `@artipod/core/manager`.
+- `oci/command.ts` gained `push`/`pull`/`clone` verbs + `remote` context; `createZenFsPod` gained `sync: { remote }`. `pullImage` now skips layers whose blobs are already present (the anti-entropy property applied to registry pulls too).
+- `PodSessionHost.exec` returns `cwd` and the host grew `reset()` so artipod-sync's `exec-sessions.ts` could become a pure policy wrapper (TTL 15 min / 50 sessions / 30 s / 256 MiB stay app-side; its 11 tests pass unchanged).
+- North-star demo: `src/__tests__/northStar.spec.ts`, 6 stages green including the real docker job (chmod 777 tempdir, 120 s timeout, seccomp profile — same rig as containerExecution).
+- Package totals: 25 test files / 355 tests green, lint 0, build clean.
+- App half (horner/artipod-sync#6): `/api/pods/[...path]` route over `OciLayoutPodStore` at `ARTIPOD_STORE_DIR` (default `.artipod-store`, gitignored); `page.tsx` wires `sync.remote = new HttpPodStore('/api/pods')`; `.npmrc install-links=true` — the file: **symlink** made Next bundle the package's own `@zenfs/core` copy (`tf is not a constructor` at page-data collection); with a copied install everything resolves to the app's single zenfs and `serverComponentsExternalPackages` works; `fflate` added explicitly (no longer resolves through the symlink).
+
+### Phase 6.5 — Encryption & authority
+
+> **Branch** `phase-6.5-authority` · **Status** _done_ (mieweb/artipod#45) · normative specs: [../docs/encryption.md](../docs/encryption.md), [../docs/security-model.md](../docs/security-model.md)
+
+- [x] **Keyring** in `/manager`: unwrapped KEKs with expiries, memory-only non-extractable CryptoKeys; `/proc/keys` provider (names + expiries, never material). `PodLockedError` = the POSIX-shaped `EACCES` + login hint every locked surface throws.
+- [x] **Leases**: `artipod login` → authority releases KEKs + issues a signed lease (ECDSA P-256 over canonical JSON); auto-lock on expiry (timer) + `visibilitychange`; `artipod lock [--all|<pod>]`; post-lock reads AND writes fail `EACCES` with a login hint; `lock` vs `purge` policy modes (purge = `store.purgeBlobs()`, kiosk restore = re-sync). `artipod status` reads the keyring.
+- [x] **Encryption flips on**: Phase 4's ciphertext format live end-to-end — pod option `authority.encrypt` moves key custody to a provider backed by the keyring; commit/push/pull/clone run encrypted with plaintext only in memory. Found + closed a real leak: uncompressed twins (snapshot diffs) were plaintext at rest — now ciphertext like the blobs. _Boundary note (rule 6): local snapshot **metadata** (ids, paths, sizes in `snapshots/*.json`) stays cleartext working state — it never syncs; the encrypted boundary is everything blob-addressed. Superblock cleartext by design._
+- [x] **Offline grants**: device keypair enrollment (non-extractable ECDH P-256, persistable via structured clone), signed grant `{pods, device, permissions, notBefore, expires, maximumSnapshot, allowExport}` with KEKs wrapped ephemeral-static to the device, ceremony-gated unlock (injected passkey/PIN callback), `HighWaterClock` monotonic high-water mark (refuses key release on clock rollback), CRL-on-sync revocation.
+- [x] **Delegation certs**: scoped sub-authority managers issue leases fully offline; verification is pure signature-chain walking (root → cert₀ → … → lease) with scope globs, validity windows and TTL clamps enforced at every hop; `narrowPolicy` lets a delegate narrow admin policy, never widen. Blind-relay vs entitled-cache modes: the relay leg ships as `pushEncryptedRef`/`pullEncryptedRef` — relays hold ciphertext blobs + a KEK-sealed envelope only; entitled caches are just key-holding stores.
+- [x] **Priority + budgeted sync**: `syncRef` gained `{ maxBytes }` — metadata (manifest/config) first, bulk layers fill the budget, over-budget blobs defer to the next pass, ref pointer withheld until complete, anti-entropy makes resume free. _Deviation (rule 6): sub-blob chunk-offset resume stays deferred to 6.6's Range support, as Phase 4 already recorded._
+- [x] **sudo approval flow**: `ApprovalBroker` enforces the four non-negotiables — agents never self-approve (prompt is host-supplied); approver validity is policy-checked (`escape-approve` role); deny-by-policy returns EPERM **without prompting** (banned/unknown classes, disallowed modes); everything audited. Approval mints `cap:<class>:<target>[:<mode>]` in the keyring with policy-clamped TTL; a live capability covers re-execution without a fresh prompt. `sudo` keeps the Phase 2 default-deny exactly when no broker is configured. Audit = `AuditLog` hash chain (blobs + `pod/audit` ref) — `syncRef` walks it, so provenance survives push/pull by construction.
+- [x] **Console integration**: approval prompts render in `/console` (capability + justification + y/N on the input line) via `handle.approvalPrompt` — wire it into pod `authority.prompt`; lock state surfaces as a 🔒 hint whenever a command hits `pod locked`; `artipod login`/`lock`/`status` run in the console like any shell.
+
+**Done when:**
+
+- [x] Lease expiry locks the pod → reads fail `EACCES` → `artipod login` restores — without data rewrite (authority.test.ts: ciphertext bytes compared before/during/after — byte-identical)
+- [x] Offline grant survives reload, unlocks only via ceremony, expires by grant time, refuses on clock rollback (authority.test.ts: fresh-session rehydration, ceremony refusal releases nothing, wrong device, tampered grant, rollback, expiry, CRL)
+- [x] `sudo` on a policy-banned class returns EPERM with **no prompt**; a user without the approver role cannot approve; an approval mints a TTL capability visible in `/proc/keys` and expires (approval.test.ts broker rules + pod-surface shell test)
+- [x] Audit: every request/decision appended to pod provenance and survives push/pull (approval.test.ts: 6-event chain, `syncRef` moves 3-blob chain, far side replays identical, re-push skips 3)
+- [x] Blind relay round-trip: intermediate manager holds zero keys, end-to-end digests verify (approval.test.ts: every relay byte `isEncryptedBlob`, plaintext marker absent, tampered blob rejected at pull)
+- [x] Delegated manager issues a valid lease fully offline (signature-chain verification only) (authority.test.ts: scope enforcement at issue AND verify, TTL clamp, forged/expired/wrong-root all rejected)
+
+Plus the end-to-end flagship: `src/__tests__/encryptedPod.spec.ts` — locked pod refuses snapshot with EACCES+hint → login → commit → `artipod push` routes ciphertext (manager store holds only `isEncryptedBlob` bytes, no plaintext marker) → lock → EACCES → login restores → second device (chrooted fs, same authority) logs in, pulls encrypted, clones, reads the note.
+
+**Worklog:**
+
+- `/manager` new modules: `crypto.ts` (canonical-JSON ECDSA sign/verify, ephemeral-static ECDH KEK wrap, scope globs), `keyring.ts` (+ `/proc/keys` provider, `PodLockedError`), `authority.ts` (Authority / DelegatedAuthority / verifyLease), `grants.ts` (enrollDevice, HighWaterClock, unlockWithGrant), `policy.ts` (AdminPolicy evaluate/canApprove/narrowPolicy), `approval.ts` (ApprovalBroker, classifyCommand, capabilityName), `audit.ts` (AuditLog hash chain, AUDIT media type, sync walk), `locker.ts` (PodLocker: adoptLogin/lock/status/auto-lock, lock|purge), `encrypted-sync.ts` (push/pullEncryptedRef + post-pull twin/index build so mount/clone work).
+- Store custody: `enableEncryption(key | () => key)`; `locked`/`encrypted`/`sessionKey` accessors; `getRawBlob`/`resolveAlias` (relay surface); `purgeBlobs`; twins encrypted (leak found by the e2e test — locked snapshot succeeded because diffs bypassed putBlob).
+- Pod surface: options `authority { login, encrypt, lockMode, policy, prompt, principal }`; pod exposes `keyring/locker/audit/approvals`; `/proc/keys` registered alongside the manifest provider; sudo threading via `CreateSandboxOptions.sudo`; verbs `login/lock/status`; push/pull auto-detect encrypted pods (`ENCRYPTED_REF_MEDIA_TYPE`).
+- Ordering lesson: `PodLocker.lock` must audit BEFORE revoking — an encrypted store can't take the audit write after the key evaporates.
+- 28 files / 366 tests / lint 0 / build clean. No artipod-sync changes required this phase (app wiring of login UI + policy distribution is deployment work, not package work).
+
+### Phase 6.6 — Lazy hydration & site cache
+
+> **Branch** `phase-6.6-hydration` · **Status** _done_ (mieweb/artipod#46) · driving use case: pull one pod per patient on today's schedule — visit notes eager, DICOM on demand, LAN cache making the browser fast
+
+**The OCI layer is the unit of hydration.** A pulled pod materializes at `refs` (manifest only) · `index` (manifest + published layer indexes + eager layers — every file in a lazy layer is a **placeholder**: `ls`/`stat`/tree serve size/metadata from the index, content absent) · `full`. Opening a file hydrates its *winning layer* (OciViewFS resolution), whole blob, digest-verified — no seekable-tar/eStargz/SOCI machinery, ordinary OCI throughout (annotations + one small index artifact per layer). Issue #1's volume separation is the first lever: the patient-record volume (markdown/FHIR) is eager; the imaging volume is lazy.
+
+- [x] **Layer grouping at commit time** (where the intelligence lives): `artipod commit --tag t --layer-group 'dicom/**'` (repeatable) routes matching paths into dedicated layers annotated `org.artipod.hydration: lazy` + `org.artipod.layer-group`; **every** layer publishes its index as a digest-addressed blob annotated `org.artipod.layer-index` (and `walkImageDigests` carries the artifacts, so ordinary push/sync move them — northStar counters went 3→4). _Deviation (rule 6): the size-threshold default moved to **pull-time** policy (`maxEagerLayerSize`) rather than a commit-time annotation — the committer knows groups, the puller knows its link._
+- [x] **Pull-time policy**: `HydrationPolicy { default: 'eager'|'lazy'; eager?: string[]; maxEagerLayerSize?: number }` — explicit annotation wins, then threshold, then default; `eager` globs promote layers whose paths the app wants NOW (matched against the published index, before any layer bytes move). Pod option `hydration: { policy, defaultRef }` feeds the verbs.
+- [x] **Whole-layer fetch, cache-friendly**: hydration fetches the layer blob (digest-verified by `putBlob`), gunzips, twins + indexes once. Interrupted downloads resume by byte offset: `fetchBlobResumable` + persisted partials + `HttpPodStore.getBlobRange` (`Range: bytes=<offset>-`, 200-full fallback for range-blind servers). _One-OPFS-file-per-blob is the app's storage shape; the package stays fs-agnostic._
+- [x] **Read semantics — no grep bombs**: reads of dehydrated content fail fast with `DehydratedError` — a real kerium `EREMOTE` ErrnoError carrying the `artipod hydrate <path>` hint (zenfs propagates it; foreign Error subclasses get wrapped as ENOENT — learned the hard way). Hydration is always explicit: `artipod hydrate|dehydrate <ref> <glob>` or the agent `prefetch` tool. _Note: just-bash's `cat` prints its own generic error line by design; the hint reaches file tools/editor surfaces via the fs error — asserted through `read_file`._
+- [x] **Three bandwidth lanes**: `BandwidthScheduler` — interactive ≻ prefetch ≻ background, one transfer at a time, lane re-evaluated between tasks so prefetch yields to interactive at layer granularity (deterministic order pinned by test).
+- [x] **AI prefetch**: `makePrefetchTool(hydrator, defaultRef)` — pod-confined agent tool (`prefetch { paths, ref?, priority }`), warms backing layers in the prefetch/background lane, no approval needed (in-pod, bandwidth-bounded, audit-visible via fetch events). Auto-registered in `createAgentTools` when hydration is on.
+- [x] **Site cache manager**: `CachingPodStore(front, origin)` — LAN pull-through, digest-keyed, verify-on-receipt, counters for front hits vs origin fetches; **blind for encrypted pods by construction** (it stores the ciphertext blobs encrypted sync moves). Refs stay origin-fresh with cached fallback. _Deviation (rule 6): the Linux site-cache **daemon** (overnight pre-pull job, delegated-cert wiring) is deployment work on the app side; the package ships the store composition + the 6.5 delegation primitives it needs._
+- [x] Surface: `/proc/hydration` (per-ref layer states + in-flight) + `fetch:start|progress|done` on `pod.events`.
+
+**Done when:**
+
+- [x] `index`-level pull transfers only manifests + index artifacts (byte counters); the full namespace lists/stats correctly at near-zero storage cost (lazyPod.spec: lazy blob reads = 0, metadata reads ≤ 6; `ls` + `cat notes.md` serve from index + eager layer)
+- [x] Opening a placeholder fetches exactly one layer blob (transfer counters +1, sibling study untouched), digest verifies, content opens; the same open while dehydrated errors clearly with the hydrate hint (shell fails fast; `read_file` tool surfaces `artipod hydrate …`)
+- [x] `grep -r` across a dehydrated tree triggers zero fetches (WAN counter unchanged)
+- [x] `artipod commit --layer-group 'dicom/**'` produces dedicated layers with the `org.artipod.hydration: lazy` annotation (manifest inspection: group + index-digest annotations per layer)
+- [x] Interactive hydration preempts a running prefetch (hydration.test scheduler: completion order `p1, i1, p2, p3`)
+- [x] Agent `prefetch` tool warms a glob's backing layers within budget, visible in `/proc/hydration` (state flips to hydrated, exactly one blob fetched)
+- [x] Second browser on the LAN pulls the same pod with zero WAN blob fetches (CachingPodStore counters); the cache holds only ciphertext for an encrypted pod (every cached byte `isEncryptedBlob`, PHI marker absent)
+- [x] `dehydrate` evicts layer blobs but keeps indexes/placeholders; re-hydration round-trips (blob+twin gone, `ls` still lists, hydrate restores content)
+- [x] A foreign image without published indexes degrades gracefully — documented here: index-level pull unavailable for annotation-less layers ⇒ those layers fetch fully with `degraded: true` in the hydration state (site-cache index generation can lift this later); content remains fully usable (lazyPod.spec test 2)
+
+**Worklog:**
+
+- `src/manager/hydration.ts`: `pathGlobMatch` (`**` crosses `/`), `HydrationPolicy`, `BandwidthScheduler` (3 lanes, deterministic yield), `fetchBlobResumable` + `persistPartial` (Range resume, partial persistence, tamper detection), `CachingPodStore`, `Hydrator` (pullIndex / loadView / mount-remount / hydrate / dehydrate / stateFor / procProvider), `makePrefetchTool`. Annotations moved to `oci/tar.ts` (avoids an oci↔manager import cycle).
+- `snapshot.commit(tag, { layerGroups })`: multi-layer output, per-layer published index artifacts; `OciViewFS` gained nullable layer bytes + `DehydratedError`; `store.deleteUncompressed`; `HttpPodStore.getBlobRange`; verbs `image pull --index`, `hydrate`, `dehydrate`, `commit --layer-group`; `image mount` routes through the hydrator when hydration state exists (live views refresh on hydrate/dehydrate).
+- Hard-won: zenfs wraps foreign Errors as ENOENT — placeholder reads must throw a REAL ErrnoError (kerium `Errno.EREMOTE = 66`; zenfs doesn't re-export the enum). Global `zenMount` is invisible inside `bindContext` chroots — the two-browser e2e runs pod B on a fresh global fs with a Map-backed WAN store instead. just-bash has no `yes`/`head -c`/`sh` — a silently empty payload file made a placeholder read "succeed" (0-byte reads never touch layer bytes).
+- Also fixed 6.5 test-file type errors CI can't see (build tsconfig excludes tests; vitest erases type-only imports): always run `tsc --noEmit -p tsconfig.json` before gating.
+- 30 files / 373 tests / lint 0 / build clean. App wiring (OPFS blob cache file-per-blob, schedule pre-pull job, hydration badges in the tree) is deployment work — no artipod-sync PR required this phase.
+
+### Phase 7 — Live object streams (multiparty, event-driven)
+
+> **Branch** `phase-7-live-streams` · **Status** _stretch — out of initial scope (re-plan before starting)_
+
+Target UX (in spirit): `cat /dev/microphone | nc transcribe.host > transcript.json` — a browser writes recorder media into its pod and the bytes reach the other replicas *as written*, with a hookable stream so subscribers process chunks on arrival (playback, transcription, indexing).
+
+**Two data planes, one store.** The sealed plane (Phase 6) stays as is: immutable digest-addressed blobs, anti-entropy. The live plane adds `ObjectStream`: a **single-writer append-only chunk log** `{streamId, path, seq, offset, bytes, chunkHash}`.
+
+- [ ] **Host ingest API (the primary surface).** Media and files enter the pod programmatically; everything funnels into the same `ObjectStream` machinery (append → replicate → seal → blob):
+
+```ts
+// one-shot artifacts (PDF, jpg, finished recordings): File | Blob | Uint8Array | ReadableStream
+await pod.put('/context/media/scan.pdf', file);
+
+// live bytes: any WHATWG ReadableStream → pod path (WritableStream returned)
+await fetchResponse.body.pipeTo(pod.createWriteStream('/context/media/download.bin'));
+
+// live capture: accepts the MediaStream itself — getUserMedia yields tracks, not bytes,
+// so pod.recordMedia wraps MediaRecorder (timeslice → encoded chunks) internally
+const media = await navigator.mediaDevices.getUserMedia({ audio: true });
+const rec = pod.recordMedia(media, '/context/inbox/visit-001.webm', { timesliceMs: 500 });
+// … chunks replicate to subscribed replicas as they are written …
+await rec.stop(); // seals: digest → OCI blob → entry in the next snapshot
+```
+
+  `put` of a small Blob is a stream that seals immediately — one code path, no special cases. While a stream is open, the file is readable-as-written at its pod path locally (tail-able by local consumers), and `pod.events` reflects growth so the tree/editor update live.
+
+- [ ] **CRDT semantics, stated precisely**: one writer per stream ⇒ the append log is trivially convergent (ordered by the writer's `seq`; no merge law needed). Multiparty = many concurrent streams on **disjoint paths**; the manager grants an advisory write lease per path prefix, so replicas "on the same layer" (sharing a branch head) converge on identical upper content without byte-level merges. Multi-writer to one path remains explicitly unsupported (that's Yjs-in-a-file or a branch).
+- [ ] **Resumable + eventually consistent**: subscribers ack offsets; reconnect resumes from last ack; chunk hashes verify segments. On writer close the log **seals**: digest computed → becomes an ordinary OCI blob + path entry in the next snapshot. Replicas that consumed the live stream already hold the bytes — seal is a digest check, not a re-transfer; late joiners fetch the sealed blob via Phase 6 sync.
+- [ ] **Manager events over the wire**: extend `pod.events` across managers — `stream:open|data|seal`, `ref:advanced` — relayed via WebSocket/SSE (server-mediated) or WebRTC DataChannel (P2P; `ArtipodPeerTransport` promoted from issue #1's defer list for exactly this). Hookable consumer API: `manager.onStream(pathGlob, handler)` where `handler` gets an async iterable of chunks — the transcriber case is the existing ONNX/whisper worker pattern (`ui` whisperTranscribe) fed from a stream instead of a file.
+- [ ] **Pod fs surface**: device files as a `/proc`-framework provider family — `modprobe media` enumerates via `mediaDevices.enumerateDevices()` → one node per physical device, `/dev/audio<N>` / `/dev/video<N>` for inputs and `/dev/speaker<N>` for `audiooutput` sinks (write = playback; sink selection via `setSinkId`), plus `/dev/microphone`, `/dev/camera`, `/dev/speaker` symlinks to the defaults; metadata under `/proc/devices/` (label, kind, groupId, facingMode); re-enumerate on `devicechange`. Browser quirk to surface honestly: labels stay blank until the first `getUserMedia` permission grant. Plus `StreamFS` endpoints where writes append+publish and subscriber reads consume. Device files and `pod.recordMedia` share one capture implementation.
+- [ ] **Stretch (gravy): bounded `record` command** — `record -d 10s /dev/video1 /context/media/clip.webm`, implemented as a thin shell over `pod.recordMedia(deviceFromNode, dest, { durationMs })`. Because the duration is bounded, it may block its single `exec` (Ctrl+C aborts via the existing signal path) and return the sealed path + digest; the unbounded form is refused with a pointer to `artipod stream pipe`. Server-side `record` doesn't exist — the device provider is browser-only by nature.
+- [ ] **Shell surface (secondary sugar over the same tasks; verified constraint)**: browser `Bash` buffers — custom commands get `ctx.stdin` as a materialized `ByteString` and return one `ExecResult` (`custom-commands.ts`); incremental stdout exists only in the node-only `Sandbox` class, which `just-bash/browser` excludes. So unbounded pipes cannot live inside a bash pipeline. Bridge commands start **host-side stream tasks** and return immediately: `artipod stream pipe /dev/microphone pod://transcriber/inbox/audio.webm`, `artipod stream ls|stop <id>`, live status under `/proc/streams/`. If upstream ever gains incremental command I/O, the literal pipeline form becomes sugar over the same tasks.
+
+**Done when:**
+
+- [ ] Browser records mic → chunks arrive at a subscriber pod → it transcribes as they arrive and writes `transcript.json` back → transcript appears in the browser pod event-driven
+- [ ] Kill the tab mid-recording → reopen → transfer resumes from the last acked offset (no gap, no duplicate chunks)
+- [ ] After seal, every replica reports the same blob digest with zero re-transfer (verify from transfer logs/counters)
+
+**Worklog:**
+
+- _(empty)_
+
+## 5. Risks & mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| ZenFS backend API churn between versions | OciLayerFS/OciViewFS rework | Exact-pin zenfs pair in peerDeps (Phase 0); contract tests over the backends |
+| Pure-ESM break for unknown CJS consumers | consumer churn at 0.2.0 | web-demo retired; only known consumers (artipod-sync, ui) are ESM; semver-major the package rename to `@artipod/core` |
+| Tar/whiteout edge cases (hardlinks, opaque dirs, device nodes) | wrong file views | Port fixtures from containerd/umoci test images; alpine + a crafted whiteout fixture in CI |
+| IndexedDB blob-size and quota limits on big layers | pulls fail on browser | stream-to-OPFS for blobs when available; surface `navigator.storage.estimate` like StorageSettings does; depth-limited pulls first |
+| Registry CORS/auth from the browser | direct pulls fail | proxy transport is the default (same posture as the git proxy); direct transport is opportunistic |
+| Two-repo migration churn (mieweb/artipod ⇄ horner/artipod-sync) | broken intermediate states | re-export shims for one release; workspace `file:` deps during transition; each phase independently shippable |
+| just-bash upstream drift (pinned semantics: per-exec isolation, `BASH_ALIAS_*`) | sandbox session breaks | keep the session-contract tests moved in Phase 2; pin just-bash exact |
+| Snapshot/manifest schema regret | migration pain later | version every JSON (`formatVersion`), use `application/vnd.artipod.*` media types from day one per issue #1 |
+| Long recordings vs. browser quota/backpressure (Phase 7) | dropped chunks, tab OOM | spill chunk log to OPFS, bounded in-memory window, trim below acked offset; surface `storage.estimate` |
+| WebRTC NAT/firewall failures for P2P streams (Phase 7) | multiparty falls apart | same chunk protocol over manager relay (WebSocket/SSE) as automatic fallback |
+| Encryption complexity stalls core phases | 4–6 slip | formats land in Phase 4 behind a per-pod opt-in flag (default off); keyring/authority isolated in 6.5; core phases never block on crypto |
+| Approval fatigue → rubber-stamped sudo | policy erosion | banned classes never prompt; capabilities scoped + TTL'd; audit stream reviewed; approver role is policy-granted, not default |
+| Implicit hydration storms (`grep -r` over placeholders) | bandwidth bombs, surprise costs | dehydrated reads fail fast with a hint — hydration only via click/command/prefetch tool; pinned by a zero-fetch test |
+| Layer grouping too coarse (one click pulls an oversized layer) | slow first-open, wasted bandwidth | commit-time `--layer-group` guidance (study/dataset per layer) + size warnings at commit; seekable formats later behind `LazyLayer` if it truly hurts |
+
+## 6. Decisions (all resolved 2026-08-30)
+
+1. **`examples/web-demo`: retired** to `attic/` in Phase 0; the build goes pure ESM with no dual-CJS accommodation. Its successor is the Phase 6 north-star demo: demo artipod in the browser → clone into a new pod (or pull) → push/pull changes to the server → snapshot + compact.
+2. **`exec-sessions.ts` split by reusability**: the generic part (pod/session hosting, storage config, transports — the *manager*) graduates into `@artipod/core/manager` in Phase 6; the deployment part (Next routes, bearer auth, TTL/rate numbers) stays in artipod-sync. Rule: if a second server app would copy-paste it, it's package; if it's one deployment's policy, it's app.
+3. **Mount root: no core-enforced pattern.** Mount placement belongs to the application/harness: every manifest mount declares an explicit `path`, and core/tools/prompts resolve against declared paths without assuming any prefix. `/context/<name>` survives only as the docker realizer's historical default and our own apps' suggested template. Consequence: prompts must always echo the actual mount table (`buildPrompt` + `/proc/pod/manifest.json`) — models cannot rely on a memorized layout.
+4. **OCI proxy allowlist: configured at initialization, default deny-all** (constructor/env, like `GIT_PROXY_ALLOWED_HOSTS`). The hosted browser demo enables docker.io + ghcr.io + quay.io.
+5. **Agent-turn auto-snapshot: on by default.** Snapshots are references, not copies, so the cost VS Code/Claude Code pay per checkpoint (shadow-copying edited files) doesn't apply, and artipod additionally captures bash side effects they can't. Opt-out flag; `compact` + `gc` bound growth.
+6. **Server persistence: the manager decides.** `PodStore` interface with shipped implementations (ZenFS-on-disk, OCI layout dir, remote registry); sync is manager-driven anti-entropy of blobs/refs (convergent, CRDT-style, in any topology). Branch merges stay explicit in v1; Yjs-style live CRDTs remain an in-file concern. The hosted artipod-sync manager ships on the **OCI image-layout directory** store.
+7. **npm scope: `@artipod/*`** (org created on npmjs 2026-08-30). Primary package `@artipod/core` (mirrors `@zenfs/core`), published from the `mieweb/artipod` repo; placeholder `0.0.1` reserved immediately, first real release `0.1.0` at the Phase 0 gate. `@artipod/oci-9p` / `@artipod/container2wasm` become siblings when they materialize. The `@artipod/sandbox-web` working name from just-bash-plan is retired.
+8. **No AI in tests.** Suites cover the tool/loop *surface area* only: schemas, fs effects, truncation, loop plumbing against scripted fakes. No live model calls, no model downloads, no network; the ONNX `local/` suite stays fully mocked. No default AI endpoint ships — endpoints remain user-configured in the panel.
+9. **Scope**: the implementer (horner) executes Phases 0–6.6; Phase 7 is designed but requires re-planning before starting. `feature/vscode-tool-compatibility` merges to `main` before Phase 0 branches.
+10. **Agent confinement + sudo policy chain.** The agent is confined to its pod by the tool layer (a real, enforceable boundary — agents act only through tools). `sudo` is the sole escape: agents can never self-approve; a human approval counts only if signed admin policy grants that user the approver role; policy-banned classes fail EPERM without prompting; approvals mint scoped, TTL'd capabilities; all of it audited into pod provenance. Offline access = signed grants; site authority = delegation certificates (rig/interplanetary/relay profiles). Normative: docs/security-model.md + docs/encryption.md.
+11. **Docs are authored ahead as the target-state spec** (`README.md` + `docs/{browser,linux,bash-isolate,encryption,security-model,console}.md`), status-bannered ✅/🔮; a PR that diverges from a doc fixes the doc. The v0.1 Node-only README is archived at `attic/v0.1-node.README.md`. The Ctrl+~ console ships as `@artipod/core/console` (Phase 2).
+12. **Lazy hydration: the OCI layer is the unit.** Layer indexes ship as small artifacts beside the manifest, so the whole namespace is visible with zero layer blobs; opening a file hydrates its winning layer — whole blob, digest-verified. Heavy data is grouped into dedicated lazy-annotated layers at commit time (`--layer-group`, ideally one study/dataset per layer); notes/FHIR live in eager layers. Plain-OCI compatible (annotations + index artifacts only) — no eStargz/SOCI-style random-access machinery; seekable formats can slot behind the same `LazyLayer` abstraction later if layer granularity proves too coarse. Dehydrated reads fail fast with a hydrate hint — never implicit bulk fetching. Site caches: delegated managers, digest-keyed pull-through, blind for encrypted pods. Lanes: interactive ≻ prefetch (incl. the agent tool) ≻ background.

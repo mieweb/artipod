@@ -1,0 +1,426 @@
+/**
+ * CLI smoke tests (`artipod run`): spawns dist/cli.js — CI builds before
+ * test. One-shot -c, kept-by-default pods (`artipod pods` + resume by id
+ * prefix), --rm/--disk ephemerals, --dir persistence across invocations, the
+ * piped-stdin REPL, --help/--version, and the store round trip (commit+push
+ * in pod 1, `run REF` resolves from the store in pod 2). Registry pulls are
+ * exercised manually only — no network in CI.
+ */
+import { afterAll, describe, expect, it } from 'vitest';
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, readdir, readFile, rm, access, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+
+const CLI = resolve(import.meta.dirname, '../dist/cli.js');
+// Keep default-persisted pods out of the developer's real ~/.artipod/pods.
+const SCRATCH_PODS = await mkdtemp(join(tmpdir(), 'apod-pods-scratch-'));
+afterAll(() => rm(SCRATCH_PODS, { recursive: true, force: true }));
+
+function run(
+  args: string[],
+  opts: { input?: string; env?: Record<string, string> } = {},
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolvePromise) => {
+    const child = execFile(
+      'node',
+      [CLI, ...args],
+      { timeout: 60_000, env: { ...process.env, ARTIPOD_PODS: SCRATCH_PODS, ...opts.env } },
+      (error, stdout, stderr) => {
+        resolvePromise({ stdout, stderr, code: (error as { code?: number } | null)?.code ?? 0 });
+      },
+    );
+    if (opts.input !== undefined) {
+      child.stdin!.write(opts.input);
+      child.stdin!.end();
+    }
+  });
+}
+
+describe('artipod CLI', () => {
+  it('is built (CI runs build before test)', async () => {
+    await access(CLI);
+  });
+
+  it('--help and --version', async () => {
+    const help = await run(['--help']);
+    expect(help.code).toBe(0);
+    expect(help.stdout).toMatch(/^artipod \d[^ ]* \([0-9a-f]{7,}(-dirty)?, \d{4}-\d{2}-\d{2}\) — a pod for artifacts/);
+    expect(help.stdout).toContain('artipod run [-it] [REF|POD]');
+    expect(help.stdout).toContain('artipod pods');
+    const version = await run(['--version']);
+    expect(version.stdout).toMatch(/^artipod \d[^ ]* \([0-9a-f]{7,}(-dirty)?, \d{4}-\d{2}-\d{2}\)\n$/);
+  });
+
+  it('one-shot -c with --rm runs in an ephemeral pod and mirrors the exit code', async () => {
+    const ok = await run(['run', '--rm', '-c', 'echo hello from the pod']);
+    expect(ok.stdout).toContain('hello from the pod');
+    expect(ok.code).toBe(0);
+    const fail = await run(['run', '--rm', '-c', 'false']);
+    expect(fail.code).toBe(1);
+    // Ephemeral: nothing carries between invocations.
+    const gone = await run(['run', '--rm', '-c', 'cat leftover.txt']);
+    expect(gone.code).not.toBe(0);
+  });
+
+  it('the pod shell knows what it is: uname/hostname/ps carry the pod identity', async () => {
+    const r = await run(['run', '--rm', '-c', 'uname -a; hostname; ps']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^artipod ephemeral \S+ .*pod ephemeral \(--rm\) — artipod run on this machine node\n/);
+    expect(r.stdout).toContain('\nephemeral\n');
+    expect(r.stdout).toMatch(/\n\s+1\s+0 init\s+running .* ephemeral\n\s+2\s+1 shell running .* bash\n/);
+  });
+
+  it('keeps pods by default: `artipod pods` lists them and a pod-id prefix resumes', async () => {
+    const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
+    try {
+      const first = await run(['run', '-c', 'echo keep > k.txt'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(first.code).toBe(0);
+      const dirs = await readdir(podsRoot);
+      expect(dirs).toHaveLength(1);
+      expect(dirs[0]).toMatch(/^[0-9a-f]{16}$/);
+      const list = await run(['pods'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(list.stdout).toContain('POD ID');
+      expect(list.stdout).toContain(dirs[0]);
+      const resumed = await run(['run', dirs[0].slice(0, 8), '-c', 'cat k.txt'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(resumed.stdout).toContain('keep');
+      // Resume reopened the pod instead of minting a second one.
+      expect(await readdir(podsRoot)).toHaveLength(1);
+    } finally {
+      await rm(podsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('--rm --disk backs the ephemeral pod with a temp dir and still keeps nothing', async () => {
+    const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
+    try {
+      const r = await run(['run', '--rm', '--disk', '-c', 'echo big > f.txt && cat f.txt'], {
+        env: { ARTIPOD_PODS: podsRoot },
+      });
+      expect(r.stdout).toContain('big');
+      expect(r.code).toBe(0);
+      expect(await readdir(podsRoot)).toHaveLength(0);
+      // --disk without --rm is a usage error (kept pods are disk-backed already).
+      const misuse = await run(['run', '--disk', '-c', 'true'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(misuse.code).toBe(2);
+    } finally {
+      await rm(podsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('`artipod pods` with no pods explains itself', async () => {
+    const r = await run(['pods'], { env: { ARTIPOD_PODS: join(tmpdir(), `apod-none-${Date.now()}`) } });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('no pods yet');
+  });
+
+  it('create-on-write: an untouched fresh pod is not kept, a written one is', async () => {
+    const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
+    try {
+      const readOnly = await run(['run', '-c', 'pwd'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(readOnly.code).toBe(0);
+      expect(await readdir(podsRoot)).toHaveLength(0);
+      const written = await run(['run', '-c', 'echo data > f.txt'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(written.code).toBe(0);
+      expect(await readdir(podsRoot)).toHaveLength(1);
+    } finally {
+      await rm(podsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('prune spares tagged pods and -a removes them too', async () => {
+    const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
+    try {
+      const tagged = await run(['run', '-c', 'echo t > f.txt && artipod commit --tag keep/me:1'], {
+        env: { ARTIPOD_PODS: podsRoot },
+      });
+      expect(tagged.code).toBe(0);
+      await run(['run', '-c', 'echo u > g.txt'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(await readdir(podsRoot)).toHaveLength(2);
+      const list = await run(['pods'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(list.stdout).toContain('keep/me:1');
+      const pruned = await run(['prune', '-f'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(pruned.code).toBe(0);
+      expect(pruned.stdout).toContain('spared 1 tagged pod');
+      expect(await readdir(podsRoot)).toHaveLength(1);
+      const all = await run(['prune', '-a', '-f'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(all.code).toBe(0);
+      expect(await readdir(podsRoot)).toHaveLength(0);
+    } finally {
+      await rm(podsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rm deletes a kept pod by prefix; prune -f wipes the root (but never without -f when piped)', async () => {
+    const podsRoot = await mkdtemp(join(tmpdir(), 'apod-pods-'));
+    try {
+      await run(['run', '-c', 'echo a > a.txt'], { env: { ARTIPOD_PODS: podsRoot } });
+      await run(['run', '-c', 'echo b > b.txt'], { env: { ARTIPOD_PODS: podsRoot } });
+      const dirs = await readdir(podsRoot);
+      expect(dirs).toHaveLength(2);
+      const removed = await run(['rm', dirs[0].slice(0, 8)], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(removed.code).toBe(0);
+      expect(removed.stdout).toContain(`removed ${dirs[0]}`);
+      expect(await readdir(podsRoot)).toHaveLength(1);
+      const missing = await run(['rm', 'no-such-pod'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(missing.code).toBe(1);
+      // Non-TTY prune without -f refuses while a pod still exists.
+      const refused = await run(['prune'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(refused.code).toBe(1);
+      expect(await readdir(podsRoot)).toHaveLength(1);
+      const pruned = await run(['prune', '-f'], { env: { ARTIPOD_PODS: podsRoot } });
+      expect(pruned.code).toBe(0);
+      expect(pruned.stdout).toContain('total reclaimed');
+      expect(await readdir(podsRoot)).toHaveLength(0);
+    } finally {
+      await rm(podsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('--dir persists the pod (files + snapshots) across invocations', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'apod-cli-'));
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    try {
+      const first = await run(['run', '--dir', dir, '--store', store, '-c', 'echo keep > k.txt && artipod snapshot create s1']);
+      expect(first.stdout).toContain('snapshot');
+      const second = await run(['run', '--dir', dir, '--store', store, '-c', 'artipod snapshot ls && cat k.txt']);
+      expect(second.stdout).toContain('s1');
+      expect(second.stdout).toContain('keep');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(store, { recursive: true, force: true });
+    }
+  });
+
+  it('the REPL reads piped stdin, carries cwd, and exits cleanly', async () => {
+    const r = await run(['run', '-it'], { input: 'mkdir sub\ncd sub\necho inside > f.txt\ncat f.txt\npwd\nexit\n' });
+    expect(r.stdout).toContain('inside');
+    expect(r.stdout).toContain('/sub');
+    // one line discipline (D18): the prompt is TerminalSession's, transcripts are plain \n
+    expect(r.stdout).toMatch(/\n[0-9a-f]{16}:\/sub \$ pwd\n\/sub\n/);
+    expect(r.stdout).not.toContain('\r');
+    expect(r.stdout).toContain('uname -a for details');
+    expect(r.stdout).toContain('get back: artipod run -it');
+    expect(r.code).toBe(0);
+  });
+
+  it('the REPL leaves on EOF without `exit`, and mirrors the last exit code', async () => {
+    const r = await run(['run', '--rm', '-it'], { input: 'echo a\nfalse\n' });
+    expect(r.stdout).toContain('\na\n');
+    expect(r.code).toBe(1);
+  });
+
+  it('run REF resolves a pushed volume ref from the local store and materializes at /', async () => {
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    try {
+      const push = await run([
+        'run',
+        '--store',
+        store,
+        '-c',
+        'echo "field data" > notes.md && artipod commit --tag field/notes:1 && artipod push field/notes:1',
+      ]);
+      expect(push.stdout).toContain('pushed field/notes:1');
+      const cloned = await run(['run', 'field/notes:1', '--store', store, '-c', 'cat notes.md']);
+      expect(cloned.stdout).toContain('materialized field/notes:1 at /');
+      expect(cloned.stdout).toContain('field data');
+    } finally {
+      await rm(store, { recursive: true, force: true });
+    }
+  });
+
+  it('import snapshots a folder into the store; run REF materializes it at /', async () => {
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    const src = await mkdtemp(join(tmpdir(), 'apod-import-'));
+    try {
+      await mkdir(join(src, 'docs'));
+      await writeFile(join(src, 'hello.txt'), 'hello from the folder\n');
+      await writeFile(join(src, 'docs', 'guide.md'), '# guide\n');
+
+      const first = await run(['import', src, 'team/proj:1', '--store', store]);
+      expect(first.code).toBe(0);
+      expect(first.stdout).toMatch(/imported .* → team\/proj:1: 2 layers/);
+
+      // Content-addressed: an unchanged tree is a no-op re-import.
+      const again = await run(['import', src, 'team/proj:1', '--store', store]);
+      expect(again.code).toBe(0);
+      expect(again.stdout).toContain('already matches');
+
+      const cloned = await run(['run', 'team/proj:1', '--store', store, '-c', 'cat hello.txt && cat docs/guide.md']);
+      expect(cloned.stdout).toContain('materialized team/proj:1 at /');
+      expect(cloned.stdout).toContain('hello from the folder');
+      expect(cloned.stdout).toContain('# guide');
+
+      const misuse = await run(['import', src, '--store', store]);
+      expect(misuse.code).toBe(2);
+      const notDir = await run(['import', join(src, 'hello.txt'), 'x/y:1', '--store', store]);
+      expect(notDir.code).not.toBe(0);
+      expect(`${notDir.stdout}${notDir.stderr}`).toContain('is not a directory');
+    } finally {
+      await rm(store, { recursive: true, force: true });
+      await rm(src, { recursive: true, force: true });
+    }
+  });
+
+  it('--base stacks folders in order (later wins) and the merged result is commit-able', async () => {
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    const skel = await mkdtemp(join(tmpdir(), 'apod-skel-'));
+    const patches = await mkdtemp(join(tmpdir(), 'apod-patches-'));
+    try {
+      await writeFile(join(skel, 'config.txt'), 'from skel\n');
+      await writeFile(join(skel, 'only-skel.txt'), 'skel keeps this\n');
+      await writeFile(join(patches, 'config.txt'), 'from patches\n');
+
+      const stacked = await run([
+        'run', '--rm', '--store', store, '--base', skel, '--base', patches,
+        '-c', 'cat config.txt && cat only-skel.txt',
+      ]);
+      expect(stacked.code).toBe(0);
+      expect(stacked.stdout).toContain('from patches'); // later --base wins
+      expect(stacked.stdout).toContain('skel keeps this'); // non-conflicting files union
+      expect(stacked.stdout).not.toContain('from skel');
+
+      // Reversed order flips the winner.
+      const reversed = await run([
+        'run', '--rm', '--store', store, '--base', patches, '--base', skel, '-c', 'cat config.txt',
+      ]);
+      expect(reversed.stdout).toContain('from skel');
+
+      // The merged view is ordinary writable state — commit + push freezes the stack.
+      const committed = await run([
+        'run', '--rm', '--store', store, '--base', skel, '--base', patches,
+        '-c', 'artipod commit --tag stack/demo:1 && artipod push stack/demo:1',
+      ]);
+      expect(committed.stdout).toContain('pushed stack/demo:1');
+      const replay = await run(['run', 'stack/demo:1', '--store', store, '-c', 'cat config.txt']);
+      expect(replay.stdout).toContain('from patches');
+
+      const notDir = await run(['run', '--rm', '--store', store, '--base', join(skel, 'config.txt'), '-c', 'true']);
+      expect(notDir.code).not.toBe(0);
+      expect(`${notDir.stdout}${notDir.stderr}`).toContain('is not a directory');
+    } finally {
+      await rm(store, { recursive: true, force: true });
+      await rm(skel, { recursive: true, force: true });
+      await rm(patches, { recursive: true, force: true });
+    }
+  });
+
+  it('--base <dir>:<podpath> materializes the folder at a chosen path', async () => {
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    const src = await mkdtemp(join(tmpdir(), 'apod-basesrc-'));
+    try {
+      await writeFile(join(src, 'data.txt'), 'under work\n');
+      const r = await run([
+        'run', '--rm', '--store', store, '--base', `${src}:/work`,
+        '-c', 'cat /work/data.txt && ls /',
+      ]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('files at /work');
+      expect(r.stdout).toContain('under work');
+
+      // Same folder, two targets — targets are independent.
+      const two = await run([
+        'run', '--rm', '--store', store, '--base', `${src}:/a`, '--base', `${src}:/b`,
+        '-c', 'cat /a/data.txt /b/data.txt',
+      ]);
+      expect(two.code).toBe(0);
+      expect(two.stdout.match(/under work/g)).toHaveLength(2);
+    } finally {
+      await rm(store, { recursive: true, force: true });
+      await rm(src, { recursive: true, force: true });
+    }
+  });
+
+  it('-v mounts a host folder live: rw writes back, cow keeps writes in RAM', async () => {
+    const vol = await mkdtemp(join(tmpdir(), 'apod-vol-'));
+    try {
+      await writeFile(join(vol, 'data.txt'), 'from the host\n');
+
+      // Copy from the mount into the pod; rw writes land in the real folder.
+      const rw = await run([
+        'run', '--rm', '-v', `${vol}:/mnt/data`,
+        '-c', 'cat /mnt/data/data.txt && echo "from the pod" > /mnt/data/out.txt',
+      ]);
+      expect(rw.code).toBe(0);
+      expect(rw.stdout).toContain('from the host');
+      expect(await readFile(join(vol, 'out.txt'), 'utf8')).toContain('from the pod');
+      await rm(join(vol, 'out.txt'));
+
+      // cow: reads pass through, writes never reach the host.
+      const cow = await run([
+        'run', '--rm', '-v', `${vol}:/mnt/data:cow`,
+        '-c', 'cat /mnt/data/data.txt && echo scratch > /mnt/data/scratch.txt && cat /mnt/data/scratch.txt',
+      ]);
+      expect(cow.code).toBe(0);
+      expect(cow.stdout).toContain('from the host');
+      expect(cow.stdout).toContain('scratch');
+      expect(await readdir(vol)).toEqual(['data.txt']);
+
+      // The pod path is mandatory and '/' is refused.
+      const noTarget = await run(['run', '--rm', '-v', vol, '-c', 'true']);
+      expect(noTarget.code).not.toBe(0);
+      expect(`${noTarget.stdout}${noTarget.stderr}`).toContain('expected <hostdir>:</pod/path>');
+      const rootTarget = await run(['run', '--rm', '-v', `${vol}:/`, '-c', 'true']);
+      expect(rootTarget.code).not.toBe(0);
+      expect(`${rootTarget.stdout}${rootTarget.stderr}`).toContain("other than '/'");
+    } finally {
+      await rm(vol, { recursive: true, force: true });
+    }
+  });
+
+  it('tag points a new ref at an existing manifest; --actor + re-import chain parents', async () => {
+    const store = await mkdtemp(join(tmpdir(), 'apod-store-'));
+    const src = await mkdtemp(join(tmpdir(), 'apod-stage-'));
+    try {
+      await writeFile(join(src, 'case.mdy'), 'status: open\n');
+      const first = await run(['import', src, 'demo/case:latest', '--store', store, '--actor', 'examples-builder']);
+      expect(first.code).toBe(0);
+
+      const tagged = await run(['tag', 'demo/case:latest', 'demo/case:intake', '--store', store]);
+      expect(tagged.code).toBe(0);
+      expect(tagged.stdout).toMatch(/tagged demo\/case:intake → sha256:[0-9a-f]{64}/);
+
+      // stage 2: same rolling ref → new head, parents = previous head
+      await writeFile(join(src, 'visit.mdy'), 'seen: yes\n');
+      const second = await run(['import', src, 'demo/case:latest', '--store', store, '--actor', 'examples-builder']);
+      expect(second.code).toBe(0);
+
+      const index = JSON.parse(await readFile(join(store, 'index.json'), 'utf8')) as {
+        manifests: { digest: string; annotations?: Record<string, string> }[];
+      };
+      const digestOf = (ref: string) =>
+        index.manifests.find((m) => m.annotations?.['org.opencontainers.image.ref.name'] === ref)?.digest;
+      const intake = digestOf('demo/case:intake');
+      const latest = digestOf('demo/case:latest');
+      expect(intake).toMatch(/^sha256:/);
+      expect(latest).toMatch(/^sha256:/);
+      expect(latest).not.toBe(intake);
+      const head = JSON.parse(await readFile(join(store, 'blobs/sha256', latest!.slice(7)), 'utf8')) as {
+        annotations?: Record<string, string>;
+      };
+      expect(head.annotations?.['org.artipod.parents']).toContain(intake);
+      expect(head.annotations?.['org.artipod.actor']).toBe('examples-builder');
+
+      const missing = await run(['tag', 'demo/nothere:1', 'demo/x:1', '--store', store]);
+      expect(missing.code).not.toBe(0);
+      expect(`${missing.stdout}${missing.stderr}`).toContain('not found');
+    } finally {
+      await rm(store, { recursive: true, force: true });
+      await rm(src, { recursive: true, force: true });
+    }
+  });
+
+  it('`examples` prints the demo-pod table in the shell', async () => {
+    const r = await run(['run', '--rm', '-c', 'examples']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('example/case');
+    expect(r.stdout).toContain('ghcr.io/mieweb/artipod-examples');
+    expect(r.stdout).toContain('the layer history IS the record');
+  });
+
+  it('refuses non-interactive run with no command', async () => {
+    const r = await run(['run']);
+    expect(r.code).toBe(2);
+    expect(r.stdout).toContain('did you mean -it');
+  });
+});

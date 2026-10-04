@@ -1,362 +1,262 @@
-# Artipod Artifact Studio — Architecture & Implementation Guide
+# artipod
 
----
+![curb weight](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmieweb%2Fartipod%2Fweigh-ins%2Fbadge.json) ![tools entry](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmieweb%2Fartipod%2Fweigh-ins%2Fbadge-bundle-tools-gzip.json)
 
-## Executive Summary
+**A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize — in the browser and on Linux.**
 
-Artipod Artifact Studio is designed to provide a **GitHub-like multi-tenant artifact and repo environment** with:
+> **Status: shipped through plan Phase 6.6.** Everything below marked ✅ ships in `@artipod/core` today — the Node/Docker core, the browser sandbox, OCI layering, encryption & authority, and sync (the browser app lives at [examples/artipod-spa](examples/artipod-spa)). 🔮 marks the remaining design work (Phase 7 live streams), tracked phase-by-phase in [plan/artipod-layer-plan.md](plan/artipod-layer-plan.md). Previous implementation-state READMEs are archived in `attic/` ([v0.1](attic/v0.1-node.README.md), [v0.3](attic/v0.3-node.README.md) — the v0.3 one documents the pre-merge Node/Docker API, including podman support, read-only mounts, and the main mount).
 
-* **Hyperconverged Ceph storage** (NVMe + HDD) powering both POSIX (CephFS) and block (RBD) backends.
-* **Tenant isolation** with encryption and per-request bind-mounts.
-* **Virtualized interactive consoles** via Docker containers per tenant, presenting a secure command-line experience.
-* **Blob storage** (images, videos, binaries, recordings, Git-LFS) backed by CephFS subtrees.
-* **DuckDB RDB** for fast serverless database performance. 
-* **Balanced performance tiers** through CephFS multiple data pools and RBD NVMe pool.
+## What is an artipod?
 
-This approach balances operational simplicity (single CephFS for most tenants) with targeted performance isolation (RBD for DuckDB databases). It minimizes latency by avoiding per-request network mounts and secures tenants with encryption, namespaces, and cephx path-scoped caps.
+An **artipod** is portable artifact state, exposed as a workspace through a declarative set of filesystem mounts. The pod is the data; the software that mounts, synchronizes, or executes against it is separate.
 
----
+### Artifact format versus services
 
-## What is an Artipod?
+| Layer | What it describes | What it does not imply |
+|---|---|---|
+| **Artipod artifact format** | Files and metadata, represented today by OCI manifests, content-addressed layers, refs, and optional encrypted storage | A running server, agent, or synchronization connection; this is an artifact layout, not a single-file extension |
+| **Mount and runtime libraries** | Concrete sources, mount paths, access modes, and execution through a shell, browser app, or container | That every pod contains executable code or can choose its own permissions |
+| **Synchronization services** | Transfer of blobs and refs between stores, lazy hydration, and reconciliation of saved changes | Remote execution or access to another pod merely because it lives on the same server |
+| **Authority and hosting services** | Key leases, authorization, and endpoints supplied by a trusted host | Permissions embedded in or self-granted by a downloaded artifact |
 
-An **Artipod** is a secure, isolated filesystem-like environment tailored for each tenant (or conversation). It serves as a unified workspace encompassing:
+The artifact can exist without any of these services running. OCI is the current snapshot and distribution representation, not a requirement that a live workspace use one particular storage backend. See the [on-disk format](docs/on-disk-layout.md).
 
-* **Git Repositories:** Version-controlled code and artifacts.
-* **DuckDB Databases:** Fast, serverless relational databases for data processing.
-* **Images, Recordings, Videos, Binaries:** Blob storage for multimedia and executable files, stored in CephFS subtrees.
-* **Git-LFS Objects:** Large file storage integrated with Git.
+The synchronization capability is called **Artipod sync** here, with **encrypted sync** describing its use with encrypted pod content, not a separate product or file format. HTTPS protects transport; pod encryption protects stored content. A blind relay can synchronize ciphertext without decryption keys; server-side processing requires a separately authorized decryption grant. See [sync](docs/sync.md) and [encryption](docs/encryption.md).
 
-Each Artipod ensures process isolation, allowing tenants to operate within their dedicated space without interference. Processes running in an Artipod are confined to that tenant's resources, with encryption (via gocryptfs) protecting data at rest and bind-mounts providing secure access.
+`@artipod/core` supplies the libraries for these capabilities. `artipod serve` assembles a reference host; applications can embed the APIs in their own services. The implementation includes:
 
-While owned by a specific tenant, an Artipod can be shared with other tenants by securely distributing the encryption keys. Additionally, if the GUID of an Artipod is known, it can be shared publicly or locked down to only named groups for flexible access control.
+- a **bash isolate** (real bash semantics, browser and server) ✅
+- **AI agent tools** with VS Code-compatible schemas, an agent loop, and context/prompt building ✅
+- **OCI layering** for revision control: every pod is image/volume layers + a writable upper; snapshot, checkout, diff, commit, push, pull ✅
+- **encryption & authority**: ciphertext at rest, leased keys, offline grants, delegated managers ✅
+- **sync**: content-addressed, resumable, relay-friendly — browser ↔ server ↔ home base ✅
 
----
+Three consumer surfaces, one layer:
 
-## Multi-Tenant Underlay Design
+| Surface | What it gets |
+|---|---|
+| **AI reasoning** | `buildPrompt()` context, VS Code-schema tools (`read_file`, `apply_patch`, …, `bash`), agent loop, `/proc` introspection — all confined to the pod |
+| **Revision control** | OCI snapshots: cheap (reference-based) checkpoints of *everything*, including shell side effects; time-travel, branch, diff, compact |
+| **Synchronization** | push/pull of digest-addressed layers through registries, proxies, or relays; offline-first by construction |
 
-```mermaid
-graph TD
-AppServer[App Server Node] --> CephFSMount[CephFS Mount: /srv/cephfs]
-AppServer --> RBDMap[RBD Map: /mnt/rbd/t-XXX-db]
-CephFSMount --> CephFSMetadata[CephFS Metadata NVMe]
-CephFSMount --> CephFSDataPools[CephFS Data Pools NVMe + HDD EC]
-RBDMap --> RBDPool[RBD Pool NVMe]
-CephFSMetadata --> OSDs[Ceph Cluster OSDs]
-CephFSDataPools --> OSDs
-RBDPool --> OSDs
-OSDs --> MonMgr[MON + MGR]
+> **Coming from Docker or Podman?** The muscle memory transfers (`artipod run -it alpine:3.22`, `artipod pods`), but the model inverts: in Docker the image is the artifact and the container's writable layer is scratch; here the writable state *is* the artifact — versioned, encrypted, pushable. And a pod is **not a Kubernetes Pod** — it's durable state that execution attaches to, not scheduled compute. Full orientation and concept map: [docs/containers.md](docs/containers.md).
+
+### What Artipod owns
+
+Artipod manages durable pod state and execution attached to that state. Its Docker backend runs commands against pod mounts; it is not a general HTTP application host or a Cloudflare Containers lifecycle adapter. Application routing, scaling, deployment, and production access policy belong to the embedding application, such as `mieweb/cloud`.
+
+[`artipod serve`](docs/serve.md) is a quick POC and reference host for Artipod capabilities, not the prescribed production deployment system. Reuse the library APIs in your own host where appropriate. See the [container orientation](docs/containers.md#execution-versus-application-hosting) for the ownership boundary.
+
+### Pod kinds: data, applications, and agents
+
+These names describe a pod's purpose, not different storage engines or a class inheritance hierarchy. All use the same underlying Artipod mechanisms.
+
+| Kind or convention | Contains | How it is used |
+|---|---|---|
+| **Artipod** | Any collection of artifacts, such as documents or generated drafts | Mounted as data; execution is optional |
+| **AppPod / SPAPod** | Application assets and an entrypoint | AppPod is a descriptive umbrella here; `SPAPod` is the currently supported browser executable kind |
+| **CasePod / PatientPod** | Subject data, such as visits, recordings, labs, and notes | Selected independently of its viewer; PatientPod is a domain convention, not a distinct runtime |
+| **AgentPod** | Agent instructions, skill references, and capability requests | Loaded by a host-owned harness; model credentials and actual tool grants stay outside the artifact |
+| **SkillPod** | Instructions for a particular task | Consumed by an agent harness; guidance does not grant permissions |
+
+A semantic descriptor says what a pod is and what it requests. The concrete `PodManifest` says where authorized sources are mounted and whether they are read-only, copy-on-write, or read-write. The host resolves the former into the latter; declaring a mount does not authorize it.
+
+**Status:** browser SPAPod launch is implemented, but compatible subject selection and AgentPod definition loading are not integrated end to end. PatientPod and SkillPod composition below are illustrative conventions. See the [composition design](plan/model-exec-poc.md#5-multiple-applications-and-composition) and [browser runtime limits](docs/apps.md#trust-and-current-limits).
+
+### Example: dictation with separate browser and server agents
+
+**Hypothetical workflow, not a shipped dictation application.** A clinician uploads a recording into a PatientPod in the browser, reviews spelling suggestions from a browser agent, and synchronizes saved patient files to the server. The clinician has no access to the server's AgentPod or general agent invocation API.
+
+```text
+CLINICIAN'S BROWSER                         SERVER
+
+Dictation App                              PatientPod store
+  | upload audio and save transcript          ^
+  v                                           |
+PatientPod working copy --- encrypted sync ------+
+  ^                                           |
+  | transcript only                           | authorized submitted snapshot
+Browser Spellcheck Agent                    Server Clinical Agent
+  |                                           |
+  +-- suggestions for clinician review        +-- private processing results
 ```
 
-**Layers:**
+Each execution environment gets its own logical mount table. These paths are examples, not prescribed paths or launcher syntax:
 
-* **CephFS:** shared filesystem for repos, worktrees, artifacts, and blobs (images, videos, binaries, recordings, Git-LFS).
-* **RBD:** per-tenant block volumes for DuckDB databases.
-* **Pools:** NVMe for metadata + hot data, HDD EC for warm storage.
+| Environment | Mount | Source and access |
+|---|---|---|
+| Browser dictation app | `/app` | Approved SPAPod assets, read-only |
+| Browser dictation app | `/patient` | Selected PatientPod working copy, read-write |
+| Browser spellchecking harness | `/agent` | Admitted spellchecking AgentPod, read-only |
+| Browser spellchecking harness | `/input` | Selected transcript only, read-only |
+| Browser spellchecking harness | `/suggestions` | Session-local proposed corrections, read-write |
+| Server processing harness | `/agent` | Server-private clinical AgentPod, read-only |
+| Server processing harness | `/input` | Submitted patient dictation snapshot, read-only |
+| Server processing harness | `/output` | Separate server-owned result storage, read-write |
 
-**Why:**
+1. The app saves the recording under `/patient/dictations/visit-7/recording.webm`. A separately configured transcription step supplies `transcript.txt`; uploading audio alone does not produce text.
+2. The browser harness uses a local browser model to suggest spelling corrections. The clinician reviews them, and the app saves accepted text as `corrected.txt`. A browser harness using a remote model would instead disclose the supplied text to that provider and needs separate consent.
+3. Artipod sync transfers saved PatientPod content, including audio and transcripts. Neither AgentPod nor temporary suggestions are included in that patient artifact. Offline changes can synchronize when connectivity returns.
+4. Explicit submission identifies a complete, immutable snapshot for a server-owned job policy. Sync alone does not invoke an agent. The server must verify that the job's input is available before processing it.
+5. The server harness receives its own data authorization and decryption grant. The clinician's sync credentials do not permit listing, mounting, editing, or directly invoking the server agent. Results become clinician-visible only through an explicitly authorized publication step.
 
-* Single FS simplifies ops & namespace for repos and blobs.
-* Multiple data pools enable cost/performance balance.
-* RBD volumes isolate database fsync-heavy workloads.
+**The boundary is authorization, not the sync connection.** A blind storage server cannot process plaintext. An authorized processing endpoint can, without exposing its agent definition or credentials to the browser. Browser apps currently execute as trusted same-origin code, so their logical mounts are not a hostile-JavaScript security boundary; server privacy must be enforced by server authorization. Agent tool scopes must also be enforced by the harness, not merely described in instructions.
 
----
+## Quick starts
 
-## Tenant Virtual Experience
+### The CLI: a pod in your terminal (✅)
 
-### In-App
-
-* Tenants see only their repos, blobs, and DB.
-* Transparent tiering: hot repos fast, cold repos may restore with a slight delay.
-* Recordings and large files stored directly in CephFS subtrees.
-
-### In Docker Console
-
-* Tenant runs in a container with:
-
-  * `/workspace/repos` → their CephFS subtree.
-  * `/workspace/db` → their RBD volume (mounted as ext4/xfs).
-* Container is hardened: non-root user, read-only rootfs, tmpfs scratch, no extra caps.
-* Optional gocryptfs decryption ensures the tenant’s plaintext is visible only inside their container.
-
-```mermaid
-graph TD
-  user_request[User Request] --> load_balancer[Load Balancer]
-  load_balancer --> app_server[App Server]
-  app_server --> node_console_manager[Node Console Manager]
-  node_console_manager --> gocryptfs_mount[gocryptfs Mount]
-  node_console_manager --> rbd_map_mount[RBD Map + Mount]
-  node_console_manager --> docker_run[Docker Run]
-  docker_run --> interactive_shell[Interactive Shell]
+```sh
+npx artipod run -it              # fresh pod → artipod-bash, kept under ~/.artipod/pods
+npx artipod run -it alpine:3.22  # a registry image, cloned in writable
+npm install -g artipod           # permanent `artipod` on PATH (alias for @artipod/core)
+artipod pods                     # past runs — the `docker ps -a` of pods
+artipod run -it 500edf8b         # resume a kept pod by id prefix
+artipod run -it field/notes:1    # a ref you pushed earlier
+artipod import ~/proj team/proj:1            # folder → image in the store (no pod)
+artipod run -it --base ~/skel --base ./patches   # stack folders as layers (later wins)
 ```
 
----
+(`npx github:mieweb/artipod` also works — it compiles from source on first run and caches.)
 
-## Encryption Spec
+Pods are kept on the real filesystem by default, so `exit` loses nothing — create-on-write: a
+fresh pod that saw no writes is quietly removed again. `--rm` makes the pod ephemeral (RAM only
+— add `--disk` to back it by a deleted-on-exit temp dir when changes may not fit in memory),
+`artipod rm <pod>` deletes kept pods and `artipod prune` removes the untagged ones (`-a` for
+all; tag inside the shell with `artipod commit --tag <name>:<tag>`), `--dir <path>` keeps a pod
+at a path of your choosing, `--store <path>` (default `~/.artipod/store`) backs
+`push`/`pull`/`clone` and REF lookup, `-c '<cmd>'` runs one line and exits. Inside the shell,
+`artipod` lists the pod verbs (snapshot, commit, push, hydrate, …).
 
-* **At-rest:** gocryptfs encrypts tenant repos under `/srv/cephfs/tenants/t-XXX.enc`.
-* **At-host:** decrypted view (`/run/tenants/t-XXX.plain`) mounted only for active sessions.
-* **Keys:** per-tenant, stored in Vault/KMS, short-lived tokens at runtime.
-* **Isolation:** cephx caps scoped to tenant paths; containers bind-mount only their decrypted folder.
-**Why:** ensures CephFS underlay and cluster operators see only ciphertext; only app servers with tenant keys can present plaintext.
+Host folders enter the layer model two ways. `artipod import <dir> <name:tag>` snapshots a
+folder into the store as an image ref without booting a pod — content-addressed, so
+re-importing an unchanged tree is a no-op and only changed files cost bytes; `artipod run -it
+<name:tag>` then materializes it like any other ref. `--base <dir>[:<podpath>]` does the
+import at boot and materializes the folder into the pod (default target `/`); repeat it to
+stack folders in order — later `--base` wins on conflicts, and the stack sits on top of REF
+when one is given. Neither ever writes back to the host folder, and committing inside the
+shell freezes the merged result as a layer whose parent chain records the imported bases.
 
----
+For a *live* window onto the host instead of a snapshot, `-v <dir>:<podpath>[:ro|:cow]`
+mounts a folder docker-style (repeatable): rw by default (writes inside the shell land in the
+real folder), `:cow` keeps writes in RAM so the host is never touched, `:ro` marks it
+read-only for the tool layer and keeps it out of commits. rw/cow mounts are commit roots —
+mount under `/mnt` (commit-excluded) when it's just source material to copy from.
 
-## Appendix — Technical Links
+### Browser pod with a shell (✅ `@artipod/core/sandbox`)
 
-* **CephFS Multi-MDS:** [https://docs.ceph.com/en/latest/cephfs/](https://docs.ceph.com/en/latest/cephfs/)
-* **RBD Overview:** [https://docs.ceph.com/en/latest/rbd/](https://docs.ceph.com/en/latest/rbd/)
-* **gocryptfs:** [https://github.com/rfjakob/gocryptfs](https://github.com/rfjakob/gocryptfs)
-* **Docker Security:** [https://docs.docker.com/engine/security/](https://docs.docker.com/engine/security/)
-* **Git-LFS:** [https://git-lfs.github.com/](https://git-lfs.github.com/)
+```ts
+import { initFileSystem, createSandbox } from '@artipod/core/sandbox';
 
----
+const { zfs } = await initFileSystem();     // IndexedDB (default) or OPFS
+const sandbox = createSandbox({ zfs });     // just-bash over ZenFS
+const r = await sandbox.exec('git clone https://github.com/user/repo && ls repo | head');
+```
 
-## Diary of Design Considerations
+### Linux / server pod with Docker/Podman execution (✅ core shipped)
 
-### Initial Scaling Concerns
+```ts
+import { ArtiPod, ArtiMount } from '@artipod/core';
 
-* Q: Can one Ceph cluster handle hundreds of thousands of users?
-* A: Yes, but avoid pool-per-tenant. Use shared pools + quotas; RGW scales with sharded bucket indexes.
+const pod = new ArtiPod({
+  workspaceDir: '/data/workspaces',                    // auto-creates the writable 'main' mount
+  mounts: [new ArtiMount('src', '/data/project/src', /* readonly */ true)],
+});
+await pod.initialize();
+await pod.startContainer('./container/Dockerfile');   // hardened: CapDrop ALL, seccomp, no network
+const out = await pod.executeCommand('grep -r TODO /context/src | wc -l');
+```
 
-### File System vs Block Storage
+See [docs/linux.md](docs/linux.md) for the full server story (realizers, OCI-layout store, systemd).
 
-* CephFS: good for repos (many small files) but fsyncs jittery.
-* RBD: better for DuckDB (database file with heavy fsync).
-* Decision: CephFS for repos, RBD for DuckDB → **best of both worlds**.
+### An agent working inside a pod (✅ `@artipod/core/agent`)
 
-### Tenant Isolation
+```ts
+import { createToolRegistry } from '@artipod/core/tools';
+import { ToolCallingLoop } from '@artipod/core/agent';
 
-* Wanted tenants to only see their subtree.
-* Solutions explored: cephx path caps, NFS Ganesha exports, mount namespaces.
-* Decision: single host CephFS mount + per-tenant bind-mount + chroot/pivot → instant, safe isolation.
+const tools = createToolRegistry(pod);      // read_file, apply_patch, bash, … — pod-confined
+const loop = new ToolCallingLoop(client, tools);
+await loop.run('Summarize the README, then fix the failing test.');
+// tool-executing turns auto-snapshot (pod.agentLoopOptions(), default on) — `artipod snapshot diff` shows what the model did
+```
 
-### On-Demand vs Persistent Mounts
+The agent is **confined to the pod**. Anything outside it requires `sudo` — which the agent cannot self-approve. See [docs/security-model.md](docs/security-model.md).
 
-* Mount/unmount CephFS per request too slow.
-* Decision: single persistent host mount, instant bind mounts for requests.
+### The Ctrl+~ console (✅)
 
-### Encryption
+One line to give any web app a drop-down artipod console (Quake-style):
 
-* Goal: ensure underlay cannot read tenant data.
-* Explored: fscrypt, eCryptfs, gocryptfs, CryFS.
-* Decision: **gocryptfs** → fast, filename encryption, supports hardlinks (needed by Git).
+```ts
+import { installConsole } from '@artipod/core/console';
+installConsole({ sandbox, hotkey: 'Ctrl+`' });   // Ctrl+` / Ctrl+~ toggles the overlay
+```
 
-### Tenant Console UX
+See [docs/console.md](docs/console.md).
 
-* Requirement: give users a CLI-like experience.
-* Explored: direct host access vs container.
-* Decision: Docker containers, hardened (non-root, seccomp, no caps), bind mounts for repos + DB.
+## Package layout
 
-### Blob Storage
+Single package, ESM subpath exports (browser/node split via export conditions):
 
-* Git-LFS, images, media files, recordings don’t belong in CephFS repos but can be stored in CephFS subtrees.
-* Decision: Store blobs directly in CephFS for simplicity, with tiering to cold pools.
+```
+@artipod/core            ArtiPod, ArtiMount, pod manifest, pod events
+@artipod/core/tools      VS Code-schema tools + bash, OpenAI & MCP serializers
+@artipod/core/prompts    prompt templates + buildPrompt
+@artipod/core/sandbox    just-bash isolate, ZenFS adapter, storage backends
+@artipod/core/agent      tool-calling loop, OpenAI-compatible + local ONNX clients
+@artipod/core/proc       /proc providers (host state as files)
+@artipod/core/host       headless UI controllers (terminal session, file buffer, tree)
+@artipod/core/console    Ctrl+~ drop-in overlay console
+@artipod/core/manager    pod hosting, PodStore, keyring, leases, policy
+@artipod/core/server     fetch-style hosting handlers: pod store, exec, git/OCI proxies (node-only)
+@artipod/core/oci        blob store, layer FS, snapshots, transports
+@artipod/core/apps       browser app runtime (SPA pods, admission, service worker)
+@artipod/core/docker     hardened Docker execution (node-only)
+```
 
-### Why This Hybrid Design?
+### Installing as a library
 
-* Single CephFS for operational simplicity & repo semantics, including blobs.
-* RBD for performance-sensitive databases.
-* Encryption to enforce zero-knowledge underlay.
+```sh
+npm install @artipod/core just-bash@3.2.0 @zenfs/core@2.4.4 @zenfs/dom@1.2.5 isomorphic-git fflate diff
+```
 
----
+The filesystem and shell peers are **exact pins** on purpose: `@zenfs/core` 2.4.4 and
+`just-bash` 3.2.0 are the versions the encrypted mounts, `/proc` reconcile and shell session
+recovery are verified against, and both projects have shipped behavior changes in patch
+releases. pnpm users with strict peers must match them exactly; a caret range will be
+restored once a compatibility test matrix exists. `dockerode` is an optional peer (node-only
+`/docker`). Building from a git checkout (`npx github:mieweb/artipod`, `file:` deps) runs
+`prepare` → build; the global `npm link` convenience is opt-in with `ARTIPOD_DEVLINK=1` and
+never runs otherwise.
 
-**Artipod Artifact Studio** = a unified, secure, multi-tenant environment that feels like a personal studio for each tenant, but scales operationally like a cloud platform.
+## Security model in five lines
 
-https://chatgpt.com/share/68be9903-f71c-8004-9621-19505653bd68
+1. **Disk holds only ciphertext + wrapped keys**; usable keys live in a memory keyring, on server-issued leases with a TTL. Lock = the key evaporates; login restores it.
+2. **Offline is first-class**: signed offline grants (e.g. 24 h) wrap keys to a device; delegated manager certificates let a ship/station/site issue leases with no home-base round trip.
+3. **The agent is confined to its pod.** `sudo` is the only escape, it requires explicit human approval, and the human may only approve if admin policy grants them that right.
+4. **Relays never need plaintext** — content addressing verifies end-to-end, so untrusted hops can cache and forward.
+5. Honesty: a browser can enforce cryptography, not process boundaries — see the threat-model tables in [docs/encryption.md](docs/encryption.md) before assuming more.
 
----
+Built for real disconnection profiles: a 24-hour offline clinic visit, a light-minutes-away station where all operations are local and sync is merely delayed, and an intermittently-connected ship where laptops relay through an on-board server. Walkthroughs in [docs/encryption.md](docs/encryption.md#offline-use-cases).
 
-## Proxmox Implementation Guide
+## Documentation
 
-This guide provides high-level steps to bootstrap Artipod Artifact Studio on Proxmox, integrating CephFS, RBD, gocryptfs, and Docker. It starts with a 3-node setup and outlines scaling to 20 nodes.
+See the [FAQ](docs/faq.md) for comparisons with Zarf and Skopeo, offline-readiness requirements, and OCI interoperability limits.
 
-### Prerequisites
-- 3+ servers with Proxmox VE compatible hardware (NVMe for OSDs, HDD for storage).
-- Network configured for cluster communication.
-- SSH access to all nodes.
+| Doc | Contents |
+|---|---|
+| [docs/containers.md](docs/containers.md) | Orientation for Docker/Podman/Kubernetes users: concept map, where each runtime fits, the pod-term collision |
+| [docs/on-disk-layout.md](docs/on-disk-layout.md) | What lands on disk: `~/.artipod`, the per-pod `/.artipod` store, plaintext vs ciphertext |
+| [docs/browser.md](docs/browser.md) | Browser implementation: ZenFS backends, OPFS/IndexedDB, ingest API, devices |
+| [docs/multi-tab.md](docs/multi-tab.md) | Multi-tab concurrency: shared cow uppers, per-tab caches, last-write-wins hazards, Yjs/SharedWorker roadmap |
+| [docs/linux.md](docs/linux.md) | Linux/server implementation: realizers, Docker hardening, stores, deployment |
+| [docs/bash-isolate.md](docs/bash-isolate.md) | The bash isolate in browser and server: semantics, sessions, limits |
+| [docs/encryption.md](docs/encryption.md) | Encryption at rest, keyring, leases, offline grants, delegation |
+| [docs/security-model.md](docs/security-model.md) | Agent confinement, `sudo`, approval flow, admin policy |
+| [docs/dossier.md](docs/dossier.md) | The dossier pattern: long-lived entities (patients, cases, customers, tickets) with open workstreams and sealed, immutable milestones |
+| [docs/console.md](docs/console.md) | The Ctrl+~ installable console module |
+| [plan/artipod-layer-plan.md](plan/artipod-layer-plan.md) | The living implementation plan (phases, decisions, worklogs) |
 
-### Step 1: Install Proxmox VE on 3 Nodes
-1. Download the latest Proxmox VE ISO from [proxmox.com](https://www.proxmox.com/en/downloads).
-2. Boot each server from the ISO and follow the installation wizard.
-   - Set hostname (e.g., proxmox01, proxmox02, proxmox03).
-   - Configure network interfaces.
-   - Install to local disk.
-3. After installation, update the system:
-   ```
-   apt update && apt upgrade -y
-   ```
-4. Repeat for all 3 nodes.
+## License
 
-### Step 2: Create Proxmox Cluster
-1. On the first node (proxmox01):
-   ```
-   pvecm create artipod-cluster
-   ```
-2. On the second and third nodes:
-   ```
-   pvecm add <IP_of_proxmox01>
-   ```
-   - Follow prompts to join the cluster.
-3. Verify cluster status:
-   ```
-   pvecm status
-   ```
-
-### Step 3: Install and Configure Ceph
-1. On each node, install Ceph:
-   ```
-   apt install cephadm -y
-   ```
-2. On proxmox01, bootstrap the Ceph cluster:
-   ```
-   cephadm bootstrap --mon-ip <IP_of_proxmox01>
-   ```
-   - This creates the initial monitor and manager.
-3. Add the other nodes to Ceph:
-   ```
-   ceph orch host add proxmox02 <IP_of_proxmox02>
-   ceph orch host add proxmox03 <IP_of_proxmox03>
-   ```
-4. Add OSDs (assuming disks are available):
-   ```
-   ceph orch daemon add osd <host>:<device>
-   ```
-   - Repeat for NVMe and HDD devices across nodes.
-
-### Step 4: Configure Ceph Pools and Services
-1. Create pools for CephFS:
-   ```
-   ceph osd pool create cephfs_meta 32
-   ceph osd pool create cephfs_data 128
-   ```
-2. Create CephFS filesystem:
-   ```
-   ceph fs new artipod_fs cephfs_meta cephfs_data
-   ```
-3. Create RBD pool:
-   ```
-   ceph osd pool create rbd 128
-   rbd pool init rbd
-   ```
-
-### Step 5: Mount CephFS and Set Up Encryption with gocryptfs
-1. On each app server node, install gocryptfs:
-   ```
-   apt install gocryptfs -y
-   ```
-2. Mount CephFS persistently:
-   ```
-   echo "<mon_ips>:/ /srv/cephfs ceph name=admin,secret=<ceph_key> 0 0" >> /etc/fstab
-   mount /srv/cephfs
-   ```
-3. For each tenant (e.g., t-001), create encrypted directory:
-   ```
-   mkdir /srv/cephfs/tenants/t-001.enc
-   gocryptfs -init /srv/cephfs/tenants/t-001.enc
-   ```
-   - Store the master key securely (e.g., in Vault).
-4. Mount decrypted view on-demand:
-   ```
-   gocryptfs /srv/cephfs/tenants/t-001.enc /run/tenants/t-001.plain
-   ```
-
-### Step 6: Install and Configure Docker
-1. On app server nodes, install Docker:
-   ```
-   apt install docker.io -y
-   systemctl enable docker
-   systemctl start docker
-   ```
-2. Pull base images for tenant consoles:
-   ```
-   docker pull ubuntu:20.04
-   ```
-3. Run a sample tenant container:
-   ```
-   docker run -it --rm \
-     --mount type=bind,source=/run/tenants/t-001.plain,target=/workspace/repos \
-     --mount type=bind,source=/mnt/rbd/t-001-db,target=/workspace/db \
-     --user 1000:1000 \
-     --cap-drop ALL \
-     ubuntu:20.04 /bin/bash
-   ```
-   - Adjust mounts for RBD (see below).
-
-### Step 7: Configure RBD Volumes for Databases
-1. Create RBD image for a tenant DB:
-   ```
-   rbd create --size 10G rbd/t-001-db
-   ```
-2. Map and format on the host:
-   ```
-   rbd map rbd/t-001-db
-   mkfs.ext4 /dev/rbd/rbd/t-001-db
-   mount /dev/rbd/rbd/t-001-db /mnt/rbd/t-001-db
-   ```
-3. Bind-mount into Docker containers as needed.
-
-### Scaling to 20 Nodes
-1. **Add Proxmox Nodes:**
-   - Install Proxmox on new servers (nodes 4-20).
-   - Join them to the cluster:
-     ```
-     pvecm add <IP_of_existing_node>
-     ```
-
-2. **Expand Ceph Cluster:**
-   - Add new hosts:
-     ```
-     ceph orch host add proxmox04 <IP_of_proxmox04>
-     ```
-   - Add OSDs from new nodes:
-     ```
-     ceph orch daemon add osd proxmox04:<device>
-     ```
-   - Increase pool PGs if needed:
-     ```
-     ceph osd pool set cephfs_data pg_num 256
-     ```
-
-3. **Balance Load:**
-   - Ensure monitors and managers are distributed.
-
-4. **Update Mounts and Encryption:**
-   - Ensure new app server nodes have CephFS mounts and gocryptfs set up.
-   - Distribute tenant keys securely.
-
-5. **Monitor and Optimize:**
-   - Use Ceph dashboard: `ceph mgr module enable dashboard`
-   - Monitor performance and adjust CRUSH rules for data placement.
-
-This guide provides a foundation; refer to official Ceph and Proxmox documentation for detailed configurations and troubleshooting.
-
----
-
-## Hardware Requirements by User Scale
-
-Based on the workload of 100k users uploading audio recordings at 8kb/s ulaw (e.g., ~1GB/user/month), here are scaled hardware recommendations. Assumptions: 10-20% peak concurrency, CephFS for storage, NVMe+HDD pools with EC. Costs are estimates for hardware only.
-
-### For 1,000 Users
-- **Total Storage:** ~10TB raw (effective ~7TB with EC); 1-2 nodes.
-- **Nodes:** 3 (1-2 storage, 1-2 compute).
-- **Per Node Specs:** 8-16 cores, 64GB RAM, 4x 4TB HDD + 1x 1TB NVMe, 10Gbps NIC.
-- **Network:** 10Gbps aggregate.
-- **Cost Estimate:** $10K-$20K.
-- **Notes:** Minimal setup; use 3 nodes for redundancy.
-
-### For 10,000 Users
-- **Total Storage:** ~100TB raw (effective ~70TB with EC); 5-10 nodes.
-- **Nodes:** 6-8 (4-6 storage, 2-3 compute).
-- **Per Node Specs:** 16-24 cores, 128GB RAM, 8x 8TB HDD + 2x 2TB NVMe, 25Gbps NIC.
-- **Network:** 25-50Gbps aggregate.
-- **Cost Estimate:** $50K-$100K.
-- **Notes:** Scale from 3 nodes; monitor for PG balancing.
-
-### For 100,000 Users
-- **Total Storage:** ~1.5-2PB raw (effective ~1PB with EC); 15-20 nodes.
-- **Nodes:** 20 (10-15 storage, 5-10 compute).
-- **Per Node Specs:** 16-32 cores, 128-256GB RAM, 8-12x 8-12TB HDD + 2-4x 1-2TB NVMe, 25-100Gbps NIC.
-- **Network:** 500Gbps+ aggregate.
-- **Cost Estimate:** $1M-$2M.
-- **Notes:** High concurrency; use erasure coding, redundant switches. Start with 3 nodes and expand.
-
+MIT

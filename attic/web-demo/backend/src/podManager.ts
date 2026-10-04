@@ -1,0 +1,188 @@
+import { ArtiPod, ArtiMount, ContainerHandle, findAllContainers, removeContainer } from 'artipod';
+import * as path from 'path';
+import * as fs from 'fs/promises';
+
+const WORKSPACE_ROOT = path.join(__dirname, '../../workspace/files');
+
+interface PodInstance {
+  pod: ArtiPod;
+  mounts: Map<string, ArtiMount>;
+}
+
+class PodManager {
+  private pods: Map<string, PodInstance> = new Map();
+
+  async createPod(podId: string, useMainMount: boolean = true): Promise<ArtiPod> {
+    // Create workspace directory for this pod
+    const workspaceDir = path.join(WORKSPACE_ROOT, '../pod-workspaces');
+    await fs.mkdir(workspaceDir, { recursive: true });
+    
+    const pod = new ArtiPod({ 
+      id: podId,
+      workspaceDir,
+      useMainMount
+    });
+    
+    await pod.initialize();
+    
+    const podInstance: PodInstance = {
+      pod,
+      mounts: new Map(),
+    };
+    
+    // Store reference to main mount if it was auto-created
+    if (useMainMount) {
+      const mainMount = pod.getMount('main');
+      if (mainMount) {
+        podInstance.mounts.set('main', mainMount);
+      }
+    }
+    
+    this.pods.set(podId, podInstance);
+    return pod;
+  }
+
+  async ensurePodLoaded(podId: string, mounts: Array<{ mount_name: string; mount_path: string; readonly?: number }>, useMainMount: boolean, containerData?: { container_id: string; status: string }): Promise<void> {
+    // If pod is already in memory, nothing to do
+    const existingInstance = this.pods.get(podId);
+    if (existingInstance) {
+      return;
+    }
+
+    // When reloading an existing pod, provide all mounts explicitly (including main)
+    // Do NOT use useMainMount since we're re-instantiating, not creating new
+    const allMounts: ArtiMount[] = [];
+    for (const mount of mounts) {
+      // For absolute paths, use as-is. For relative paths, resolve against WORKSPACE_ROOT
+      const fullPath = path.isAbsolute(mount.mount_path) 
+        ? mount.mount_path 
+        : path.join(WORKSPACE_ROOT, mount.mount_path);
+      const isReadonly = mount.readonly === 1;
+      allMounts.push(new ArtiMount(mount.mount_name, fullPath, isReadonly));
+    }
+    
+    const pod = new ArtiPod({
+      id: podId,
+      useMainMount: false,  // Don't auto-create; we're providing all mounts explicitly
+      mounts: allMounts
+    });
+    
+    await pod.initialize();
+    
+    const podInstance: PodInstance = {
+      pod,
+      mounts: new Map(),
+    };
+    this.pods.set(podId, podInstance);
+
+    // Store mount references
+    for (const mount of allMounts) {
+      podInstance.mounts.set(mount.getName(), mount);
+    }
+
+    // Note: Container reconnection on restart is not implemented yet
+    // Would need to store container handle and restore it
+  }
+
+  async addMount(podId: string, mountName: string, mountPath: string, readonly: boolean = false): Promise<void> {
+    const instance = this.pods.get(podId);
+    if (!instance) {
+      throw new Error(`Pod ${podId} not found`);
+    }
+
+    const fullPath = path.join(WORKSPACE_ROOT, mountPath);
+    const mount = new ArtiMount(mountName, fullPath, readonly);
+    
+    instance.pod.addMount(mount);
+    instance.mounts.set(mountName, mount);
+  }
+
+  getPod(podId: string): ArtiPod | undefined {
+    return this.pods.get(podId)?.pod;
+  }
+
+  getMount(podId: string, mountName: string): ArtiMount | undefined {
+    return this.pods.get(podId)?.mounts.get(mountName);
+  }
+
+  async startContainer(podId: string, dockerfilePath: string, seccompProfilePath?: string): Promise<ContainerHandle> {
+    const instance = this.pods.get(podId);
+    if (!instance) {
+      throw new Error(`Pod ${podId} not found`);
+    }
+
+    return await instance.pod.startContainer(dockerfilePath, {
+      seccompProfilePath,
+      labels: { pod_id: podId },
+    });
+  }
+
+  async stopContainer(podId: string): Promise<void> {
+    const instance = this.pods.get(podId);
+    if (!instance) {
+      throw new Error(`Pod ${podId} not found`);
+    }
+
+    await instance.pod.stopContainer();
+  }
+
+  async executeCommand(podId: string, command: string) {
+    const instance = this.pods.get(podId);
+    if (!instance) {
+      throw new Error(`Pod ${podId} not found`);
+    }
+
+    return await instance.pod.executeCommand(command);
+  }
+
+  hasContainer(podId: string): boolean {
+    const instance = this.pods.get(podId);
+    return instance ? instance.pod.hasContainer() : false;
+  }
+
+  getContainerId(podId: string): string | undefined {
+    return this.pods.get(podId)?.pod.getContainerId();
+  }
+
+  /**
+   * Find all artipod-managed containers, optionally filtered by labels
+   */
+  async findAllContainersForPods(labelFilters?: Record<string, string>) {
+    return await findAllContainers(labelFilters);
+  }
+
+  /**
+   * Clean up orphaned containers that don't correspond to any loaded pods
+   */
+  async cleanupOrphanedContainers() {
+    // Find all artipod-managed containers
+    const allContainers = await findAllContainers();
+    const loadedPodIds = new Set(this.pods.keys());
+    const orphaned: any[] = [];
+
+    for (const container of allContainers) {
+      const info = await container.inspect();
+      const podId = info?.Config.Labels?.['artipod.pod_id'];
+      
+      if (podId && !loadedPodIds.has(podId)) {
+        orphaned.push({ container, podId, info });
+      }
+    }
+
+    console.log(`Found ${orphaned.length} orphaned containers`);
+
+    // Remove each orphaned container
+    for (const { container, podId } of orphaned) {
+      try {
+        await removeContainer(container);
+        console.log(`Cleaned up orphaned container for pod ${podId}`);
+      } catch (err) {
+        console.warn(`Failed to cleanup orphaned container for pod ${podId}:`, err);
+      }
+    }
+
+    return orphaned.map(o => ({ podId: o.podId, containerId: o.info.Id }));
+  }
+}
+
+export const podManager = new PodManager();

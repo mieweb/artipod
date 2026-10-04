@@ -1,0 +1,14 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+
+# Logs
+*.log
+
+# Workspace directories
+workspace/

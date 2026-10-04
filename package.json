@@ -1,17 +1,169 @@
 {
-  "name": "@artipod/workspace-checkpoints",
-  "version": "0.0.1",
-  "private": true,
-  "description": "Local content-addressed workspace checkpoint prototype",
-  "type": "module",
-  "types": "./src/checkpoints.d.ts",
-  "exports": {
-    ".": "./src/checkpoints.js"
+  "name": "@artipod/core",
+  "version": "0.12.0",
+  "bin": {
+    "artipod": "dist/cli.js"
   },
-  "engines": {
-    "node": ">=22"
+  "description": "A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize — in the browser and on Linux",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "default": "./dist/tools/index.js"
+    },
+    "./prompts": {
+      "types": "./dist/prompts/index.d.ts",
+      "default": "./dist/prompts/index.js"
+    },
+    "./sandbox": {
+      "types": "./dist/sandbox/index.d.ts",
+      "default": "./dist/sandbox/index.js"
+    },
+    "./proc": {
+      "types": "./dist/proc/index.d.ts",
+      "default": "./dist/proc/index.js"
+    },
+    "./oci": {
+      "types": "./dist/oci/index.d.ts",
+      "default": "./dist/oci/index.js"
+    },
+    "./manager": {
+      "types": "./dist/manager/index.d.ts",
+      "default": "./dist/manager/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "default": "./dist/server/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "default": "./dist/agent/index.js"
+    },
+    "./agent/local/worker": {
+      "types": "./dist/agent/local/worker.d.ts",
+      "default": "./dist/agent/local/worker.js"
+    },
+    "./host": {
+      "types": "./dist/host/index.d.ts",
+      "default": "./dist/host/index.js"
+    },
+    "./console": {
+      "types": "./dist/console/index.d.ts",
+      "default": "./dist/console/index.js"
+    },
+    "./docker": {
+      "types": "./dist/docker/index.d.ts",
+      "default": "./dist/docker/index.js"
+    },
+    "./apps": {
+      "types": "./dist/apps/index.d.ts",
+      "default": "./dist/apps/index.js"
+    },
+    "./apps/runtime-sw.js": "./dist/apps/runtime-sw.js",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "browser": {
+    "./dist/server/index.js": false,
+    "./dist/docker/index.js": false,
+    "./dist/docker/containerUtils.js": false,
+    "./dist/docker/containerRuntime.js": false,
+    "dockerode": false
+  },
+  "files": [
+    "dist",
+    "dist-ui"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mieweb/artipod.git"
+  },
+  "homepage": "https://github.com/mieweb/artipod#readme",
+  "bugs": {
+    "url": "https://github.com/mieweb/artipod/issues"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('src/apps/runtime-sw.js','dist/apps/runtime-sw.js')\"",
+    "postbuild": "node scripts/buildinfo.mjs && node scripts/devlink.mjs",
+    "build:ui": "cd examples/artipod-spa && npm run export:static && cd ../.. && rm -rf dist-ui && cp -R examples/artipod-spa/out dist-ui",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "weighbridge": "npx github:mieweb/weighbridge",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "example:basic": "npx tsx examples/basic/basic-pod-usage.ts",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "storage",
+    "metadata",
+    "typescript",
+    "file-management",
+    "sandbox",
+    "oci",
+    "agent-tools"
+  ],
+  "author": "Medical Informatics Engineering, LLC",
+  "license": "MIT",
+  "devDependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@types/diff": "^7.0.2",
+    "@types/dockerode": "^3.3.47",
+    "@types/node": "^20.10.6",
+    "@typescript-eslint/eslint-plugin": "^6.17.0",
+    "@typescript-eslint/parser": "^6.17.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "@zenfs/core": "2.4.4",
+    "@zenfs/dom": "1.2.5",
+    "diff": "^8.0.2",
+    "dockerode": "^5.0.1",
+    "eslint": "^8.56.0",
+    "fflate": "^0.8.3",
+    "isomorphic-git": "^1.25.0",
+    "just-bash": "3.2.0",
+    "typescript": "^5.3.3",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "@zenfs/core": "2.4.4",
+    "@zenfs/dom": "1.2.5",
+    "diff": "^8.0.2",
+    "dockerode": "^4.0.9 || ^5.0.0",
+    "fflate": "^0.8.2",
+    "isomorphic-git": "^1.25.0",
+    "just-bash": "3.2.0"
+  },
+  "peerDependenciesMeta": {
+    "dockerode": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "core-js": "3.49.0",
+    "jose": "6.2.12"
+  },
+  "overrides": {
+    "minimatch@9": "^9.0.7",
+    "onnxruntime-node": {
+      "adm-zip": "^0.6.0"
+    },
+    "@huggingface/transformers": {
+      "sharp": "^0.35.0"
+    }
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }

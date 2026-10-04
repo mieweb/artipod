@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lifecycle sample</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header><img src="pixel.png" width="24" height="24" alt=""><h1>Lifecycle sample</h1></header>
+    <dl>
+      <div><dt>Elapsed</dt><dd id="elapsed">0 s</dd></div>
+      <div><dt>App-retained memory</dt><dd id="memory">0 KiB</dd></div>
+      <div><dt>Allocation limit</dt><dd>8 MiB</dd></div>
+    </dl>
+    <progress id="allocation" max="8388608" value="0" aria-label="Retained allocation"></progress>
+    <p id="allocation-state">Allocating 16 KiB / second</p>
+    <div class="counter"><button id="increment" type="button">Increment</button><output id="count" aria-label="Counter">0</output></div>
+    <p id="modules"></p>
+  </main>
+  <script src="main.js"></script>
+  <script type="module" src="modules.js"></script>
+</body>
+</html>
