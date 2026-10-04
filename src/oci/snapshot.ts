@@ -38,6 +38,8 @@ export interface SnapshotManifest {
   origin: SnapshotOrigin;
   diff: { diffId: Digest; size: number; entryCount: number };
   roots: string[];
+  /** Modes of captured root directories (older snapshots omit these). */
+  rootModes?: Record<string, number>;
 }
 
 interface FileRecord {
@@ -66,6 +68,16 @@ export interface SnapshotManagerOptions {
   roots: string[];
   /** Path prefixes never captured (store, /proc, view mounts, branches…). */
   exclude?: string[];
+  /** Override broad CLI exclusions for full local workspace checkpoints. */
+  defaultExcludes?: boolean;
+  /** Native host fs adapter when ZenFS emulates links or caches host metadata. */
+  workspaceFs?: Pick<ZenFsLike, 'promises'>;
+}
+
+export interface SnapshotRestoreChange {
+  path: string;
+  type: 'created' | 'changed' | 'deleted';
+  kind: 'file' | 'directory' | 'symlink';
 }
 
 const SNAP_DIR = `${OCI_ROOT}/snapshots`;
@@ -84,12 +96,14 @@ export class SnapshotManager {
   private readonly store: OciStore;
   private readonly roots: string[];
   private readonly exclude: string[];
+  private readonly workspaceFs: Pick<ZenFsLike, 'promises'>;
 
   constructor(options: SnapshotManagerOptions) {
     this.zfs = options.zfs;
     this.store = options.store;
     this.roots = options.roots;
-    this.exclude = [...DEFAULT_EXCLUDE, ...(options.exclude ?? [])];
+    this.exclude = [...(options.defaultExcludes === false ? ['/.artipod', '/proc'] : DEFAULT_EXCLUDE), ...(options.exclude ?? [])];
+    this.workspaceFs = options.workspaceFs ?? options.zfs;
   }
 
   private get p() {
@@ -102,44 +116,60 @@ export class SnapshotManager {
 
   // --- workspace walk ---------------------------------------------------------
 
-  private async walk(): Promise<Map<string, FileRecord & { bytes?: Uint8Array }>> {
+  private async walk(filesystem = this.workspaceFs): Promise<Map<string, FileRecord & { bytes?: Uint8Array }>> {
+    const p = filesystem.promises;
     const out = new Map<string, FileRecord & { bytes?: Uint8Array }>();
     const visit = async (dir: string): Promise<void> => {
-      let names: string[];
-      try {
-        names = (await this.p.readdir(dir)) as string[];
-      } catch {
-        return;
-      }
-      for (const name of names) {
+      for (const name of (await p.readdir(dir) as string[]).sort()) {
         const path = dir === '/' ? `/${name}` : `${dir}/${name}`;
         if (this.excluded(path)) continue;
-        let stat;
-        try {
-          stat = await this.p.stat(path);
-        } catch {
-          continue;
-        }
-        if (stat.isDirectory()) {
-          out.set(path, { type: 'dir', size: 0, mode: 0o755 });
+        this.validatePath(path);
+        if (name.startsWith('.wh.')) throw new Error(`Unsupported workspace entry (OCI whiteout name): ${path}`);
+        const stat = await p.lstat(path);
+        const mode = stat.mode & 0o777;
+        if (stat.isSymbolicLink()) {
+          out.set(path, { type: 'symlink', size: 0, mode, linkTarget: await p.readlink(path) as string });
+        } else if (stat.isDirectory()) {
+          out.set(path, { type: 'dir', size: 0, mode });
           await visit(path);
         } else if (stat.isFile()) {
-          const bytes = asBytes((await this.p.readFile(path)) as Uint8Array);
-          out.set(path, { type: 'file', size: bytes.length, mode: 0o644, contentDigest: await sha256(bytes), bytes });
+          const bytes = asBytes(await p.readFile(path) as Uint8Array);
+          const after = await p.lstat(path);
+          if (after.ino !== stat.ino || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || (this.workspaceFs !== this.zfs && after.ctimeMs !== stat.ctimeMs)) {
+            throw new Error(`Workspace changed during checkpoint: ${path}`);
+          }
+          out.set(path, { type: 'file', size: bytes.length, mode, contentDigest: await sha256(bytes), bytes });
+        } else {
+          throw new Error(`Unsupported workspace entry (socket, FIFO or device): ${path}`);
         }
       }
     };
-    for (const root of this.roots) await visit(root === '/' ? '/' : root);
+    for (const root of this.roots) await visit(root);
     return out;
+  }
+
+  private validatePath(path: string, honorExcludes = true): void {
+    if (!path.startsWith('/') || path.includes('\\') || path.includes('\0') || path.split('/').slice(1).some(p => !p || p === '.' || p === '..')) {
+      throw new Error(`Invalid Artipod snapshot path: ${JSON.stringify(path)}`);
+    }
+    if (!this.roots.some(r => r === '/' || path.startsWith(`${r}/`)) || (honorExcludes ? this.excluded(path) : ['/.artipod', '/proc'].some(root => path === root || path.startsWith(`${root}/`)))) {
+      throw new Error(`Artipod snapshot path is outside captured roots: ${path}`);
+    }
   }
 
   // --- persistence ------------------------------------------------------------
 
+  private validateId(id: string): void {
+    if (!/^snap-[a-f0-9]{12}$/.test(id)) throw new Error('Invalid Artipod checkpoint ID');
+  }
+
   private manifestPath(id: string): string {
+    this.validateId(id);
     return `${SNAP_DIR}/${id}.json`;
   }
 
   private indexPath(id: string): string {
+    this.validateId(id);
     return `${SNAP_DIR}/${id}.index.json`;
   }
 
@@ -156,7 +186,11 @@ export class SnapshotManager {
   }
 
   async get(id: string): Promise<SnapshotManifest> {
-    return JSON.parse((await this.p.readFile(this.manifestPath(id), 'utf8')) as string) as SnapshotManifest;
+    const manifest = JSON.parse(await this.p.readFile(this.manifestPath(id), 'utf8') as string) as SnapshotManifest;
+    if (manifest.formatVersion !== 1 || manifest.mediaType !== SNAPSHOT_MEDIA_TYPE || manifest.id !== id || !Array.isArray(manifest.roots) || !manifest.diff) {
+      throw new Error(`Invalid Artipod snapshot manifest: ${id}`);
+    }
+    return manifest;
   }
 
   private async cumulativeIndex(id: string): Promise<CumulativeIndex> {
@@ -194,16 +228,19 @@ export class SnapshotManager {
     const parentId = await this.readHead();
     const parent = parentId ? await this.cumulativeIndex(parentId) : { formatVersion: 1 as const, files: {} };
     const current = await this.walk();
+    const rootModes = Object.fromEntries(await Promise.all(this.roots.map(async root => [root, (await this.workspaceFs.promises.lstat(root)).mode & 0o777])));
 
     const tarEntries: TarWriteEntry[] = [];
     const cumulative: CumulativeIndex = { formatVersion: 1, files: {} };
-    let changes = 0;
+    const parentRootModes = parentId ? (await this.get(parentId)).rootModes : undefined;
+    let changes = parentRootModes && JSON.stringify(rootModes) !== JSON.stringify(parentRootModes) ? 1 : 0;
 
     for (const [path, record] of current) {
       const prev = parent.files[path];
       const changed =
         !prev ||
         prev.type !== record.type ||
+        prev.mode !== record.mode ||
         prev.contentDigest !== record.contentDigest ||
         prev.linkTarget !== record.linkTarget;
       if (changed) {
@@ -242,6 +279,7 @@ export class SnapshotManager {
       origin,
       diff: { diffId, size: tar.length, entryCount: tarEntries.length },
       roots: [...this.roots],
+      rootModes,
     };
     await this.p.mkdir(SNAP_DIR, { recursive: true });
     await this.p.writeFile(this.manifestPath(manifest.id), JSON.stringify(manifest, null, 2));
@@ -255,7 +293,10 @@ export class SnapshotManager {
   private async chain(id: string): Promise<SnapshotManifest[]> {
     const chain: SnapshotManifest[] = [];
     let cursor: string | null = id;
+    const seen = new Set<string>();
     while (cursor) {
+      if (seen.has(cursor)) throw new Error('Invalid Artipod snapshot parent cycle');
+      seen.add(cursor);
       const manifest: SnapshotManifest = await this.get(cursor);
       chain.unshift(manifest);
       cursor = manifest.parent;
@@ -294,7 +335,7 @@ export class SnapshotManager {
     for (const [path, record] of Object.entries(to)) {
       const prev = from[path];
       if (!prev) added.push(path);
-      else if (prev.type !== record.type || prev.contentDigest !== record.contentDigest || prev.linkTarget !== record.linkTarget) modified.push(path);
+      else if (prev.type !== record.type || prev.mode !== record.mode || prev.contentDigest !== record.contentDigest || prev.linkTarget !== record.linkTarget) modified.push(path);
     }
     for (const path of Object.keys(from)) {
       if (!(path in to)) deleted.push(path);
@@ -317,25 +358,162 @@ export class SnapshotManager {
    * later history is never destroyed — HEAD does not move.
    */
   async checkout(id: string, at?: string): Promise<string> {
-    const target = at ?? `/branches/${id}`;
-    const { layers } = await this.loadChainLayers(id);
-    const bytesByLayer = await Promise.all(
-      (await this.chain(id)).map((s) => this.store.getUncompressed(s.diff.diffId)),
-    );
-    const merged = mergeLayerEntries(layers);
-    await this.p.mkdir(target, { recursive: true });
-    for (const [path, entry] of [...merged.entries.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-      const dest = `${target}${path}`;
-      if (entry.type === 'dir') {
-        await this.p.mkdir(dest, { recursive: true });
-      } else if (entry.type === 'file') {
-        const bytes = bytesByLayer[entry.layer].subarray(entry.offset, entry.offset + entry.size);
-        await this.p.mkdir(dest.slice(0, dest.lastIndexOf('/')) || '/', { recursive: true });
-        await this.p.writeFile(dest, bytes);
-      }
-      // symlinks/hardlinks in workspace snapshots are rare; files carry content
+    const destination = at ?? `/branches/${id}`;
+    if (!destination.startsWith('/') || destination.includes('\\') || destination.includes('\0') || destination.split('/').slice(1).some(p => !p || p === '.' || p === '..')) {
+      throw new Error('Snapshot checkout requires an absolute, non-root destination');
     }
-    return target;
+    // Validate every byte/path before even creating the destination directory.
+    const { head, target } = await this.validatedSnapshot(id, false);
+    const p = this.workspaceFs.promises;
+    let ancestor = '';
+    for (const part of destination.split('/').slice(1)) {
+      ancestor += `/${part}`;
+      try {
+        const stat = await p.lstat(ancestor);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Snapshot checkout destination and its parents must be real directories');
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'ENOENT') throw error;
+      }
+    }
+    try {
+      if ((await p.readdir(destination)).length) throw new Error('Snapshot checkout destination must be empty');
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') throw error;
+    }
+    await p.mkdir(destination, { recursive: true });
+    await p.chmod(destination, ((await p.lstat(destination)).mode & 0o777) | 0o700);
+    const entries = [...target].sort(([a], [b]) => a.split('/').length - b.split('/').length || a.localeCompare(b));
+    for (const [path, entry] of entries) {
+      const dest = `${destination}${path}`;
+      if (entry.type === 'dir') await p.mkdir(dest, { recursive: true });
+      else {
+        await p.mkdir(dest.slice(0, dest.lastIndexOf('/')) || '/', { recursive: true });
+        if (entry.type === 'symlink') await p.symlink(entry.linkTarget!, dest);
+        else {
+          await p.writeFile(dest, entry.bytes!);
+          await p.chmod(dest, entry.mode);
+        }
+      }
+    }
+    // Apply restrictive directory modes only after descendants are populated.
+    for (const [path, entry] of entries.reverse()) if (entry.type === 'dir') await p.chmod(`${destination}${path}`, entry.mode);
+    for (const [root, mode] of Object.entries(head.rootModes ?? {})) {
+      await p.mkdir(root === '/' ? destination : `${destination}${root}`, { recursive: true });
+      await p.chmod(root === '/' ? destination : `${destination}${root}`, mode);
+    }
+    return destination;
+  }
+
+  /** Shared preflight for in-place restore and a fresh checkout destination. */
+  private async validatedSnapshot(id: string, honorExcludes = true): Promise<{ head: SnapshotManifest; target: Map<string, FileRecord & { bytes?: Uint8Array }> }> {
+    const chain = await this.chain(id);
+    const head = chain[chain.length - 1];
+    if (JSON.stringify(head.roots) !== JSON.stringify(this.roots)) throw new Error('Artipod snapshot roots do not match this workspace');
+    const layerBytes = await Promise.all(chain.map(s => this.store.getUncompressed(s.diff.diffId)));
+    // Derive indexes from verified tar bytes, not an independently mutable cache.
+    const layers = layerBytes.map(bytes => indexTar(bytes));
+    for (const layer of layers) for (const entry of layer) this.validatePath(entry.path, honorExcludes);
+    const merged = mergeLayerEntries(layers).entries;
+    const target = new Map<string, FileRecord & { bytes?: Uint8Array }>();
+    for (const [path, entry] of merged) {
+      this.validatePath(path, honorExcludes);
+      if (!['file', 'dir', 'symlink'].includes(entry.type) || !Number.isInteger(entry.mode) || entry.mode < 0 || entry.mode > 0o7777) {
+        throw new Error(`Unsupported Artipod snapshot entry: ${path}`);
+      }
+      const bytes = entry.type === 'file' ? layerBytes[entry.layer].subarray(entry.offset, entry.offset + entry.size) : undefined;
+      if (bytes && bytes.length !== entry.size) throw new Error(`Truncated Artipod snapshot entry: ${path}`);
+      target.set(path, { type: entry.type as FileRecord['type'], size: entry.size, mode: entry.mode & 0o777, linkTarget: entry.linkTarget, bytes, contentDigest: bytes ? await sha256(bytes) : undefined });
+    }
+    for (const [path, entry] of target) {
+      let parent = path.slice(0, path.lastIndexOf('/')) || '/';
+      while (!this.roots.includes(parent)) {
+        if (target.get(parent)?.type !== 'dir') throw new Error(`Invalid Artipod snapshot parent: ${parent}`);
+        parent = parent.slice(0, parent.lastIndexOf('/')) || '/';
+      }
+      if (entry.type === 'symlink' && (typeof entry.linkTarget !== 'string' || entry.linkTarget.includes('\0'))) throw new Error(`Invalid Artipod snapshot symlink: ${path}`);
+    }
+    const index = await this.cumulativeIndex(id);
+    if (index.formatVersion !== 1 || !index.files || Object.keys(index.files).length !== target.size) throw new Error('Invalid Artipod snapshot cumulative index');
+    for (const [path, record] of target) {
+      const expected = index.files[path];
+      if (!expected || expected.type !== record.type || expected.mode !== record.mode || expected.size !== record.size || expected.contentDigest !== record.contentDigest || expected.linkTarget !== record.linkTarget) {
+        throw new Error(`Invalid Artipod snapshot cumulative index at ${path}`);
+      }
+    }
+    for (const [root, mode] of Object.entries(head.rootModes ?? {})) {
+      if (!this.roots.includes(root) || !Number.isInteger(mode) || mode < 0 || mode > 0o777) throw new Error('Invalid Artipod snapshot root mode');
+    }
+    return { head, target };
+  }
+
+  /**
+   * Restore the captured roots in place. All OCI bytes and target topology are
+   * checked before the first live mutation; callers must quiesce writers.
+   * The root directory is retained so native watchers remain attached.
+   */
+  async restore(id: string): Promise<{ changes: SnapshotRestoreChange[] }> {
+    const { head, target } = await this.validatedSnapshot(id);
+    const p = this.workspaceFs.promises;
+    const current = await this.walk();
+    const changes: SnapshotRestoreChange[] = [];
+    const kind = (r: FileRecord): SnapshotRestoreChange['kind'] => r.type === 'dir' ? 'directory' : r.type;
+    const same = (a: FileRecord, b: FileRecord) => a.type === b.type && a.mode === b.mode && a.contentDigest === b.contentDigest && a.linkTarget === b.linkTarget;
+    for (const [path, old] of current) {
+      const next = target.get(path);
+      if (!next || next.type !== old.type) changes.push({ path, type: 'deleted', kind: kind(old) });
+    }
+    for (const [path, next] of target) {
+      const old = current.get(path);
+      if (!old || old.type !== next.type) changes.push({ path, type: 'created', kind: kind(next) });
+      else if (!same(old, next)) changes.push({ path, type: 'changed', kind: kind(next) });
+    }
+    const rootModes = new Map<string, number>();
+    for (const root of this.roots) {
+      const mode = (await p.lstat(root)).mode & 0o777;
+      rootModes.set(root, head.rootModes?.[root] ?? mode);
+      if (mode !== rootModes.get(root)) changes.push({ path: root, type: 'changed', kind: 'directory' });
+      if ((mode & 0o700) !== 0o700) await p.chmod(root, mode | 0o700);
+    }
+    const byDepth = (a: string, b: string) => a.split('/').length - b.split('/').length || a.localeCompare(b);
+    for (const [path, record] of [...current].sort(([a], [b]) => byDepth(a, b))) {
+      if (record.type === 'dir' && (record.mode & 0o700) !== 0o700) await p.chmod(path, record.mode | 0o700);
+    }
+    for (const [path, old] of [...current].sort(([a], [b]) => byDepth(b, a))) {
+      const next = target.get(path);
+      if (!next || next.type !== old.type || (old.type !== 'dir' && !same(old, next))) {
+        if (old.type === 'dir') await p.rmdir(path);
+        else await p.unlink(path);
+      }
+    }
+    for (const [path, next] of [...target].sort(([a], [b]) => byDepth(a, b))) {
+      const old = current.get(path);
+      if (next.type === 'dir') {
+        if (old?.type !== 'dir') await p.mkdir(path, { recursive: true });
+      } else if (!old || !same(old, next)) {
+        if (next.type === 'symlink') await p.symlink(next.linkTarget!, path);
+        else {
+          await p.writeFile(path, next.bytes!);
+          await p.chmod(path, next.mode);
+        }
+      }
+    }
+    for (const [path, record] of [...target].sort(([a], [b]) => byDepth(b, a))) {
+      if (record.type === 'dir') await p.chmod(path, record.mode);
+    }
+    for (const [root, mode] of rootModes) await p.chmod(root, mode);
+    await this.writeHead(id);
+    return { changes };
+  }
+
+  /** Copy a verified snapshot chain into another pod's OCI store for a fork. */
+  async copyTo(id: string, target: SnapshotManager): Promise<void> {
+    for (const snap of await this.chain(id)) {
+      const bytes = await this.store.getUncompressed(snap.diff.diffId);
+      await target.store.putUncompressed(snap.diff.diffId, bytes);
+      await target.store.putLayerIndex(snap.diff.diffId, indexTar(bytes));
+      await target.p.writeFile(target.manifestPath(snap.id), JSON.stringify(snap));
+      await target.p.writeFile(target.indexPath(snap.id), JSON.stringify(await this.cumulativeIndex(snap.id)));
+    }
   }
 
   // --- commit -----------------------------------------------------------------
@@ -448,6 +626,7 @@ export class SnapshotManager {
       parent: null,
       createdAt: new Date().toISOString(),
       label: `compact of ${chain.length} snapshots${head.label ? ` (${head.label})` : ''}`,
+      rootModes: head.rootModes,
       origin: 'compact',
       diff: { diffId, size: tar.length, entryCount: tarEntries.length },
       roots: [...this.roots],

@@ -215,3 +215,57 @@ describe('commit / compact / gc (done-when 4 + commit round-trip)', () => {
     expect((await sandbox.exec('cat /mnt/kept/repo/k.txt')).stdout).toBe('keepme\n');
   });
 });
+
+describe('in-place snapshot restore', () => {
+  it('restores edits, deletions and additions without replacing the root; moves HEAD for subsequent captures', async () => {
+    await sandbox.exec('echo baseline > /repo/a; mkdir /repo/empty; echo keep > /repo/deleted');
+    const baseline = (await pod.snapshots.create())!;
+    await sandbox.exec('echo after > /repo/a; rm /repo/deleted; rmdir /repo/empty; echo replacement > /repo/empty; echo new > /repo/new');
+    const later = (await pod.snapshots.create())!;
+    const restored = await pod.snapshots.restore(baseline.id);
+    expect((await sandbox.exec('cat /repo/a')).stdout).toBe('baseline\n');
+    expect((await sandbox.exec('cat /repo/deleted')).stdout).toBe('keep\n');
+    expect((await zfs.promises.stat('/repo/empty')).isDirectory()).toBe(true);
+    expect(restored.changes).toContainEqual({ path: '/repo/new', type: 'deleted', kind: 'file' });
+    expect(restored.changes).toContainEqual({ path: '/repo/empty', type: 'created', kind: 'directory' });
+    const next = (await pod.snapshots.create())!;
+    expect(next.parent).toBe(baseline.id);
+    // Restoring earlier state must not destroy redo's immutable history.
+    await pod.snapshots.restore(later.id);
+    expect((await sandbox.exec('cat /repo/a')).stdout).toBe('after\n');
+  });
+
+  it('captures mode-only changes and symbolic links without following their targets', async () => {
+    await zfs.promises.writeFile('/repo/a', 'same bytes');
+    await zfs.promises.symlink('/outside', '/repo/link');
+    const before = (await pod.snapshots.create())!;
+    await zfs.promises.chmod('/repo/a', 0o755);
+    expect((await pod.snapshots.diff(before.id)).modified).toEqual(['/repo/a']);
+    await zfs.promises.unlink('/repo/link');
+    await pod.snapshots.restore(before.id);
+    expect(await zfs.promises.readlink('/repo/link')).toBe('/outside');
+    expect((await zfs.promises.stat('/repo/a')).mode & 0o777).toBe(0o644);
+  });
+
+  it('rejects corrupt OCI bytes before deleting or writing workspace files', async () => {
+    await sandbox.exec('echo baseline > /repo/a');
+    const before = (await pod.snapshots.create())!;
+    await sandbox.exec('echo precious > /repo/a; echo precious > /repo/new');
+    await zfs.promises.writeFile(`/.artipod/oci/uncompressed/sha256/${before.diff.diffId.slice(7)}`, 'corrupt');
+    await expect(pod.snapshots.restore(before.id)).rejects.toThrow(/digest/i);
+    expect((await sandbox.exec('cat /repo/a /repo/new')).stdout).toBe('precious\nprecious\n');
+  });
+});
+
+
+it('checkout refuses symlink destinations and validates corrupted snapshots before creating directories', async () => {
+  await sandbox.exec('echo baseline > /repo/a');
+  const snapshot = (await pod.snapshots.create())!;
+  await zfs.promises.mkdir('/elsewhere');
+  await zfs.promises.symlink('/elsewhere', '/alias');
+  await expect(pod.snapshots.checkout(snapshot.id, '/alias/branch')).rejects.toThrow(/real directories/);
+  expect(await zfs.promises.readdir('/elsewhere')).toEqual([]);
+  await zfs.promises.writeFile(`/.artipod/oci/uncompressed/sha256/${snapshot.diff.diffId.slice(7)}`, 'corrupt');
+  await expect(pod.snapshots.checkout(snapshot.id, '/new-checkout')).rejects.toThrow(/digest/i);
+  await expect(zfs.promises.stat('/new-checkout')).rejects.toThrow();
+});

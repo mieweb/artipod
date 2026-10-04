@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { writeTar } from '../dist/oci/tar.js';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
@@ -25,6 +26,7 @@ async function snapshotTree(directory) {
   const entries = [];
   const visit = async prefix => {
     for (const name of (await fs.readdir(path.join(directory, prefix))).sort()) {
+      if (!prefix && (name === '.artipod' || name === 'proc')) continue;
       const relative = prefix ? `${prefix}/${name}` : name;
       const absolute = path.join(directory, relative);
       const stat = await fs.lstat(absolute);
@@ -94,21 +96,25 @@ test('restore captures editor and real terminal changes, ignored files, binaries
   assert.ok(restored.changes.some(change => change.path === 'empty' && change.type === 'deleted' && change.kind === 'file'));
   assert.ok(restored.changes.some(change => change.path === 'empty' && change.type === 'created' && change.kind === 'directory'));
   assert.deepEqual((await workspace.restore(checkpoint.checkpointId)).changes, []);
-  assert.equal((await workspace.create()).checkpointId, checkpoint.checkpointId);
+  assert.match((await workspace.create()).checkpointId, /^snap-[a-f0-9]{12}$/);
 });
 
-test('root/checkpoint IDs survive reopen and content IDs ignore timestamps', async t => {
+test('real pod and snapshot IDs survive reopen and expose actual OCI metadata', async t => {
   const { workspacePath, storePath, workspace } = await fixture(t);
   await fs.writeFile(path.join(workspacePath, 'a'), 'one');
   const checkpoint = await workspace.create({ label: 'before request' });
   await fs.utimes(path.join(workspacePath, 'a'), new Date(0), new Date(0));
   const reopened = await ArtipodWorkspace.open({ workspacePath, storePath });
   assert.equal(reopened.rootId, workspace.rootId);
-  assert.equal((await reopened.create()).checkpointId, checkpoint.checkpointId);
+  assert.equal(JSON.parse(await fs.readFile(path.join(workspacePath, '.artipod/superblock.json'))).podId, workspace.rootId);
+  const manifest = JSON.parse(await fs.readFile(path.join(workspacePath, '.artipod/oci/snapshots', `${checkpoint.checkpointId}.json`)));
+  assert.equal(manifest.id, checkpoint.checkpointId);
+  assert.equal(manifest.label, 'before request');
+  assert.equal(manifest.mediaType, 'application/vnd.artipod.snapshot.v1+json');
   await fs.writeFile(path.join(workspacePath, 'a'), 'two');
   await reopened.restore(checkpoint.checkpointId);
   assert.equal(await fs.readFile(path.join(workspacePath, 'a'), 'utf8'), 'one');
-  await assert.rejects(ArtipodWorkspace.open({ workspacePath, storePath, rootId: '00000000-0000-0000-0000-000000000000' }), /binding/);
+  await assert.rejects(ArtipodWorkspace.open({ workspacePath, storePath, rootId: '0000000000000000' }), /binding/);
 });
 
 test('forks share immutable content but edits and restores remain isolated', async t => {
@@ -119,7 +125,8 @@ test('forks share immutable content but edits and restores remain isolated', asy
   await fs.mkdir(forkPath);
   const fork = await workspace.fork(checkpoint.checkpointId, { workspacePath: forkPath });
   assert.notEqual(fork.rootId, workspace.rootId);
-  assert.equal((await fork.create()).checkpointId, checkpoint.checkpointId);
+  assert.equal(await fs.readFile(path.join(forkPath, 'a'), 'utf8'), 'baseline');
+  assert.equal(JSON.parse(await fs.readFile(path.join(forkPath, '.artipod/superblock.json'))).podId, fork.rootId);
   await fs.writeFile(path.join(forkPath, 'a'), 'fork edit');
   assert.equal(await fs.readFile(path.join(workspacePath, 'a'), 'utf8'), 'baseline');
   await fs.writeFile(path.join(workspacePath, 'a'), 'source edit');
@@ -135,45 +142,51 @@ test('corrupt or missing blobs and corrupt manifests fail before any mutation', 
   await fs.writeFile(path.join(workspacePath, 'a'), 'baseline');
   await fs.writeFile(path.join(workspacePath, 'b'), 'second');
   const checkpoint = await workspace.create();
-  const manifestFile = path.join(storePath, 'checkpoints', `${checkpoint.checkpointId}.json`);
+  const manifestFile = path.join(workspacePath, '.artipod/oci/snapshots', `${checkpoint.checkpointId}.json`);
   const originalManifest = await fs.readFile(manifestFile);
   const snapshot = JSON.parse(originalManifest);
-  const blobFile = path.join(storePath, 'blobs', snapshot.entries[1].blob);
+  const blobFile = path.join(workspacePath, '.artipod/oci/uncompressed/sha256', snapshot.diff.diffId.slice(7));
   const originalBlob = await fs.readFile(blobFile);
   await fs.writeFile(path.join(workspacePath, 'a'), 'valuable current work');
   await fs.writeFile(path.join(workspacePath, 'new'), 'do not delete');
   const current = await snapshotTree(workspacePath);
   await fs.writeFile(blobFile, 'corrupted blob');
-  await assert.rejects(workspace.restore(checkpoint.checkpointId), /checksum/);
+  await assert.rejects(workspace.restore(checkpoint.checkpointId), /digest|checksum|manifest/i);
   assert.deepEqual(await snapshotTree(workspacePath), current);
   await fs.rm(blobFile);
   await assert.rejects(workspace.restore(checkpoint.checkpointId), /ENOENT/);
   assert.deepEqual(await snapshotTree(workspacePath), current);
   await fs.writeFile(blobFile, originalBlob);
   await fs.writeFile(manifestFile, '{}');
-  await assert.rejects(workspace.restore(checkpoint.checkpointId), /checksum/);
+  await assert.rejects(workspace.restore(checkpoint.checkpointId), /digest|checksum|manifest/i);
   assert.deepEqual(await snapshotTree(workspacePath), current);
 });
 
-test('self-consistent malicious manifests cannot escape the workspace or write through symlink parents', async t => {
-  const { base, workspacePath, storePath, workspace } = await fixture(t);
+test('malicious snapshot topology, traversal and cyclic history fail before mutation', async t => {
+  const { base, workspacePath, workspace } = await fixture(t);
   await fs.writeFile(path.join(workspacePath, 'valuable'), 'keep');
+  const checkpoint = await workspace.create();
   const before = await snapshotTree(workspacePath);
+  const manifestFile = path.join(workspacePath, '.artipod/oci/snapshots', `${checkpoint.checkpointId}.json`);
+  const indexFile = path.join(workspacePath, '.artipod/oci/snapshots', `${checkpoint.checkpointId}.index.json`);
+  const original = JSON.parse(await fs.readFile(manifestFile));
   const entries = [
-    [{ path: '../escape', kind: 'directory', mode: 0o755 }],
-    [{ path: '/absolute', kind: 'directory', mode: 0o755 }],
-    [{ path: 'a\\..\\escape', kind: 'directory', mode: 0o755 }],
-    [{ path: 'alias', kind: 'symlink', target: base }, { path: 'alias/escape', kind: 'directory', mode: 0o755 }],
-    [{ path: 'missing/child', kind: 'directory', mode: 0o755 }],
-    [{ path: 'duplicate', kind: 'directory', mode: 0o755 }, { path: 'duplicate', kind: 'directory', mode: 0o755 }]
+    [{ path: '/../escape', type: 'dir', mode: 0o755 }],
+    [{ path: '/.artipod/escape', type: 'dir', mode: 0o755 }],
+    [{ path: '/alias', type: 'symlink', mode: 0o777, linkTarget: base }, { path: '/alias/escape', type: 'dir', mode: 0o755 }],
+    [{ path: '/missing/child', type: 'dir', mode: 0o755 }],
   ];
-  for (const maliciousEntries of entries) {
-    const encoded = JSON.stringify({ version: 1, rootMode: 0o755, entries: maliciousEntries });
-    const checkpointId = hash(encoded);
-    await fs.writeFile(path.join(storePath, 'checkpoints', `${checkpointId}.json`), encoded);
-    await assert.rejects(workspace.restore(checkpointId), /Invalid Artipod checkpoint/);
+  for (const malicious of entries) {
+    const bytes = writeTar(malicious);
+    const diffId = `sha256:${hash(bytes)}`;
+    await fs.writeFile(path.join(workspacePath, '.artipod/oci/uncompressed/sha256', diffId.slice(7)), bytes);
+    await fs.writeFile(manifestFile, JSON.stringify({ ...original, diff: { diffId, size: bytes.length, entryCount: malicious.length } }));
+    await fs.writeFile(indexFile, JSON.stringify({ formatVersion: 1, files: {} }));
+    await assert.rejects(workspace.restore(checkpoint.checkpointId), /snapshot/i);
     assert.deepEqual(await snapshotTree(workspacePath), before);
   }
+  await fs.writeFile(manifestFile, JSON.stringify({ ...original, parent: checkpoint.checkpointId }));
+  await assert.rejects(workspace.restore(checkpoint.checkpointId), /cycle/);
   await assert.rejects(workspace.restore('../../escape'), /checkpoint ID/);
 });
 
@@ -225,11 +238,11 @@ test('concurrent calls across instances serialize, foreign process locks fail sa
   await fs.writeFile(path.join(workspacePath, 'a'), 'baseline');
   const reopened = await ArtipodWorkspace.open({ workspacePath, storePath });
   const checkpoints = await Promise.all(Array.from({ length: 12 }, (_, i) => (i % 2 ? workspace : reopened).create()));
-  assert.equal(new Set(checkpoints.map(checkpoint => checkpoint.checkpointId)).size, 1);
+  assert.equal(new Set(checkpoints.map(checkpoint => checkpoint.checkpointId)).size, 12);
   const checkpoint = checkpoints[0];
-  await fs.mkdir(path.join(storePath, '.checkpoint-lock'));
+  await fs.mkdir(path.join(workspacePath, '.artipod/checkpoint-lock'));
   await assert.rejects(workspace.restore(checkpoint.checkpointId), /store is busy/);
-  await fs.rmdir(path.join(storePath, '.checkpoint-lock'));
+  await fs.rmdir(path.join(workspacePath, '.artipod/checkpoint-lock'));
   await fs.writeFile(path.join(workspacePath, 'a'), 'changed');
   workspace.onDidRestore(() => { throw new Error('broken observer'); });
   await workspace.restore(checkpoint.checkpointId);
@@ -247,4 +260,34 @@ test('restoring a hardlinked file does not modify content outside the workspace'
   await workspace.restore(checkpoint.checkpointId);
   assert.equal(await fs.readFile(local, 'utf8'), 'baseline');
   assert.equal(await fs.readFile(outside, 'utf8'), 'shared current content');
+});
+
+
+test('real interpreted Artipod shell and native child commands share the same pod checkpoint', async t => {
+  const { workspacePath, workspace } = await fixture(t);
+  await fs.writeFile(path.join(workspacePath, 'native.txt'), 'before native\n');
+  assert.equal((await workspace.exec('printf "before pod\\n" > /pod.txt')).exitCode, 0);
+  const checkpoint = await workspace.create();
+  assert.equal((await workspace.exec('printf "after pod\\n" > /pod.txt; mkdir /generated; echo added > /generated/new')).exitCode, 0);
+  await exec(process.execPath, ['-e', "require('fs').writeFileSync('native.txt','after native')"], { cwd: workspacePath });
+  await workspace.restore(checkpoint.checkpointId);
+  assert.equal(await fs.readFile(path.join(workspacePath, 'pod.txt'), 'utf8'), 'before pod\n');
+  assert.equal(await fs.readFile(path.join(workspacePath, 'native.txt'), 'utf8'), 'before native\n');
+  assert.equal((await workspace.exec('cat /pod.txt')).stdout, 'before pod\n');
+  await assert.rejects(fs.stat(path.join(workspacePath, 'generated')), /ENOENT/);
+});
+
+test('whole-workspace capture includes ordinary mnt, dev and branches directories; runtime metadata remains', async t => {
+  const { workspacePath, workspace } = await fixture(t);
+  for (const name of ['mnt', 'dev', 'branches', 'proc']) {
+    await fs.mkdir(path.join(workspacePath, name));
+    await fs.writeFile(path.join(workspacePath, name, 'a'), 'before');
+  }
+  const checkpoint = await workspace.create();
+  for (const name of ['mnt', 'dev', 'branches', 'proc']) await fs.writeFile(path.join(workspacePath, name, 'a'), 'after');
+  await workspace.restore(checkpoint.checkpointId);
+  for (const name of ['mnt', 'dev', 'branches']) assert.equal(await fs.readFile(path.join(workspacePath, name, 'a'), 'utf8'), 'before');
+  assert.equal(await fs.readFile(path.join(workspacePath, 'proc/a'), 'utf8'), 'after');
+  const index = JSON.parse(await fs.readFile(path.join(workspacePath, '.artipod/oci/snapshots', `${checkpoint.checkpointId}.index.json`)));
+  assert.ok(Object.keys(index.files).every(p => !p.startsWith('/.artipod') && !p.startsWith('/proc')));
 });
