@@ -1,4 +1,6 @@
+node_modules/**
 test/**
 scripts/**
+terminal-worker.mjs
+package-lock.json
 .gitignore
-**/*.vsix

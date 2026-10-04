@@ -45,7 +45,7 @@ class CheckpointBridge {
       throw error;
     });
     if (mapping && (mapping.version !== 1 || mapping.rootId !== this.backend.rootId || mapping.providerId !== 'artipod' ||
-      mappingKey(mapping.context) !== mappingKey(context) || !/^[a-f0-9]{64}$/.test(mapping.checkpointId))) {
+      mappingKey(mapping.context) !== mappingKey(context) || !/^snap-[a-f0-9]{12}$/.test(mapping.checkpointId))) {
       throw new Error('The Artipod checkpoint mapping is invalid. Refusing to restore another workspace or request.');
     }
     return mapping;

@@ -32,12 +32,14 @@
       }
     },
     "commands": [
-      { "command": "artipod.openMirror", "title": "Artipod: Open Active File in Workspace Mirror" }
+      { "command": "artipod.openMirror", "title": "Artipod: Open Active File in Workspace Mirror" },
+      { "command": "artipod.openPodTerminal", "title": "Artipod: Open Pod Terminal" }
     ]
   },
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "npm run prepare-backend && node --test test/*.test.js",
     "prepare-backend": "node scripts/prepare-backend.js",
     "vscode:prepublish": "npm run prepare-backend"
-  }
+  },
+  "devDependencies": { "esbuild": "0.28.2" }
 }

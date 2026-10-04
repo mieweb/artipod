@@ -29,7 +29,7 @@ test('read/write mirror uses the same materialized filesystem as native tools', 
   await fs.writeFile(path.join(workspacePath, 'space and #.txt'), 'terminal edit');
   assert.equal((await provider.readFile(uri)).toString(), 'terminal edit');
   assert.equal((await provider.stat(uri)).type, 1);
-  assert.deepEqual(await provider.readDirectory(provider.uri()), [['space and #.txt', 1]]);
+  assert.deepEqual((await provider.readDirectory(provider.uri())).filter(([name]) => name !== '.artipod'), [['space and #.txt', 1]]);
   await assert.rejects(provider.writeFile(uri, Buffer.from('x'), { create: true, overwrite: false }), { code: 'FileExists' });
   await assert.rejects(provider.writeFile(provider.uri('missing'), Buffer.from('x'), { create: false, overwrite: true }), { code: 'FileNotFound' });
 });

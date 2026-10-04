@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const { ArtipodFileSystemProvider, isWithin } = require('./filesystem-provider');
 const { CheckpointBridge } = require('./checkpoint-bridge');
+const { ArtipodTerminal, WorkspaceOperationGate } = require('./pod-terminal');
 
 async function loadBackend() {
   const bundled = path.join(__dirname, 'vendor', 'checkpoints.mjs');
@@ -21,6 +22,7 @@ function activate(context, api) {
   const vscode = api || require('vscode');
   let manager;
   let activeWorkspace;
+  const gate = new WorkspaceOperationGate();
 
   const getManager = async () => {
     if (!vscode.workspace.getConfiguration('artipod.checkpoints').get('enabled', false)) {
@@ -41,6 +43,14 @@ function activate(context, api) {
         const backend = await ArtipodWorkspace.open({ workspacePath, storePath: path.join(context.globalStorageUri.fsPath, 'store') });
         const filesystem = new ArtipodFileSystemProvider(vscode, backend, folders[0].uri);
         context.subscriptions.push(filesystem, vscode.workspace.registerFileSystemProvider('artipod', filesystem, { isCaseSensitive: process.platform !== 'win32' }));
+        if (vscode.window.createStatusBarItem) {
+          const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
+          status.text = `$(terminal) Artipod ${backend.rootId.slice(0, 8)}`;
+          status.tooltip = `Pod ${backend.rootId}\n/ = ${backend.workspacePath}\nOpen the Artipod terminal`;
+          status.command = 'artipod.openPodTerminal';
+          status.show();
+          context.subscriptions.push(status);
+        }
         return { backend, filesystem, bridge: new CheckpointBridge(vscode, backend, path.join(context.globalStorageUri.fsPath, 'mappings'), folders[0].uri) };
       })().catch(error => { manager = undefined; activeWorkspace = undefined; throw error; });
     }
@@ -50,9 +60,19 @@ function activate(context, api) {
   for (const operation of ['capture', 'restore', 'fork']) {
     context.subscriptions.push(vscode.commands.registerCommand(`_artipod.checkpoints.${operation}`, async payload => {
       const { bridge } = await getManager();
-      return bridge[operation](payload);
+      return gate.checkpoint(() => bridge[operation](payload));
     }));
   }
+  context.subscriptions.push(vscode.commands.registerCommand('artipod.openPodTerminal', async () => {
+    const { backend } = await getManager();
+    const pty = new ArtipodTerminal(vscode, backend, gate);
+    context.subscriptions.push(pty);
+    const terminal = vscode.window.createTerminal({ name: `Artipod ${backend.rootId.slice(0, 8)}`, pty });
+    context.subscriptions.push(terminal);
+    terminal.show();
+    await pty.ready;
+    return backend.rootId;
+  }));
   context.subscriptions.push(vscode.commands.registerCommand('artipod.openMirror', async () => {
     const { backend, filesystem } = await getManager();
     const activeUri = vscode.window.activeTextEditor?.document.uri;
