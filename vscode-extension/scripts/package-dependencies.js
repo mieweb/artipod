@@ -143,7 +143,7 @@ async function writeNotices(root, extension, metafile, replaceable) {
     'Artipod modifies one initialization statement in @zenfs/core 2.4.4 for compatibility with Electron Node 24.21. The modified source includes a dated notice; the exact patch is supplied in vendor/patches/zenfs-core-2.4.4-module-version.patch. All other copied library source is unchanged.', ''
   ];
   const sources = ['# Runtime sources and rebuilding', '',
-    'The extension source is https://github.com/mieweb/artipod/tree/artipod/vscode-extension. The Artipod backend source is https://github.com/mieweb/artipod/tree/artipod/src.', '',
+    'The extension source is https://github.com/mieweb/artipod/tree/main/vscode-extension. The Artipod backend source is https://github.com/mieweb/artipod/tree/main/src. Extension releases use vscode-vVERSION tags; use the matching release tag when rebuilding.', '',
     '## Replaceable libraries', '',
     '`@zenfs/core`, `@zenfs/dom`, `utilium`, and `memium` retain their LGPL licenses. Their JavaScript is shipped as separate modules under `vendor/node_modules`, with the exact nested dependency versions from the root package-lock.json. They are not statically included in the worker bundles. You may inspect, modify, or replace those modules with interface-compatible versions in an unpacked VSIX and reload VS Code; no integrity check prevents replacement. Keep nested dependencies compatible. This distribution imposes no restriction on modification or reverse engineering for debugging changes to those libraries.', '',
     '## ZenFS compatibility modification', '',
@@ -152,7 +152,7 @@ async function writeNotices(root, extension, metafile, replaceable) {
     '## Rebuild the extension', '',
     'Use Node.js 22 or later and the repository commit supplied with the release. From the repository root:', '',
     '```sh', 'npm ci', 'npm run build', 'cd vscode-extension', 'npm ci', 'npm test', 'npm run package:vsix', '```', '',
-    'The checked-in lockfiles pin the application and packaging dependencies. `prepare-backend` regenerates worker bundles, copies the replaceable library tree, applies the checked ZenFS compatibility patch, and writes these notices. `package:vsix` builds and packages only; it does not publish. Output is `dist/artipod-0.1.0.vsix`.', '',
+    'The checked-in lockfiles pin the application and packaging dependencies. `prepare-backend` regenerates worker bundles, copies the replaceable library tree, applies the checked ZenFS compatibility patch, and writes these notices. `package:vsix` builds and packages only; it does not publish. Output is `dist/artipod-VERSION.vsix`, using the extension package.json version. Add `-- --pre-release` to package for the Marketplace pre-release channel.', '',
     'To rebuild against a modified library source, build that library using its upstream instructions, replace its installed package in the Artipod repository node_modules tree, then rerun `npm run prepare-backend` in vscode-extension. Then run `npm run package:vsix`; this rebuilds against the installed dependency tree and does not reinstall or replace your modified library.', '',
     '## Exact npm package archives', '',
     'These archives identify the versions included or whose notices accompany the prebundled shell. Upstream repositories contain development source and build instructions. The npm archives contain the JavaScript modules shipped by each package.', '',

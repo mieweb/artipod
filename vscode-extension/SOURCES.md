@@ -1,6 +1,6 @@
 # Runtime sources and rebuilding
 
-The extension source is https://github.com/mieweb/artipod/tree/artipod/vscode-extension. The Artipod backend source is https://github.com/mieweb/artipod/tree/artipod/src.
+The extension source is https://github.com/mieweb/artipod/tree/main/vscode-extension. The Artipod backend source is https://github.com/mieweb/artipod/tree/main/src. Extension releases use vscode-vVERSION tags; use the matching release tag when rebuilding.
 
 ## Replaceable libraries
 
@@ -25,7 +25,7 @@ npm test
 npm run package:vsix
 ```
 
-The checked-in lockfiles pin the application and packaging dependencies. `prepare-backend` regenerates worker bundles, copies the replaceable library tree, applies the checked ZenFS compatibility patch, and writes these notices. `package:vsix` builds and packages only; it does not publish. Output is `dist/artipod-0.1.0.vsix`.
+The checked-in lockfiles pin the application and packaging dependencies. `prepare-backend` regenerates worker bundles, copies the replaceable library tree, applies the checked ZenFS compatibility patch, and writes these notices. `package:vsix` builds and packages only; it does not publish. Output is `dist/artipod-VERSION.vsix`, using the extension package.json version. Add `-- --pre-release` to package for the Marketplace pre-release channel.
 
 To rebuild against a modified library source, build that library using its upstream instructions, replace its installed package in the Artipod repository node_modules tree, then rerun `npm run prepare-backend` in vscode-extension. Then run `npm run package:vsix`; this rebuilds against the installed dependency tree and does not reinstall or replace your modified library.
 

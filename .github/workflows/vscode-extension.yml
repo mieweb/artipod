@@ -1,0 +1,148 @@
+name: VS Code extension
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+    tags: ['vscode-v*']
+  workflow_dispatch:
+    inputs:
+      verify_publisher:
+        description: Sign in and show the Marketplace identity ID (does not publish)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-package:
+    name: Build, test, and package (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            vscode-extension/package-lock.json
+
+      - name: Validate extension identity and release tag
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const manifest = require('./vscode-extension/package.json');
+          assert.equal(manifest.publisher, 'mieweb');
+          assert.equal(manifest.name, 'artipod');
+          assert.match(manifest.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+          if (process.env.GITHUB_REF?.startsWith('refs/tags/')) {
+            assert.equal(process.env.GITHUB_REF, `refs/tags/vscode-v${manifest.version}`);
+          }
+          NODE
+
+      - name: Install core dependencies
+        run: npm ci
+
+      - name: Build core
+        run: npm run build
+
+      - name: Test workspace checkpoints
+        run: npm run test:checkpoints
+
+      - name: Install extension dependencies
+        run: npm ci --prefix vscode-extension
+
+      - name: Test extension
+        run: npm test --prefix vscode-extension
+
+      - name: Package pre-release extension
+        run: npm run package:vsix --prefix vscode-extension -- --pre-release
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: artipod-vsix-${{ matrix.platform }}
+          path: vscode-extension/dist/*.vsix
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Marketplace authentication and publishing
+    needs: build-test-package
+    if: github.repository == 'mieweb/artipod' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/vscode-v')) || (github.event_name == 'workflow_dispatch' && inputs.verify_publisher))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: vscode-marketplace
+    concurrency:
+      group: vscode-marketplace-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - name: Install pinned publishing tool
+        run: npm ci --prefix vscode-extension
+
+      - name: Download tested VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: artipod-vsix-linux
+          path: vscode-extension/dist
+
+      - name: Check publishing identity configuration
+        env:
+          CLIENT_ID: ${{ secrets.VSCE_AZURE_CLIENT_ID }}
+          TENANT_ID: ${{ secrets.VSCE_AZURE_TENANT_ID }}
+        run: |
+          if [ -z "$CLIENT_ID" ] || [ -z "$TENANT_ID" ]; then
+            echo "::error::Configure VSCE_AZURE_CLIENT_ID and VSCE_AZURE_TENANT_ID in the vscode-marketplace environment. See vscode-extension/RELEASING.md."
+            exit 1
+          fi
+
+      - name: Sign in with federated Marketplace identity
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.VSCE_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.VSCE_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Show Marketplace identity for publisher membership
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          az rest --url https://app.vssps.visualstudio.com/_apis/profile/profiles/me --resource 499b84ac-1321-427f-aa17-267ca6975798 --query id --output tsv
+
+      - name: Publish tested pre-release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/vscode-v')
+        working-directory: vscode-extension
+        run: |
+          version=$(node -p "require('./package.json').version")
+          npx --no-install vsce publish --azure-credential --pre-release --skip-duplicate --packagePath "dist/artipod-$version.vsix"

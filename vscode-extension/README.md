@@ -106,7 +106,7 @@ npm run build
 cd vscode-extension
 npm ci
 npm test
-npm run package:vsix
+npm run package:vsix -- --pre-release
 ```
 
 The package command rebuilds the backend, prepares the runtime, and writes
@@ -128,3 +128,15 @@ build before publishing.
 The Marketplace publisher must match an account authorized to publish this
 extension. The manifest uses the `mieweb` publisher. Packaging a VSIX does not
 require publisher credentials.
+
+## Automated updates
+
+The **VS Code extension** GitHub Actions workflow tests checkpoints and the
+extension on Linux and macOS, then uploads installable VSIX artifacts. Once
+the publishing identity is configured, pushing a `vscode-vVERSION` tag that
+matches this extension's `package.json` publishes the tested artifact to the
+Marketplace pre-release channel. Ordinary commits and pull requests only
+build and test.
+
+See [release setup and update steps](RELEASING.md). The extension version and
+release tags are independent of the Artipod npm packages.
