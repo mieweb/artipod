@@ -3,7 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
-const { isWithin } = require('./filesystem-provider');
+const { saveWorkspaceDocuments } = require('./workspace-snapshots');
 
 function validateContext(context) {
   if (!context || ['sessionId', 'requestId', 'checkpointId'].some(key => typeof context[key] !== 'string' || !context[key])) {
@@ -67,16 +67,6 @@ class CheckpointBridge {
     return { providerId: 'artipod', checkpointId: mapping.checkpointId, rootId: mapping.rootId };
   }
 
-  async flushEditors() {
-    for (const document of [...this.vscode.workspace.textDocuments, ...(this.vscode.workspace.notebookDocuments ?? [])]) {
-      const inRoot = document.uri.scheme === 'file' && (isWithin(this.workspacePath, document.uri.fsPath) || isWithin(this.backend.workspacePath, document.uri.fsPath));
-      const inMirror = document.uri.scheme === 'artipod' && document.uri.authority === this.backend.rootId;
-      if (document.isDirty && (inRoot || inMirror) && !await document.save()) {
-        throw new Error(`Could not save ${document.uri.toString()} before the Artipod checkpoint. The agent turn has not started.`);
-      }
-    }
-  }
-
   capture(input) {
     const context = validateContext(input);
     return this.serialized(async () => {
@@ -98,7 +88,7 @@ class CheckpointBridge {
       try {
         const concurrent = await this.readMapping(context);
         if (concurrent) { return this.token(concurrent); }
-        await this.flushEditors();
+        await saveWorkspaceDocuments(this.vscode, this.backend, this.workspaceUri);
         const token = this.token(await this.backend.create({ label: `${context.sessionId}/${context.requestId}/${context.checkpointId}`, origin: 'agent-turn' }));
         await this.writeMapping(context, token);
         return token;

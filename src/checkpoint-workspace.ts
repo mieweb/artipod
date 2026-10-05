@@ -45,6 +45,12 @@ async function canonicalCandidate(candidate: string): Promise<string> {
   }
 }
 
+async function assertDedicatedWorkspace(directory: string, identity: { isDirectory(): boolean }): Promise<void> {
+  if (!identity.isDirectory() || directory === path.parse(directory).root || directory === await fs.realpath(os.homedir())) {
+    throw new Error('Artipod requires a dedicated workspace directory, not a filesystem root or home directory');
+  }
+}
+
 /** Reject metadata paths that could redirect OCI writes outside this pod. */
 export async function assertSafeCheckpointMetadata(workspacePath: string): Promise<void> {
   const visit = async (entry: string): Promise<void> => {
@@ -70,7 +76,7 @@ async function assertDirectoryIdentity(directory: string, expected: { dev: numbe
   }
 }
 
-async function serialized<T>(workspacePath: string, operation: () => Promise<T>): Promise<T> {
+async function serialized<T>(workspacePath: string, operation: () => Promise<T>, afterUnlock?: (result: T) => Promise<void>): Promise<T> {
   const previous = queues.get(workspacePath) ?? Promise.resolve();
   const next = previous.catch(() => {}).then(async () => {
     await assertSafeCheckpointMetadata(workspacePath);
@@ -83,8 +89,11 @@ async function serialized<T>(workspacePath: string, operation: () => Promise<T>)
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Artipod checkpoint store is busy (${lock}); stop its owner before removing a stale lock`);
       throw error;
     }
-    try { return await operation(); }
+    let result: T;
+    try { result = await operation(); }
     finally { await fs.rmdir(lock); }
+    await afterUnlock?.(result);
+    return result;
   });
   queues.set(workspacePath, next);
   try { return await next; }
@@ -125,7 +134,7 @@ export class ArtipodWorkspace {
   static async open(options: { workspacePath: string; storePath: string; rootId?: string }): Promise<ArtipodWorkspace> {
     const workspacePath = await fs.realpath(options.workspacePath);
     const identity = await fs.lstat(workspacePath);
-    if (!identity.isDirectory() || workspacePath === path.parse(workspacePath).root || workspacePath === await fs.realpath(os.homedir())) throw new Error('Artipod requires a dedicated workspace directory, not a filesystem root or home directory');
+    await assertDedicatedWorkspace(workspacePath, identity);
     const storePath = await canonicalCandidate(path.resolve(options.storePath));
     if (within(workspacePath, storePath) || within(storePath, workspacePath)) throw new Error('Artipod store and workspace must not overlap');
     await fs.mkdir(storePath, { recursive: true });
@@ -138,12 +147,12 @@ export class ArtipodWorkspace {
     const actual = await fs.lstat(this.workspacePath);
     if (!actual.isDirectory() || actual.dev !== this.#identity.dev || actual.ino !== this.#identity.ino || await fs.realpath(this.workspacePath) !== this.workspacePath) throw new Error('Artipod workspace was moved or replaced; refusing to operate');
   }
-  async #operate<T>(operation: string, options: Record<string, unknown> = {}): Promise<T> {
+  async #operate<T>(operation: string, options: Record<string, unknown> = {}, afterUnlock?: (result: T) => Promise<void>): Promise<T> {
     await this.#assertWorkspace();
     return serialized(this.workspacePath, async () => {
       await this.#assertWorkspace();
       return worker<T>({ ...options, operation, workspacePath: this.workspacePath, rootId: this.rootId });
-    });
+    }, afterUnlock);
   }
   /** Stop external writers first. Captures all paths except /.artipod and /proc. */
   create(options: { label?: string; origin?: 'manual' | 'agent-turn' } = {}): Promise<Checkpoint> { return this.#operate('create', options); }
@@ -151,7 +160,13 @@ export class ArtipodWorkspace {
   list(): Promise<CheckpointInfo[]> { return this.#operate('list'); }
   async restore(checkpointId: string): Promise<RestoreResult> {
     validCheckpoint(checkpointId);
-    const result = await this.#operate<RestoreResult>('restore', { checkpointId });
+    const { rootId, changes } = await this.#operate<RestoreResult & { rootMode: number }>('restore', { checkpointId }, async restored => {
+      // A captured root can remove search permission. Finish lock bookkeeping
+      // before applying its mode, while retaining this operation's queue slot.
+      await this.#assertWorkspace();
+      await fs.chmod(this.workspacePath, restored.rootMode);
+    });
+    const result: RestoreResult = { rootId, checkpointId, changes };
     for (const listener of this.#listeners) { try { listener(result); } catch { /* restored state is committed */ } }
     return result;
   }
@@ -162,6 +177,7 @@ export class ArtipodWorkspace {
     if (options.rootId === this.rootId) throw new Error('Artipod fork requires a distinct root ID');
     const destination = await fs.realpath(options.workspacePath);
     const destinationIdentity = await fs.lstat(destination);
+    await assertDedicatedWorkspace(destination, destinationIdentity);
     if (within(this.workspacePath, destination) || within(destination, this.workspacePath) || within(destination, this.storePath) || within(this.storePath, destination)) throw new Error('Artipod fork requires distinct non-overlapping workspace paths');
     await this.#assertWorkspace();
     const result = await serialized(this.workspacePath, async () => {
@@ -178,9 +194,10 @@ export class ArtipodWorkspace {
       }
       const lock = path.join(metadata, 'checkpoint-lock');
       await fs.mkdir(lock);
+      let forked: { rootId: string; rootMode: number };
       try {
         await assertDirectoryIdentity(destination, destinationIdentity);
-        return await worker<{ rootId: string }>({
+        forked = await worker<{ rootId: string; rootMode: number }>({
           operation: 'fork', workspacePath: this.workspacePath, rootId: this.rootId,
           checkpointId, destination, destinationRootId: options.rootId,
           destinationIdentity: { dev: destinationIdentity.dev, ino: destinationIdentity.ino },
@@ -193,6 +210,9 @@ export class ArtipodWorkspace {
           if (!['ENOTEMPTY', 'EEXIST'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
         });
       }
+      await assertDirectoryIdentity(destination, destinationIdentity);
+      await fs.chmod(destination, forked.rootMode);
+      return forked;
     });
     return new ArtipodWorkspace(destination, this.storePath, result.rootId, destinationIdentity);
   }

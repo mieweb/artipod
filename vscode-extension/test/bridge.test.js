@@ -68,6 +68,30 @@ test('failed dirty document save prevents checkpoint capture', async t => {
   await assert.rejects(bridge.restore(request), /No Artipod snapshot/);
 });
 
+test('native capture rejects dirty custom editors in the workspace or mirror before creating a snapshot', async t => {
+  for (const scheme of ['file', 'artipod']) {
+    await t.test(scheme, async t => {
+      const { temporary, workspacePath, vscode, backend, bridge } = await fixture(t);
+      const file = path.join(workspacePath, 'custom.bin');
+      await fs.writeFile(file, 'saved custom editor content');
+      const tab = {
+        isDirty: true,
+        input: { uri: scheme === 'file' ? vscode.Uri.file(file) : vscode.Uri.from({ scheme, authority: backend.rootId, path: '/custom.bin' }) }
+      };
+      vscode.window.tabGroups = { all: [{ tabs: [
+        tab,
+        { isDirty: true, input: { uri: vscode.Uri.file(path.join(temporary, 'outside.bin')) } }
+      ] }] };
+      await assert.rejects(bridge.capture(request), /Save the workspace/);
+      assert.deepEqual(await backend.list(), [], 'a stale on-disk snapshot must not be created');
+      assert.equal(await bridge.readMapping(request), undefined, 'a failed capture must not record the request');
+      tab.isDirty = false;
+      const token = await bridge.capture(request);
+      assert.equal((await backend.list())[0].checkpointId, token.checkpointId, 'capture can retry once workspace editors are saved');
+    });
+  }
+});
+
 test('resuming a request requires an existing mapping and never invents a before-turn snapshot', async t => {
   const { workspacePath, vscode, backend, bridge } = await fixture(t);
   const editorPath = path.join(workspacePath, 'editor.txt');

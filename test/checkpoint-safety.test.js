@@ -86,3 +86,60 @@ test('failed fork releases its destination reservation without deleting caller f
   await assert.rejects(fs.access(path.join(destination, '.artipod/checkpoint-lock')), { code: 'ENOENT' });
   assert.ok((await fs.stat(destination)).isDirectory());
 });
+
+test('fork rejects filesystem roots and empty home directories before reserving the destination', async t => {
+  const { base, workspace, storePath } = await fixture(t);
+  const checkpoint = await workspace.create();
+  await assert.rejects(workspace.fork(checkpoint.checkpointId, { workspacePath: path.parse(base).root }), /dedicated workspace directory/);
+
+  // Use an empty simulated home: a populated home would also be rejected by
+  // the emptiness check and would hide the missing dedicated-directory check.
+  const home = path.join(base, 'empty-home');
+  const alias = path.join(base, 'home-link');
+  await fs.mkdir(home);
+  await fs.symlink(home, alias);
+  t.mock.method(os, 'homedir', () => home);
+  for (const workspacePath of [home, alias]) {
+    await assert.rejects(ArtipodWorkspace.open({ workspacePath, storePath }), /dedicated workspace directory/);
+    await assert.rejects(workspace.fork(checkpoint.checkpointId, { workspacePath }), /dedicated workspace directory/);
+    assert.deepEqual(await fs.readdir(home), []);
+  }
+});
+
+test('restore and fork finish HEAD and lock bookkeeping before applying an unsearchable root mode', async t => {
+  const { base, workspacePath, workspace } = await fixture(t);
+  const checkpoint = await workspace.create();
+  const manifestPath = path.join(workspacePath, '.artipod/oci/snapshots', `${checkpoint.checkpointId}.json`);
+  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+  // Mode 000 is valid metadata but cannot be walked for a live capture.
+  manifest.rootModes['/'] = 0;
+  await fs.writeFile(manifestPath, JSON.stringify(manifest));
+  await fs.writeFile(path.join(workspacePath, 'a'), 'after');
+  const observed = [];
+  const dispose = workspace.onDidRestore(result => observed.push(result));
+  t.after(dispose);
+  try {
+    const restored = await workspace.restore(checkpoint.checkpointId);
+    assert.equal((await fs.lstat(workspacePath)).mode & 0o777, 0);
+    assert.deepEqual(observed, [restored]);
+    assert.ok(restored.changes.some(change => change.path === '' && change.kind === 'directory'));
+  } finally {
+    await fs.chmod(workspacePath, 0o700);
+  }
+  assert.equal(await fs.readFile(path.join(workspacePath, 'a'), 'utf8'), 'baseline');
+  assert.equal((await fs.readFile(path.join(workspacePath, '.artipod/oci/snapshots/HEAD'), 'utf8')).trim(), checkpoint.checkpointId);
+  await assert.rejects(fs.access(path.join(workspacePath, '.artipod/checkpoint-lock')), { code: 'ENOENT' });
+
+  const destination = path.join(base, 'fork');
+  await fs.mkdir(destination);
+  try {
+    const forked = await workspace.fork(checkpoint.checkpointId, { workspacePath: destination });
+    assert.notEqual(forked.rootId, workspace.rootId);
+    assert.equal((await fs.lstat(destination)).mode & 0o777, 0);
+  } finally {
+    await fs.chmod(destination, 0o700);
+  }
+  assert.equal(await fs.readFile(path.join(destination, 'a'), 'utf8'), 'baseline');
+  assert.equal((await fs.readFile(path.join(destination, '.artipod/oci/snapshots/HEAD'), 'utf8')).trim(), checkpoint.checkpointId);
+  await assert.rejects(fs.access(path.join(destination, '.artipod/checkpoint-lock')), { code: 'ENOENT' });
+});

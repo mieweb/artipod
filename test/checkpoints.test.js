@@ -292,6 +292,35 @@ test('whole-workspace capture includes ordinary mnt, dev and branches directorie
   assert.ok(Object.keys(index.files).every(p => !p.startsWith('/.artipod') && !p.startsWith('/proc')));
 });
 
+test('terminal snapshots and workspace checkpoints share a complete workspace history', async t => {
+  const { workspacePath, workspace } = await fixture(t);
+  for (const name of ['mnt', 'dev', 'branches']) {
+    await fs.mkdir(path.join(workspacePath, name));
+    await fs.writeFile(path.join(workspacePath, name, 'a'), 'baseline');
+  }
+  const before = await workspace.create();
+  const terminal = await workspace.exec('echo terminal > /dev/a; artipod snapshot create from-terminal');
+  assert.equal(terminal.exitCode, 0, terminal.stderr);
+  const terminalId = terminal.stdout.match(/snap-[a-f0-9]{12}/)?.[0];
+  assert.ok(terminalId);
+  const terminalIndex = JSON.parse(await fs.readFile(path.join(workspacePath, '.artipod/oci/snapshots', `${terminalId}.index.json`)));
+  for (const name of ['mnt', 'dev', 'branches']) assert.ok(terminalIndex.files[`/${name}/a`]);
+  await fs.writeFile(path.join(workspacePath, 'branches/a'), 'after terminal');
+  const after = await workspace.create();
+  const history = await workspace.list();
+  assert.equal(history.find(snapshot => snapshot.checkpointId === terminalId).parentCheckpointId, before.checkpointId);
+  assert.equal(history.find(snapshot => snapshot.checkpointId === after.checkpointId).parentCheckpointId, terminalId);
+
+  await workspace.restore(terminalId);
+  assert.equal(await fs.readFile(path.join(workspacePath, 'dev/a'), 'utf8'), 'terminal\n');
+  for (const name of ['mnt', 'branches']) assert.equal(await fs.readFile(path.join(workspacePath, name, 'a'), 'utf8'), 'baseline');
+  await workspace.restore(after.checkpointId);
+  assert.equal(await fs.readFile(path.join(workspacePath, 'branches/a'), 'utf8'), 'after terminal');
+  assert.equal(await fs.readFile(path.join(workspacePath, 'mnt/a'), 'utf8'), 'baseline');
+  await workspace.restore(before.checkpointId);
+  for (const name of ['mnt', 'dev', 'branches']) assert.equal(await fs.readFile(path.join(workspacePath, name, 'a'), 'utf8'), 'baseline');
+});
+
 test('list returns persisted snapshot metadata and current HEAD after reopen and restore', async t => {
   const { workspacePath, storePath, workspace } = await fixture(t);
   assert.deepEqual(await workspace.list(), []);

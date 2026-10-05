@@ -39,7 +39,9 @@ process.once('message', async (message: Operation) => {
     }
     pod = await createZenFsPod({ mounts: [{ name: 'work', path: '/', mode: 'rw', source: { kind: 'hostDir', dir: message.workspacePath } }] }, { proc: false, cwd: '/' });
     const rootId = pod.oci.store.getSuperblock().podId;
-    const snapshots = new SnapshotManager({ zfs: pod.zfs, store: pod.oci.store, roots: ['/'], defaultExcludes: false, workspaceFs: nativeWorkspace(message.workspacePath) });
+    // Native CLI/terminal and workspace API snapshots share one capture policy
+    // and one HEAD, so interleaving them cannot omit ordinary workspace paths.
+    const snapshots = pod.snapshots;
     let result: unknown;
     switch (message.operation) {
       case 'open': result = { rootId }; break;
@@ -66,8 +68,8 @@ process.once('message', async (message: Operation) => {
         break;
       }
       case 'restore': {
-        const restored = await snapshots.restore(message.checkpointId!);
-        result = { rootId, checkpointId: message.checkpointId, changes: restored.changes.map(change => ({ ...change, path: change.path.slice(1) })) };
+        const restored = await snapshots.restore(message.checkpointId!, { deferRootModes: true });
+        result = { rootId, checkpointId: message.checkpointId, rootMode: restored.rootModes['/'], changes: restored.changes.map(change => ({ ...change, path: change.path.slice(1) })) };
         break;
       }
       case 'fork': {
@@ -90,8 +92,8 @@ process.once('message', async (message: Operation) => {
         const targetSuperblock = await targetStore.init();
         const targetSnapshots = new SnapshotManager({ zfs: targetFs, store: targetStore, roots: ['/'], defaultExcludes: false });
         await snapshots.copyTo(message.checkpointId!, targetSnapshots);
-        await targetSnapshots.restore(message.checkpointId!);
-        result = { rootId: targetSuperblock.podId };
+        const restored = await targetSnapshots.restore(message.checkpointId!, { deferRootModes: true });
+        result = { rootId: targetSuperblock.podId, rootMode: restored.rootModes['/'] };
         break;
       }
       case 'exec': {

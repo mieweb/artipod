@@ -98,7 +98,7 @@
     "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('src/apps/runtime-sw.js','dist/apps/runtime-sw.js')\"",
     "postbuild": "node scripts/buildinfo.mjs && node scripts/devlink.mjs",
     "build:ui": "cd examples/artipod-spa && npm run export:static && cd ../.. && rm -rf dist-ui && cp -R examples/artipod-spa/out dist-ui",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:checkpoints",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts",
@@ -108,6 +108,7 @@
     "prepublishOnly": "npm run clean && npm run build",
     "example:basic": "npx tsx examples/basic/basic-pod-usage.ts",
     "prepare": "npm run build",
+    "pretest:checkpoints": "npm run build",
     "test:checkpoints": "node --test test/checkpoints.test.js test/checkpoint-safety.test.js"
   },
   "keywords": [

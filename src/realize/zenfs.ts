@@ -333,6 +333,9 @@ export async function createZenFsPod(
   const snapshots = new SnapshotManager({
     zfs,
     workspaceFs: snapshotWorkspaceFs,
+    // A native root is an entire workspace. Names such as /dev, /mnt and
+    // /branches are ordinary host directories, not virtual runtime mounts.
+    defaultExcludes: snapshotWorkspaceFs ? false : undefined,
     store: ociStore,
     roots: mountTable.filter((e) => !e.readonly).map((e) => e.path),
   });

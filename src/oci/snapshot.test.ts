@@ -5,12 +5,18 @@
  * plus commit → image mount round-trip.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import * as nativeFs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { configure, InMemory, fs as zfs, umount, mounts as zenMounts } from '@zenfs/core';
 import { createZenFsPod, type ZenFsPod } from '../realize/zenfs.js';
 import { ToolCallingLoop } from '../agent/loop.js';
 import { OzwellClient } from '../agent/ozwell-client.js';
 import type { ChatCompletionResponse, ChatMessage } from '../agent/types.js';
 import type { Sandbox } from '../sandbox/types.js';
+import { SnapshotManager } from './snapshot.js';
+import { OciStore } from './store.js';
+import { createNativeWorkspaceFs } from './node-workspace.js';
 
 let pod: ZenFsPod;
 let sandbox: Sandbox;
@@ -68,6 +74,30 @@ describe('snapshot create / checkout / mount (done-when 1)', () => {
 });
 
 describe('snapshot diff (done-when 2)', () => {
+  it('reports root mode-only changes between snapshots and against the live workspace', async () => {
+    await zfs.promises.chmod('/', 0o755);
+    const before = (await pod.snapshots.create())!;
+    await zfs.promises.chmod('/', 0o700);
+    expect(await pod.snapshots.diff(before.id)).toEqual({ added: [], modified: ['/'], deleted: [] });
+    const after = (await pod.snapshots.create({ skipIfClean: true }))!;
+    expect(after).not.toBeNull();
+    expect(await pod.snapshots.diff(before.id, after.id)).toEqual({ added: [], modified: ['/'], deleted: [] });
+    expect(await pod.snapshots.diff(after.id)).toEqual({ added: [], modified: [], deleted: [] });
+  });
+
+  it('does not invent root mode changes when either snapshot predates root mode capture', async () => {
+    await zfs.promises.chmod('/', 0o755);
+    const legacy = (await pod.snapshots.create())!;
+    delete legacy.rootModes;
+    await zfs.promises.writeFile(`/.artipod/oci/snapshots/${legacy.id}.json`, JSON.stringify(legacy));
+    await zfs.promises.chmod('/', 0o700);
+    const current = (await pod.snapshots.create())!;
+    const unchanged = { added: [], modified: [], deleted: [] };
+    expect(await pod.snapshots.diff(legacy.id, current.id)).toEqual(unchanged);
+    expect(await pod.snapshots.diff(current.id, legacy.id)).toEqual(unchanged);
+    expect(await pod.snapshots.diff(legacy.id)).toEqual(unchanged);
+  });
+
   it('lists exactly the expected added/modified/deleted paths', async () => {
     await sandbox.exec('echo one > /repo/a.txt && echo keep > /repo/keep.txt');
     const s1 = (await pod.snapshots.create())!;
@@ -254,6 +284,44 @@ describe('in-place snapshot restore', () => {
     await zfs.promises.writeFile(`/.artipod/oci/uncompressed/sha256/${before.diff.diffId.slice(7)}`, 'corrupt');
     await expect(pod.snapshots.restore(before.id)).rejects.toThrow(/digest/i);
     expect((await sandbox.exec('cat /repo/a /repo/new')).stdout).toBe('precious\nprecious\n');
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('native snapshot root modes', () => {
+  it.each([0o400, 0o000])('commits HEAD before applying root mode %i', async mode => {
+    const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-snapshot-mode-'));
+    try {
+      const filesystem = createNativeWorkspaceFs(directory);
+      const store = new OciStore(filesystem);
+      await store.init();
+      const snapshots = new SnapshotManager({ zfs: filesystem, store, roots: ['/'] });
+      await nativeFs.writeFile(path.join(directory, 'file'), 'before');
+      const before = (await snapshots.create())!;
+      // Imported snapshots may carry modes that cannot be captured while the
+      // current process is traversing a native workspace.
+      before.rootModes = { '/': mode };
+      await nativeFs.writeFile(path.join(directory, '.artipod/oci/snapshots', `${before.id}.json`), JSON.stringify(before));
+      await nativeFs.writeFile(path.join(directory, 'file'), 'after');
+      await snapshots.create();
+      await snapshots.restore(before.id);
+      expect((await nativeFs.stat(directory)).mode & 0o777).toBe(mode);
+      await nativeFs.chmod(directory, 0o700);
+      expect(await nativeFs.readFile(path.join(directory, '.artipod/oci/snapshots/HEAD'), 'utf8')).toBe(before.id);
+      expect(await nativeFs.readFile(path.join(directory, 'file'), 'utf8')).toBe('before');
+    } finally {
+      await nativeFs.chmod(directory, 0o700);
+      await nativeFs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('can defer root modes until a caller has released locks beneath the root', async () => {
+    await zfs.promises.chmod('/', 0o400);
+    const before = (await pod.snapshots.create())!;
+    await zfs.promises.chmod('/', 0o700);
+    const result = await pod.snapshots.restore(before.id, { deferRootModes: true });
+    expect(result.rootModes).toEqual({ '/': 0o400 });
+    expect((await zfs.promises.stat('/')).mode & 0o700).toBe(0o700);
+    expect(await zfs.promises.readFile('/.artipod/oci/snapshots/HEAD', 'utf8')).toBe(before.id);
   });
 });
 

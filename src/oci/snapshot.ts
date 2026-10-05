@@ -320,14 +320,18 @@ export class SnapshotManager {
   /** Diff two snapshots (or a snapshot against the live worktree). */
   async diff(fromId: string, toId?: string): Promise<SnapshotDiff> {
     const from = (await this.cumulativeIndex(fromId)).files;
+    const fromRootModes = (await this.get(fromId)).rootModes;
     let to: Record<string, FileRecord>;
+    let toRootModes: Record<string, number> | undefined;
     if (toId) {
       to = (await this.cumulativeIndex(toId)).files;
+      toRootModes = (await this.get(toId)).rootModes;
     } else {
       to = {};
       for (const [path, record] of await this.walk()) {
         to[path] = { type: record.type, size: record.size, mode: record.mode, contentDigest: record.contentDigest, linkTarget: record.linkTarget };
       }
+      toRootModes = Object.fromEntries(await Promise.all(this.roots.map(async root => [root, (await this.workspaceFs.promises.lstat(root)).mode & 0o777])));
     }
     const added: string[] = [];
     const modified: string[] = [];
@@ -339,6 +343,10 @@ export class SnapshotManager {
     }
     for (const path of Object.keys(from)) {
       if (!(path in to)) deleted.push(path);
+    }
+    // Older snapshots do not record root modes; an unknown mode is not a change.
+    for (const [root, mode] of Object.entries(fromRootModes ?? {})) {
+      if (toRootModes?.[root] !== undefined && mode !== toRootModes[root] && !modified.includes(root)) modified.push(root);
     }
     return { added: added.sort(), modified: modified.sort(), deleted: deleted.sort() };
   }
@@ -450,8 +458,10 @@ export class SnapshotManager {
    * Restore the captured roots in place. All OCI bytes and target topology are
    * checked before the first live mutation; callers must quiesce writers.
    * The root directory is retained so native watchers remain attached.
+   * Callers holding locks beneath a root may defer its final mode until after
+   * releasing those locks; they must apply every returned root mode themselves.
    */
-  async restore(id: string): Promise<{ changes: SnapshotRestoreChange[] }> {
+  async restore(id: string, options: { deferRootModes?: boolean } = {}): Promise<{ changes: SnapshotRestoreChange[]; rootModes: Record<string, number> }> {
     const { head, target } = await this.validatedSnapshot(id);
     const p = this.workspaceFs.promises;
     const current = await this.walk();
@@ -500,9 +510,12 @@ export class SnapshotManager {
     for (const [path, record] of [...target].sort(([a], [b]) => byDepth(b, a))) {
       if (record.type === 'dir') await p.chmod(path, record.mode);
     }
-    for (const [root, mode] of rootModes) await p.chmod(root, mode);
+    // HEAD can live below a root whose captured mode prevents traversal.
     await this.writeHead(id);
-    return { changes };
+    if (!options.deferRootModes) {
+      for (const [root, mode] of [...rootModes].sort(([a], [b]) => byDepth(b, a))) await p.chmod(root, mode);
+    }
+    return { changes, rootModes: Object.fromEntries(rootModes) };
   }
 
   /** Copy a verified snapshot chain into another pod's OCI store for a fork. */

@@ -51,6 +51,11 @@ test('packaged real Artipod terminal and checkpoints share the pod ID, snapshot 
   output = '';
   await execute('cat terminal.txt');
   assert.ok(output.includes('pod before'), 'the already-open shell reads restored bytes');
+  await execute('exit');
+  await until(() => !gate.terminals.has(terminal));
+  assert.equal(terminal.closed, true);
+  assert.equal(terminal.busy, false);
+  await gate.checkpoint(() => backend.list());
 });
 
 test('checkpoint boundary rejects active Artipod commands and holds new input until it completes', async () => {
@@ -76,4 +81,41 @@ test('checkpoint boundary rejects active Artipod commands and holds new input un
   });
   assert.equal(posted[0].data, 'echo deferred\r');
   pty.dispose();
+});
+
+test('closing a terminal blocks checkpoints until its worker actually stops', async t => {
+  for (const activeCommand of [false, true]) {
+    await t.test(activeCommand ? 'active command' : 'idle worker', async () => {
+      const gate = new WorkspaceOperationGate();
+      const terminal = new ArtipodTerminal(createVSCode(), {}, gate);
+      const posted = [];
+      let stopped;
+      let terminations = 0;
+      terminal.worker = {
+        postMessage: message => posted.push(message),
+        terminate() {
+          terminations++;
+          return new Promise(resolve => { stopped = resolve; });
+        }
+      };
+      terminal.workerReady = true;
+      if (activeCommand) { terminal.handleInput('write workspace.txt\r'); }
+      terminal.close();
+      terminal.close();
+      terminal.handleInput('must not run\r');
+      assert.equal(terminations, 1);
+      assert.equal(posted.length, activeCommand ? 1 : 0);
+      // Even a final command acknowledgement cannot release a closing worker.
+      terminal.pending.clear();
+      assert.equal(terminal.busy, true);
+      assert.equal(gate.terminals.has(terminal), true);
+      await assert.rejects(gate.checkpoint(() => assert.fail('worker can still write')), /terminal command to finish/);
+      stopped(0);
+      await terminal.termination;
+      assert.equal(terminal.busy, false);
+      assert.equal(gate.terminals.has(terminal), false);
+      assert.equal(await gate.checkpoint(() => 'snapshot'), 'snapshot');
+      terminal.dispose();
+    });
+  }
 });

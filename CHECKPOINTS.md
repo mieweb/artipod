@@ -114,8 +114,9 @@ Artipod `TerminalSession` or use the CLI.
 - Snapshot compaction/GC is not coordinated with Desktop's durable request-ID
   mappings. Do not compact away snapshots still referenced by conversations.
 
-Run `npm run test:checkpoints` after building for host filesystem integration
-checks, and `npx vitest run src/oci/snapshot.test.ts` for core SnapshotManager
-regressions. Tests exercise real pod-shell commands, a native child process,
+`npm test` runs both the core suite and the host filesystem checkpoint tests.
+Run `npm run test:checkpoints` for just the host integration checks (it rebuilds
+the backend first), and `npx vitest run src/oci/snapshot.test.ts` for core
+SnapshotManager regressions. Tests exercise real pod-shell commands, a native child process,
 editor-style writes, restore/redo/fork, stable identities, complete directory
 scope, permissions, symbolic links, corruption and path safety.

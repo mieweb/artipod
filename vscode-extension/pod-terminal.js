@@ -39,6 +39,8 @@ class ArtipodTerminal {
     this.buffer = [];
     this.sequence = 0;
     this.closed = false;
+    this.stopping = false;
+    this.workerExited = false;
     this.workerReady = false;
     this.ready = new Promise((resolve, reject) => { this.resolveReady = resolve; this.rejectReady = reject; });
     // VS Code calls open after creating the terminal; a failed worker should
@@ -47,7 +49,7 @@ class ArtipodTerminal {
     gate.terminals.add(this);
   }
 
-  get busy() { return this.pending.size > 0; }
+  get busy() { return this.stopping || this.pending.size > 0; }
 
   open() {
     if (this.worker || this.closed) { return; }
@@ -63,7 +65,11 @@ class ArtipodTerminal {
       if (message.type === 'exit') { this.close(message.code); }
     });
     this.worker.on('error', error => this.fail(error));
-    this.worker.on('exit', code => { if (!this.closed) { this.close(code); } });
+    this.worker.on('exit', code => {
+      this.workerExited = true;
+      if (!this.closed) { this.close(code); }
+      this.releaseGate();
+    });
   }
 
   fail(error) {
@@ -90,12 +96,28 @@ class ArtipodTerminal {
   close(code) {
     if (this.closed) { return; }
     this.closed = true;
-    this.gate.terminals.delete(this);
-    this.pending.clear();
     this.buffer.length = 0;
     this.rejectReady(new Error('The Artipod terminal closed before initialization.'));
-    void this.worker?.terminate();
+    if (this.worker && !this.workerExited) {
+      // Closing the PTY does not synchronously stop its worker. Keep blocking
+      // snapshots even if the last input's acknowledgement arrives meanwhile.
+      this.stopping = true;
+      this.termination = (async () => {
+        try { await this.worker.terminate(); this.releaseGate(); }
+        catch (error) {
+          // A failed termination is not proof that writes stopped. The worker's
+          // exit event will release the gate if it exits independently later.
+          this.output.fire(`\r\nArtipod: Could not stop terminal: ${error.message}\r\n`);
+        }
+      })();
+    } else { this.releaseGate(); }
     this.closedEvent.fire(typeof code === 'number' ? code : 0);
+  }
+
+  releaseGate() {
+    this.stopping = false;
+    this.pending.clear();
+    this.gate.terminals.delete(this);
   }
 
   dispose() { this.close(); this.output.dispose(); this.closedEvent.dispose(); }
