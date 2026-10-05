@@ -32,7 +32,7 @@ class ArtipodFileSystemProvider {
     return this.vscode.Uri.from({ scheme: 'artipod', authority: this.backend.rootId, path: '/' + relativePath.split(path.sep).join('/') });
   }
 
-  async localPath(uri, allowMissing = false) {
+  async localPath(uri, { allowMissing = false, followLeaf = true } = {}) {
     if (uri.scheme !== 'artipod' || uri.authority !== this.backend.rootId || uri.query || uri.fragment) {
       throw this.vscode.FileSystemError.NoPermissions(uri);
     }
@@ -42,7 +42,9 @@ class ArtipodFileSystemProvider {
     }
     // Check existing ancestors too: a symlink must never turn a mirror write into
     // an operation outside the materialized root.
-    let ancestor = candidate;
+    // Entry operations (lstat, unlink, rename source) act on the final link
+    // itself. Their parents still require the same containment validation.
+    let ancestor = !followLeaf && candidate !== this.root ? path.dirname(candidate) : candidate;
     while (true) {
       try {
         const resolved = await fs.realpath(ancestor);
@@ -76,8 +78,8 @@ class ArtipodFileSystemProvider {
     return error;
   }
 
-  async operation(uri, callback, allowMissing = false) {
-    try { return await callback(await this.localPath(uri, allowMissing)); }
+  async operation(uri, callback, options) {
+    try { return await callback(await this.localPath(uri, options)); }
     catch (error) { throw this.convertError(error, uri); }
   }
 
@@ -88,11 +90,19 @@ class ArtipodFileSystemProvider {
       const info = await fs.lstat(local);
       let type = info.isDirectory() ? this.vscode.FileType.Directory : this.vscode.FileType.File;
       if (info.isSymbolicLink()) {
-        const target = await fs.stat(local);
-        type = this.vscode.FileType.SymbolicLink | (target.isDirectory() ? this.vscode.FileType.Directory : this.vscode.FileType.File);
+        type = this.vscode.FileType.SymbolicLink;
+        try {
+          // Only inspect targets after validating their resolved location. A
+          // broken or external link remains a visible, manageable link entry.
+          const target = await fs.stat(await this.localPath(uri));
+          type |= target.isDirectory() ? this.vscode.FileType.Directory : this.vscode.FileType.File;
+        } catch (error) {
+          const converted = this.convertError(error, uri);
+          if (!['FileNotFound', 'FileNotADirectory', 'NoPermissions', 'ELOOP'].includes(converted.code)) { throw converted; }
+        }
       }
       return { type, ctime: info.ctimeMs, mtime: info.mtimeMs, size: info.size };
-    });
+    }, { followLeaf: false });
   }
 
   readDirectory(uri) {
@@ -111,11 +121,11 @@ class ArtipodFileSystemProvider {
       if (!exists && !options.create) { throw this.vscode.FileSystemError.FileNotFound(uri); }
       await fs.writeFile(local, content);
       this.emitter.fire([{ uri, type: exists ? this.vscode.FileChangeType.Changed : this.vscode.FileChangeType.Created }]);
-    }, true);
+    }, { allowMissing: true });
   }
 
   async createDirectory(uri) {
-    await this.operation(uri, local => fs.mkdir(local, { recursive: true }), true);
+    await this.operation(uri, local => fs.mkdir(local, { recursive: true }), { allowMissing: true });
     this.emitter.fire([{ uri, type: this.vscode.FileChangeType.Created }]);
   }
 
@@ -125,13 +135,13 @@ class ArtipodFileSystemProvider {
       const info = await fs.lstat(local);
       if (info.isDirectory() && !options.recursive) { await fs.rmdir(local); }
       else { await fs.rm(local, { recursive: !!options.recursive }); }
-    });
+    }, { followLeaf: false });
     this.emitter.fire([{ uri, type: this.vscode.FileChangeType.Deleted }]);
   }
 
   async rename(oldUri, newUri, options) {
-    const source = await this.localPath(oldUri);
-    const destination = await this.localPath(newUri, true);
+    const source = await this.localPath(oldUri, { followLeaf: false });
+    const destination = await this.localPath(newUri, { allowMissing: true });
     if (source === this.root || destination === this.root) { throw this.vscode.FileSystemError.NoPermissions(oldUri); }
     if (source === destination) { return; }
     if (isWithin(source, destination) || isWithin(destination, source)) { throw this.vscode.FileSystemError.NoPermissions(newUri); }
@@ -141,7 +151,7 @@ class ArtipodFileSystemProvider {
     const destinationEntry = path.join(await fs.realpath(path.dirname(destination)), path.basename(destination));
     if (sourceEntry === destinationEntry) { return; }
     if (isWithin(sourceEntry, destinationEntry) || isWithin(destinationEntry, sourceEntry)) { throw this.vscode.FileSystemError.NoPermissions(newUri); }
-    const sourceInfo = await fs.lstat(source);
+    const sourceInfo = await fs.lstat(source).catch(error => { throw this.convertError(error, oldUri); });
     let destinationInfo;
     try {
       destinationInfo = await fs.lstat(destination);

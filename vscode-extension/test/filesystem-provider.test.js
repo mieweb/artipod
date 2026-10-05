@@ -73,12 +73,63 @@ test('mirror rejects foreign roots, parent traversal and symlink escapes', async
   await fs.writeFile(path.join(temporary, 'outside', 'keep.txt'), 'keep');
   await fs.symlink(path.join(temporary, 'outside'), path.join(workspacePath, 'escape'));
   await assert.rejects(provider.readFile(provider.uri('escape/keep.txt')), { code: 'NoPermissions' });
+  await assert.rejects(provider.stat(provider.uri('escape/keep.txt')), { code: 'NoPermissions' });
+  await assert.rejects(provider.delete(provider.uri('escape/keep.txt'), { recursive: true }), { code: 'NoPermissions' });
+  await assert.rejects(provider.rename(provider.uri('escape/keep.txt'), provider.uri('stolen.txt'), { overwrite: true }), { code: 'NoPermissions' });
   await assert.rejects(provider.writeFile(provider.uri('escape/new.txt'), Buffer.from('bad'), { create: true, overwrite: true }), { code: 'NoPermissions' });
   await fs.writeFile(path.join(workspacePath, 'source.txt'), 'source');
   await assert.rejects(provider.rename(provider.uri('source.txt'), provider.uri('escape'), { overwrite: true }), { code: 'NoPermissions' });
   await assert.rejects(provider.rename(provider.uri('source.txt'), provider.uri('escape/keep.txt'), { overwrite: true }), { code: 'NoPermissions' });
   assert.equal(await fs.readFile(path.join(workspacePath, 'source.txt'), 'utf8'), 'source');
   assert.equal(await fs.readFile(path.join(temporary, 'outside', 'keep.txt'), 'utf8'), 'keep');
+});
+
+test('restored broken and external symlinks remain visible and can be renamed or deleted without following targets', async t => {
+  const { provider, workspacePath, temporary, backend, vscode } = await fixture(t);
+  const outside = path.join(temporary, 'outside');
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, 'keep.txt'), 'keep outside');
+  const links = [
+    { name: 'broken-relative', target: '../outside/missing', readError: 'FileNotFound' },
+    { name: 'broken-absolute', target: path.join(outside, 'missing'), readError: 'FileNotFound' },
+    { name: 'external-file', target: path.join(outside, 'keep.txt'), readError: 'NoPermissions' },
+    { name: 'external-directory', target: outside, readError: 'NoPermissions' }
+  ];
+  for (const link of links) { await fs.symlink(link.target, path.join(workspacePath, link.name)); }
+  const snapshot = await backend.create();
+  for (const link of links) { await fs.unlink(path.join(workspacePath, link.name)); }
+  await backend.restore(snapshot.checkpointId);
+  const entries = new Map(await provider.readDirectory(provider.uri()));
+  for (const link of links) {
+    const uri = provider.uri(link.name);
+    assert.equal(entries.get(link.name), vscode.FileType.SymbolicLink);
+    const metadata = await provider.stat(uri);
+    assert.equal(metadata.type, vscode.FileType.SymbolicLink);
+    assert.equal(metadata.size, (await fs.lstat(path.join(workspacePath, link.name))).size);
+    await assert.rejects(provider.readFile(uri), { code: link.readError });
+    await assert.rejects(provider.writeFile(uri, Buffer.from('do not follow'), { create: true, overwrite: true }), { code: 'NoPermissions' });
+    await assert.rejects(provider.createDirectory(uri), { code: 'NoPermissions' });
+    const renamed = `renamed-${link.name}`;
+    await provider.rename(uri, provider.uri(renamed), { overwrite: false });
+    await assert.rejects(fs.lstat(path.join(workspacePath, link.name)), { code: 'ENOENT' });
+    assert.equal(await fs.readlink(path.join(workspacePath, renamed)), link.target);
+    await provider.delete(provider.uri(renamed), { recursive: true });
+    await assert.rejects(fs.lstat(path.join(workspacePath, renamed)), { code: 'ENOENT' });
+    assert.deepEqual(await fs.readdir(outside), ['keep.txt']);
+    assert.equal(await fs.readFile(path.join(outside, 'keep.txt'), 'utf8'), 'keep outside');
+  }
+  await assert.rejects(provider.rename(provider.uri('missing-source'), provider.uri('unused'), { overwrite: false }), { code: 'FileNotFound' });
+});
+
+test('stat keeps target type bits for valid internal symlinks', async t => {
+  const { provider, workspacePath, vscode } = await fixture(t);
+  await fs.writeFile(path.join(workspacePath, 'target.txt'), 'inside');
+  await fs.mkdir(path.join(workspacePath, 'directory'));
+  await fs.symlink('target.txt', path.join(workspacePath, 'file-link'));
+  await fs.symlink('directory', path.join(workspacePath, 'directory-link'));
+  assert.equal((await provider.stat(provider.uri('file-link'))).type, vscode.FileType.SymbolicLink | vscode.FileType.File);
+  assert.equal((await provider.stat(provider.uri('directory-link'))).type, vscode.FileType.SymbolicLink | vscode.FileType.Directory);
+  assert.equal((await provider.readFile(provider.uri('file-link'))).toString(), 'inside');
 });
 
 test('rename cannot erase an ancestor or the workspace root', async t => {
