@@ -5,12 +5,20 @@
  * plus commit → image mount round-trip.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import * as nativeFs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { configure, InMemory, fs as zfs, umount, mounts as zenMounts } from '@zenfs/core';
 import { createZenFsPod, type ZenFsPod } from '../realize/zenfs.js';
 import { ToolCallingLoop } from '../agent/loop.js';
 import { OzwellClient } from '../agent/ozwell-client.js';
 import type { ChatCompletionResponse, ChatMessage } from '../agent/types.js';
 import type { Sandbox } from '../sandbox/types.js';
+import { SnapshotManager } from './snapshot.js';
+import { OciStore } from './store.js';
+import { createNativeWorkspaceFs } from './node-workspace.js';
+import { indexTar, writeTar, type TarWriteEntry } from './tar.js';
+import { sha256 } from './digest.js';
 
 let pod: ZenFsPod;
 let sandbox: Sandbox;
@@ -44,6 +52,23 @@ beforeEach(async () => {
 });
 
 describe('snapshot create / checkout / mount (done-when 1)', () => {
+  it.each([true, false])('excludes reserved case aliases during capture while preserving ordinary case-sensitive exclusions (defaultExcludes=%s)', async defaultExcludes => {
+    for (const directory of ['/.ARTIPOD', '/PrOc', '/.ARTIPOD-project', '/Processor', '/dev', '/Dev', '/ignored', '/Ignored']) {
+      await zfs.promises.mkdir(directory, { recursive: true });
+      await zfs.promises.writeFile(`${directory}/file`, 'contents');
+    }
+    const snapshots = new SnapshotManager({ zfs, store: pod.oci.store, roots: ['/'], exclude: ['/ignored'], defaultExcludes });
+    const snapshot = (await snapshots.create())!;
+    const index = JSON.parse(await zfs.promises.readFile(`/.artipod/oci/snapshots/${snapshot.id}.index.json`, 'utf8') as string);
+    expect(Object.keys(index.files).sort()).toEqual([
+      '/.ARTIPOD-project', '/.ARTIPOD-project/file', '/Dev', '/Dev/file', '/Ignored', '/Ignored/file', '/Processor', '/Processor/file', '/repo',
+      ...(defaultExcludes ? [] : ['/dev', '/dev/file']),
+    ].sort());
+    await zfs.promises.writeFile('/.ARTIPOD/file', 'metadata changed');
+    await zfs.promises.writeFile('/PrOc/file', 'runtime changed');
+    expect(await snapshots.create({ skipIfClean: true })).toBeNull();
+  });
+
   it('edit → snapshot → edit → checkout: both branches mountable simultaneously', async () => {
     await sandbox.exec('echo v1 > /repo/story.md && mkdir /repo/sub && echo deep > /repo/sub/d.txt');
     const snap = (await pod.snapshots.create({ label: 'first draft' }))!;
@@ -68,6 +93,30 @@ describe('snapshot create / checkout / mount (done-when 1)', () => {
 });
 
 describe('snapshot diff (done-when 2)', () => {
+  it('reports root mode-only changes between snapshots and against the live workspace', async () => {
+    await zfs.promises.chmod('/', 0o755);
+    const before = (await pod.snapshots.create())!;
+    await zfs.promises.chmod('/', 0o700);
+    expect(await pod.snapshots.diff(before.id)).toEqual({ added: [], modified: ['/'], deleted: [] });
+    const after = (await pod.snapshots.create({ skipIfClean: true }))!;
+    expect(after).not.toBeNull();
+    expect(await pod.snapshots.diff(before.id, after.id)).toEqual({ added: [], modified: ['/'], deleted: [] });
+    expect(await pod.snapshots.diff(after.id)).toEqual({ added: [], modified: [], deleted: [] });
+  });
+
+  it('does not invent root mode changes when either snapshot predates root mode capture', async () => {
+    await zfs.promises.chmod('/', 0o755);
+    const legacy = (await pod.snapshots.create())!;
+    delete legacy.rootModes;
+    await zfs.promises.writeFile(`/.artipod/oci/snapshots/${legacy.id}.json`, JSON.stringify(legacy));
+    await zfs.promises.chmod('/', 0o700);
+    const current = (await pod.snapshots.create())!;
+    const unchanged = { added: [], modified: [], deleted: [] };
+    expect(await pod.snapshots.diff(legacy.id, current.id)).toEqual(unchanged);
+    expect(await pod.snapshots.diff(current.id, legacy.id)).toEqual(unchanged);
+    expect(await pod.snapshots.diff(legacy.id)).toEqual(unchanged);
+  });
+
   it('lists exactly the expected added/modified/deleted paths', async () => {
     await sandbox.exec('echo one > /repo/a.txt && echo keep > /repo/keep.txt');
     const s1 = (await pod.snapshots.create())!;
@@ -214,4 +263,185 @@ describe('commit / compact / gc (done-when 4 + commit round-trip)', () => {
     expect(mountR.exitCode).toBe(0);
     expect((await sandbox.exec('cat /mnt/kept/repo/k.txt')).stdout).toBe('keepme\n');
   });
+});
+
+describe('in-place snapshot restore', () => {
+  it.each(['/.ARTIPOD/superblock.json', '/PrOc/guard'])('rejects a reserved case alias in snapshot layers before restore or checkout mutates files: %s', async reservedFile => {
+    await sandbox.exec('echo baseline > /repo/a');
+    await zfs.promises.mkdir('/proc', { recursive: true });
+    await zfs.promises.writeFile('/proc/guard', 'runtime state');
+    const snapshot = (await pod.snapshots.create())!;
+    const bytes = new TextEncoder().encode('unexpected replacement');
+    const entries: TarWriteEntry[] = [
+      { path: '/repo', type: 'dir', mode: 0o755 },
+      { path: '/repo/a', type: 'file', mode: 0o644, content: bytes },
+      { path: reservedFile.slice(0, reservedFile.lastIndexOf('/')), type: 'dir', mode: 0o755 },
+      { path: reservedFile, type: 'file', mode: 0o644, content: bytes },
+    ];
+    const tar = writeTar(entries);
+    const diffId = await sha256(tar);
+    await pod.oci.store.putUncompressed(diffId, tar);
+    await pod.oci.store.putLayerIndex(diffId, indexTar(tar));
+    snapshot.diff = { diffId, size: tar.length, entryCount: entries.length };
+    const files = Object.fromEntries(await Promise.all(entries.map(async entry => [entry.path, {
+      type: entry.type, mode: entry.mode, size: entry.content?.length ?? 0,
+      ...(entry.content ? { contentDigest: await sha256(entry.content) } : {}),
+    }])));
+    // Keep tar bytes, manifest and cumulative index internally consistent so
+    // reserved-path validation is what rejects this imported snapshot.
+    await zfs.promises.writeFile(`/.artipod/oci/snapshots/${snapshot.id}.json`, JSON.stringify(snapshot));
+    await zfs.promises.writeFile(`/.artipod/oci/snapshots/${snapshot.id}.index.json`, JSON.stringify({ formatVersion: 1, files }));
+    await zfs.promises.writeFile('/repo/a', 'precious current work');
+    await zfs.promises.writeFile('/repo/new', 'precious new file');
+    const superblock = await zfs.promises.readFile('/.artipod/superblock.json', 'utf8');
+    const head = await zfs.promises.readFile('/.artipod/oci/snapshots/HEAD', 'utf8');
+
+    await expect(pod.snapshots.restore(snapshot.id)).rejects.toThrow(/outside captured roots/);
+    await expect(pod.snapshots.checkout(snapshot.id, '/new-checkout')).rejects.toThrow(/outside captured roots/);
+    await expect(zfs.promises.stat('/new-checkout')).rejects.toThrow();
+    expect(await zfs.promises.readFile('/repo/a', 'utf8')).toBe('precious current work');
+    expect(await zfs.promises.readFile('/repo/new', 'utf8')).toBe('precious new file');
+    expect(await zfs.promises.readFile('/.artipod/superblock.json', 'utf8')).toBe(superblock);
+    expect(await zfs.promises.readFile('/.artipod/oci/snapshots/HEAD', 'utf8')).toBe(head);
+    expect(await zfs.promises.readFile('/proc/guard', 'utf8')).toBe('runtime state');
+  });
+
+  it('restores edits, deletions and additions without replacing the root; moves HEAD for subsequent captures', async () => {
+    await sandbox.exec('echo baseline > /repo/a; mkdir /repo/empty; echo keep > /repo/deleted');
+    const baseline = (await pod.snapshots.create())!;
+    await sandbox.exec('echo after > /repo/a; rm /repo/deleted; rmdir /repo/empty; echo replacement > /repo/empty; echo new > /repo/new');
+    const later = (await pod.snapshots.create())!;
+    const restored = await pod.snapshots.restore(baseline.id);
+    expect((await sandbox.exec('cat /repo/a')).stdout).toBe('baseline\n');
+    expect((await sandbox.exec('cat /repo/deleted')).stdout).toBe('keep\n');
+    expect((await zfs.promises.stat('/repo/empty')).isDirectory()).toBe(true);
+    expect(restored.changes).toContainEqual({ path: '/repo/new', type: 'deleted', kind: 'file' });
+    expect(restored.changes).toContainEqual({ path: '/repo/empty', type: 'created', kind: 'directory' });
+    const next = (await pod.snapshots.create())!;
+    expect(next.parent).toBe(baseline.id);
+    // Restoring earlier state must not destroy redo's immutable history.
+    await pod.snapshots.restore(later.id);
+    expect((await sandbox.exec('cat /repo/a')).stdout).toBe('after\n');
+  });
+
+  it('captures mode-only changes and symbolic links without following their targets', async () => {
+    await zfs.promises.writeFile('/repo/a', 'same bytes');
+    await zfs.promises.symlink('/outside', '/repo/link');
+    const before = (await pod.snapshots.create())!;
+    await zfs.promises.chmod('/repo/a', 0o755);
+    expect((await pod.snapshots.diff(before.id)).modified).toEqual(['/repo/a']);
+    await zfs.promises.unlink('/repo/link');
+    await pod.snapshots.restore(before.id);
+    expect(await zfs.promises.readlink('/repo/link')).toBe('/outside');
+    expect((await zfs.promises.stat('/repo/a')).mode & 0o777).toBe(0o644);
+  });
+
+  it('rejects corrupt OCI bytes before deleting or writing workspace files', async () => {
+    await sandbox.exec('echo baseline > /repo/a');
+    const before = (await pod.snapshots.create())!;
+    await sandbox.exec('echo precious > /repo/a; echo precious > /repo/new');
+    await zfs.promises.writeFile(`/.artipod/oci/uncompressed/sha256/${before.diff.diffId.slice(7)}`, 'corrupt');
+    await expect(pod.snapshots.restore(before.id)).rejects.toThrow(/digest/i);
+    expect((await sandbox.exec('cat /repo/a /repo/new')).stdout).toBe('precious\nprecious\n');
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('native snapshot root modes', () => {
+  it('checks out nested roots before applying restrictive parent root modes', async () => {
+    const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-checkout-modes-'));
+    const destination = path.join(directory, 'branches', 'nested');
+    try {
+      const filesystem = createNativeWorkspaceFs(directory);
+      const store = new OciStore(filesystem);
+      await store.init();
+      await nativeFs.mkdir(path.join(directory, 'repo', 'nested'), { recursive: true });
+      await nativeFs.writeFile(path.join(directory, 'repo', 'nested', 'file'), 'preserved');
+      const snapshots = new SnapshotManager({ zfs: filesystem, store, roots: ['/', '/repo', '/repo/nested'] });
+      const snapshot = (await snapshots.create())!;
+      // Keep ancestor-first manifest order to exercise an unsearchable outer
+      // root and restrictive roots at more than one depth.
+      snapshot.rootModes = { '/': 0o000, '/repo': 0o500, '/repo/nested': 0o400 };
+      await nativeFs.writeFile(path.join(directory, '.artipod/oci/snapshots', `${snapshot.id}.json`), JSON.stringify(snapshot));
+      expect(await snapshots.checkout(snapshot.id, '/branches/nested')).toBe('/branches/nested');
+      expect((await nativeFs.stat(destination)).mode & 0o777).toBe(0o000);
+      await nativeFs.chmod(destination, 0o700);
+      expect((await nativeFs.stat(path.join(destination, 'repo'))).mode & 0o777).toBe(0o500);
+      expect((await nativeFs.stat(path.join(destination, 'repo', 'nested'))).mode & 0o777).toBe(0o400);
+      await nativeFs.chmod(path.join(destination, 'repo', 'nested'), 0o700);
+      expect(await nativeFs.readFile(path.join(destination, 'repo', 'nested', 'file'), 'utf8')).toBe('preserved');
+    } finally {
+      for (const relative of ['', 'repo', 'repo/nested']) {
+        await nativeFs.chmod(path.join(destination, relative), 0o700).catch(error => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      }
+      await nativeFs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([0o400, 0o000])('commits HEAD before applying root mode %i', async mode => {
+    const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-snapshot-mode-'));
+    try {
+      const filesystem = createNativeWorkspaceFs(directory);
+      const store = new OciStore(filesystem);
+      await store.init();
+      const snapshots = new SnapshotManager({ zfs: filesystem, store, roots: ['/'] });
+      await nativeFs.writeFile(path.join(directory, 'file'), 'before');
+      const before = (await snapshots.create())!;
+      // Imported snapshots may carry modes that cannot be captured while the
+      // current process is traversing a native workspace.
+      before.rootModes = { '/': mode };
+      await nativeFs.writeFile(path.join(directory, '.artipod/oci/snapshots', `${before.id}.json`), JSON.stringify(before));
+      await nativeFs.writeFile(path.join(directory, 'file'), 'after');
+      await snapshots.create();
+      await snapshots.restore(before.id);
+      expect((await nativeFs.stat(directory)).mode & 0o777).toBe(mode);
+      await nativeFs.chmod(directory, 0o700);
+      expect(await nativeFs.readFile(path.join(directory, '.artipod/oci/snapshots/HEAD'), 'utf8')).toBe(before.id);
+      expect(await nativeFs.readFile(path.join(directory, 'file'), 'utf8')).toBe('before');
+    } finally {
+      await nativeFs.chmod(directory, 0o700);
+      await nativeFs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('can defer root modes until a caller has released locks beneath the root', async () => {
+    await zfs.promises.chmod('/', 0o400);
+    const before = (await pod.snapshots.create())!;
+    await zfs.promises.chmod('/', 0o700);
+    const result = await pod.snapshots.restore(before.id, { deferRootModes: true });
+    expect(result.rootModes).toEqual({ '/': 0o400 });
+    expect((await zfs.promises.stat('/')).mode & 0o700).toBe(0o700);
+    expect(await zfs.promises.readFile('/.artipod/oci/snapshots/HEAD', 'utf8')).toBe(before.id);
+  });
+});
+
+it.each(['/.artipod', '/.artipod/oci/upper', '/.artipod/new/branch', '/.ARTIPOD/oci/upper', '/proc', '/proc/new/branch', '/PrOc/branch'])('checkout rejects reserved destination %s without changing it', async destination => {
+  await sandbox.exec('echo baseline > /repo/a');
+  const snapshot = (await pod.snapshots.create())!;
+  const previousEntries = await zfs.promises.readdir(destination).catch(() => undefined);
+  await expect(pod.snapshots.checkout(snapshot.id, destination)).rejects.toThrow(/outside reserved Artipod metadata and runtime paths/);
+  expect(await zfs.promises.readdir(destination).catch(() => undefined)).toEqual(previousEntries);
+  expect(await pod.snapshots.get(snapshot.id)).toEqual(snapshot);
+  expect(await pod.snapshots.diff(snapshot.id)).toEqual({ added: [], modified: [], deleted: [] });
+});
+
+it.each(['/.artipod-project', '/processor'])('checkout permits ordinary destinations sharing a reserved prefix: %s', async destination => {
+  await sandbox.exec('echo baseline > /repo/a');
+  const snapshot = (await pod.snapshots.create())!;
+  expect(await pod.snapshots.checkout(snapshot.id, destination)).toBe(destination);
+  expect(await zfs.promises.readFile(`${destination}/repo/a`, 'utf8')).toBe('baseline\n');
+});
+
+
+it('checkout refuses symlink destinations and validates corrupted snapshots before creating directories', async () => {
+  await sandbox.exec('echo baseline > /repo/a');
+  const snapshot = (await pod.snapshots.create())!;
+  await zfs.promises.mkdir('/elsewhere');
+  await zfs.promises.symlink('/elsewhere', '/alias');
+  await expect(pod.snapshots.checkout(snapshot.id, '/alias/branch')).rejects.toThrow(/real directories/);
+  expect(await zfs.promises.readdir('/elsewhere')).toEqual([]);
+  await zfs.promises.writeFile(`/.artipod/oci/uncompressed/sha256/${snapshot.diff.diffId.slice(7)}`, 'corrupt');
+  await expect(pod.snapshots.checkout(snapshot.id, '/new-checkout')).rejects.toThrow(/digest/i);
+  await expect(zfs.promises.stat('/new-checkout')).rejects.toThrow();
 });

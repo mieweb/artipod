@@ -3,7 +3,7 @@
  * the host view (the Phase 3 contract), cow isolation, /proc/pod projection,
  * tools + agent tools over the realized mount table.
  */
-import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, mkdir, chmod, symlink, readlink, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -155,5 +155,40 @@ describe('realizeZenFs + createZenFsPod', () => {
     await expect(
       realizeZenFs({ root: { image: 'alpine' }, mounts: hostManifest().mounts }),
     ).rejects.toThrow(/Phase 4/);
+  });
+});
+
+
+describe('single native hostDir snapshot checkout', () => {
+  it('CLI checkout preserves native symlinks and modes and refuses to overwrite an occupied destination', async () => {
+    await writeFile(join(hostDir, 'source'), 'binary\0content');
+    await chmod(join(hostDir, 'source'), 0o751);
+    await symlink('source', join(hostDir, 'link'));
+    await symlink('missing', join(hostDir, 'dangling'));
+    await chmod(join(hostDir, 'sub'), 0o555);
+    const pod = await createZenFsPod({ mounts: [{ name: 'root', path: '/', mode: 'rw', source: { kind: 'hostDir', dir: hostDir } }] }, { proc: false });
+    pods.push(pod);
+    const snapshot = (await pod.snapshots.create())!;
+    const sandbox = pod.createSandbox();
+    try {
+      const checked = await sandbox.exec(`artipod snapshot checkout ${snapshot.id}`);
+      expect(checked.exitCode).toBe(0);
+      const branch = join(hostDir, 'branches', snapshot.id);
+      expect(await readFile(join(branch, 'source'), 'utf8')).toBe('binary\0content');
+      expect((await lstat(join(branch, 'source'))).mode & 0o777).toBe(0o751);
+      expect((await lstat(join(branch, 'link'))).isSymbolicLink()).toBe(true);
+      expect(await readlink(join(branch, 'link'))).toBe('source');
+      expect(await readlink(join(branch, 'dangling'))).toBe('missing');
+      expect((await lstat(join(branch, 'sub'))).mode & 0o777).toBe(0o555);
+      await writeFile(join(branch, 'source'), 'precious branch work');
+      const refused = await sandbox.exec(`artipod snapshot checkout ${snapshot.id}`);
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.stderr).toContain('empty');
+      expect(await readFile(join(branch, 'source'), 'utf8')).toBe('precious branch work');
+      await chmod(join(branch, 'sub'), 0o755);
+    } finally {
+      sandbox.dispose();
+      await chmod(join(hostDir, 'sub'), 0o755);
+    }
   });
 });

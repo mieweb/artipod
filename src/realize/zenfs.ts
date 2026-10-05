@@ -323,8 +323,19 @@ export async function createZenFsPod(
     inventory: options.inventory,
     proc,
   });
+  // A simple local pod must capture/materialize native links and permissions.
+  // Passthrough emulates symlinks instead of creating OS links. Keep this
+  // Node-only adapter behind a dynamic import for browser realizations.
+  const hostRoot = !options.adopt && m.mounts.length === 1 && m.mounts[0].path === '/' && m.mounts[0].mode === 'rw' && m.mounts[0].source.kind === 'hostDir'
+    ? m.mounts[0].source.dir : undefined;
+  const snapshotWorkspaceFs = isNode && hostRoot
+    ? (await import('../oci/node-workspace.js')).createNativeWorkspaceFs(hostRoot) : undefined;
   const snapshots = new SnapshotManager({
     zfs,
+    workspaceFs: snapshotWorkspaceFs,
+    // A native root is an entire workspace. Names such as /dev, /mnt and
+    // /branches are ordinary host directories, not virtual runtime mounts.
+    defaultExcludes: snapshotWorkspaceFs ? false : undefined,
     store: ociStore,
     roots: mountTable.filter((e) => !e.readonly).map((e) => e.path),
   });

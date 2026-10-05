@@ -4,7 +4,7 @@
   "bin": {
     "artipod": "dist/cli.js"
   },
-  "description": "A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize — in the browser and on Linux",
+  "description": "A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize \u2014 in the browser and on Linux",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -66,7 +66,11 @@
       "default": "./dist/apps/index.js"
     },
     "./apps/runtime-sw.js": "./dist/apps/runtime-sw.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./checkpoints": {
+      "types": "./dist/checkpoint-workspace.d.ts",
+      "default": "./dist/checkpoint-workspace.js"
+    }
   },
   "publishConfig": {
     "access": "public"
@@ -94,7 +98,7 @@
     "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('src/apps/runtime-sw.js','dist/apps/runtime-sw.js')\"",
     "postbuild": "node scripts/buildinfo.mjs && node scripts/devlink.mjs",
     "build:ui": "cd examples/artipod-spa && npm run export:static && cd ../.. && rm -rf dist-ui && cp -R examples/artipod-spa/out dist-ui",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:checkpoints",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts",
@@ -103,7 +107,9 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build",
     "example:basic": "npx tsx examples/basic/basic-pod-usage.ts",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "pretest:checkpoints": "npm run build",
+    "test:checkpoints": "node --test test/checkpoints.test.js test/checkpoint-safety.test.js"
   },
   "keywords": [
     "ai",
