@@ -41,14 +41,21 @@ jobs:
     - name: Test Coverage
       run: npm run test:coverage
     
+    # Keep coverage available even when the external reporting service is down.
+    - name: Save coverage report
+      uses: actions/upload-artifact@v7
+      if: matrix.node-version == '20.x'
+      with:
+        name: core-coverage
+        path: coverage/lcov.info
+        if-no-files-found: error
+        retention-days: 14
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v7
       if: matrix.node-version == '20.x'
       with:
         use_oidc: true
-        # The newer ingest endpoint currently serves an expired TLS certificate.
-        use_legacy_upload_endpoint: true
-        verbose: true
         # Use the official PyPI distribution while cli.codecov.io's download
         # endpoint fails TLS handshakes on GitHub-hosted runners.
         use_pypi: true
