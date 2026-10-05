@@ -246,6 +246,21 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 
 ## Worklog
 
+### Dependency maintenance — SPA lint migration (2026-10-05)
+
+- Migrated `next lint` / `.eslintrc.json` to the ESLint 9 CLI and flat config.
+  Next and `eslint-config-next` remain aligned at 15.5.25; ESLint is 9.39.5,
+  and the explicit TypeScript parser/plugin pair is 8.71.0. The config includes
+  rules previously inherited from the root; every previous rule keeps its severity.
+- `eslint-config-next` 16 is deferred: it enables React Compiler checks that
+  flag 24 existing errors in component lifecycle/ref patterns. Revisit with the
+  Next 16 / React Compiler migration, without weakening existing checks here.
+- Verification: core `npm ci`, `npm run lint`, `npm run build`, and `npx tsc --noEmit`
+  passed; `npm test` passed 648 tests, failed 28 container-dependent tests because
+  Docker/Podman is unavailable (including a cascading north-star assertion), and
+  skipped 3. SPA clean `npm ci`, `npm run lint`, `npm run typecheck`, and `npm test`
+  passed (29 tests); `npm run export:static` passed the struct-minify and version assertions.
+
 ### U7 — cutover, part 2: retirement + redeploy runbook (2026-09-03, owner sign-off)
 
 - **`examples/artipod-sync` retired** (history in git): the app, its catch-all API, agent/sandbox shims, vitest config, and CI job are gone; `build:ui:legacy` removed; README/examples-README point at artipod-spa; the serve-plan S2 note records the arc (catch-all refactor at UE → whole API layer retired at U7).
