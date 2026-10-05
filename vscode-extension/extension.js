@@ -19,6 +19,19 @@ async function loadBackend() {
   return import(pathToFileURL(modulePath).href);
 }
 
+async function workspaceIsCaseSensitive(workspacePath) {
+  // The backend has already opened this control directory. Comparing a case
+  // variant probes the actual workspace volume without creating probe files.
+  const control = await fs.lstat(path.join(workspacePath, '.artipod'));
+  let alternate;
+  try { alternate = await fs.lstat(path.join(workspacePath, '.ARTIPOD')); }
+  catch (error) {
+    if (error.code === 'ENOENT') { return true; }
+    throw error;
+  }
+  return control.dev !== alternate.dev || control.ino !== alternate.ino;
+}
+
 async function activate(context, api) {
   const vscode = api || require('vscode');
   let manager;
@@ -39,8 +52,9 @@ async function activate(context, api) {
       manager = (async () => {
         const { ArtipodWorkspace } = await loadBackend();
         const backend = await ArtipodWorkspace.open({ workspacePath, storePath: path.join(context.globalStorageUri.fsPath, 'store') });
+        const isCaseSensitive = await workspaceIsCaseSensitive(backend.workspacePath);
         const filesystem = new ArtipodFileSystemProvider(vscode, backend, folders[0].uri);
-        context.subscriptions.push(filesystem, vscode.workspace.registerFileSystemProvider('artipod', filesystem, { isCaseSensitive: process.platform !== 'win32' }));
+        context.subscriptions.push(filesystem, vscode.workspace.registerFileSystemProvider('artipod', filesystem, { isCaseSensitive }));
         if (vscode.window.createStatusBarItem) {
           const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
           status.text = `$(terminal) Artipod ${backend.rootId.slice(0, 8)}`;
