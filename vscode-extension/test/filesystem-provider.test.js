@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const fs = require('node:fs/promises');
+const { constants } = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { ArtipodFileSystemProvider } = require('../filesystem-provider');
@@ -209,4 +210,46 @@ test('case-only rename does not remove its source on a case-insensitive filesyst
   const names = await fs.readdir(workspacePath);
   assert.ok(names.includes('NAME.txt'));
   assert.ok(!names.includes('name.txt'));
+});
+
+test('case-insensitive directory ancestry cannot erase source files and directory case-only rename still works', async t => {
+  const { provider, workspacePath } = await fixture(t);
+  const parent = path.join(workspacePath, 'Parent');
+  await fs.mkdir(parent);
+  await fs.writeFile(path.join(parent, 'child.txt'), 'keep');
+  try { await fs.lstat(path.join(workspacePath, 'parent')); }
+  catch (error) {
+    if (error.code !== 'ENOENT') { throw error; }
+    t.skip('The test filesystem is case-sensitive.');
+    return;
+  }
+  await assert.rejects(provider.rename(provider.uri('Parent/child.txt'), provider.uri('parent'), { overwrite: true }), { code: 'NoPermissions' });
+  await assert.rejects(provider.rename(provider.uri('parent'), provider.uri('Parent/child.txt'), { overwrite: true }), { code: 'NoPermissions' });
+  await assert.rejects(provider.rename(provider.uri('parent'), provider.uri('Parent/new-child'), { overwrite: true }), { code: 'NoPermissions' });
+  assert.deepEqual(await fs.readdir(parent), ['child.txt']);
+  assert.equal(await fs.readFile(path.join(parent, 'child.txt'), 'utf8'), 'keep');
+  await provider.rename(provider.uri('Parent'), provider.uri('PARENT'), { overwrite: true });
+  assert.ok((await fs.readdir(workspacePath)).includes('PARENT'));
+  assert.equal(await fs.readFile(path.join(workspacePath, 'PARENT', 'child.txt'), 'utf8'), 'keep');
+});
+
+test('failed overwrite rename preserves an existing file when its source parent is not writable', async t => {
+  const { provider, workspacePath } = await fixture(t);
+  const parent = path.join(workspacePath, 'read-only');
+  const source = path.join(parent, 'source.txt');
+  const destination = path.join(workspacePath, 'destination.txt');
+  await fs.mkdir(parent);
+  await fs.writeFile(source, 'keep source');
+  await fs.writeFile(destination, 'keep destination');
+  await fs.chmod(parent, 0o555);
+  try {
+    try {
+      await fs.access(parent, constants.W_OK);
+      t.skip('The current user or filesystem does not enforce this directory permission.');
+      return;
+    } catch (error) { if (!['EACCES', 'EPERM'].includes(error.code)) { throw error; } }
+    await assert.rejects(provider.rename(provider.uri('read-only/source.txt'), provider.uri('destination.txt'), { overwrite: true }), { code: 'NoPermissions' });
+    assert.equal(await fs.readFile(source, 'utf8'), 'keep source');
+    assert.equal(await fs.readFile(destination, 'utf8'), 'keep destination');
+  } finally { await fs.chmod(parent, 0o755); }
 });

@@ -141,17 +141,34 @@ class ArtipodFileSystemProvider {
     const destinationEntry = path.join(await fs.realpath(path.dirname(destination)), path.basename(destination));
     if (sourceEntry === destinationEntry) { return; }
     if (isWithin(sourceEntry, destinationEntry) || isWithin(destinationEntry, sourceEntry)) { throw this.vscode.FileSystemError.NoPermissions(newUri); }
+    const sourceInfo = await fs.lstat(source);
+    let destinationInfo;
     try {
-      const destinationInfo = await fs.lstat(destination);
-      if (!options.overwrite) { throw this.vscode.FileSystemError.FileExists(newUri); }
-      const sourceInfo = await fs.lstat(source);
-      // Case-only renames and hard links can name the same inode. Let rename
-      // handle them; removing the destination could remove the source itself.
-      if (sourceInfo.dev !== destinationInfo.dev || sourceInfo.ino !== destinationInfo.ino) {
-        await fs.rm(destination, { recursive: destinationInfo.isDirectory() });
-      }
+      destinationInfo = await fs.lstat(destination);
     } catch (error) { if (error.code !== 'ENOENT') { throw this.convertError(error, newUri); } }
-    await fs.rename(source, destination);
+    // Actual directories need their final spelling canonicalized too, since
+    // filesystem case aliases can otherwise conceal a source or destination
+    // ancestor. lstat deliberately keeps final symlinks out of this check.
+    const sourceTreeEntry = sourceInfo.isDirectory() ? await fs.realpath(source) : sourceEntry;
+    const destinationTreeEntry = destinationInfo?.isDirectory() ? await fs.realpath(destination) : destinationEntry;
+    if (sourceTreeEntry !== destinationTreeEntry && (isWithin(sourceTreeEntry, destinationTreeEntry) || isWithin(destinationTreeEntry, sourceTreeEntry))) {
+      throw this.vscode.FileSystemError.NoPermissions(newUri);
+    }
+    if (destinationInfo && !options.overwrite) { throw this.vscode.FileSystemError.FileExists(newUri); }
+    try { await fs.rename(source, destination); }
+    catch (error) {
+      // Preserve native replacement and its failure guarantees whenever it
+      // works. Removal is only needed for incompatible destination types or
+      // nonempty directories, never permission errors or the same inode.
+      const sameEntry = destinationInfo && sourceInfo.dev === destinationInfo.dev && sourceInfo.ino === destinationInfo.ino;
+      if (!options.overwrite || !destinationInfo || sameEntry || !['EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) {
+        throw this.convertError(error, newUri);
+      }
+      try {
+        await fs.rm(destination, { recursive: destinationInfo.isDirectory() });
+        await fs.rename(source, destination);
+      } catch (error) { throw this.convertError(error, newUri); }
+    }
     this.emitter.fire([{ uri: oldUri, type: this.vscode.FileChangeType.Deleted }, { uri: newUri, type: this.vscode.FileChangeType.Created }]);
   }
 
