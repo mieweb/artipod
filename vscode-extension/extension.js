@@ -6,6 +6,7 @@ const { pathToFileURL } = require('node:url');
 const { ArtipodFileSystemProvider, isWithin } = require('./filesystem-provider');
 const { CheckpointBridge } = require('./checkpoint-bridge');
 const { ArtipodTerminal, WorkspaceOperationGate } = require('./pod-terminal');
+const { registerSnapshotCommands } = require('./workspace-snapshots');
 
 async function loadBackend() {
   const bundled = path.join(__dirname, 'vendor', 'checkpoints.mjs');
@@ -25,9 +26,6 @@ function activate(context, api) {
   const gate = new WorkspaceOperationGate();
 
   const getManager = async () => {
-    if (!vscode.workspace.getConfiguration('artipod.checkpoints').get('enabled', false)) {
-      throw new Error('Artipod checkpoints are disabled. Enable artipod.checkpoints.enabled for this prototype.');
-    }
     const folders = vscode.workspace.workspaceFolders;
     if (!vscode.workspace.isTrusted || folders?.length !== 1 || folders[0].uri.scheme !== 'file' || vscode.env.remoteName) {
       throw new Error('Artipod checkpoints require one trusted local file:// workspace folder.');
@@ -59,10 +57,14 @@ function activate(context, api) {
 
   for (const operation of ['capture', 'restore', 'fork']) {
     context.subscriptions.push(vscode.commands.registerCommand(`_artipod.checkpoints.${operation}`, async payload => {
+      if (!vscode.workspace.getConfiguration('artipod.checkpoints').get('enabled', false)) {
+        throw new Error('Artipod native chat integration is disabled. It requires artipod.checkpoints.enabled and a compatible editor core patch.');
+      }
       const { bridge } = await getManager();
       return gate.checkpoint(() => bridge[operation](payload));
     }));
   }
+  registerSnapshotCommands(vscode, context, getManager, gate);
   context.subscriptions.push(vscode.commands.registerCommand('artipod.openPodTerminal', async () => {
     const { backend } = await getManager();
     const pty = new ArtipodTerminal(vscode, backend, gate);
@@ -84,11 +86,18 @@ function activate(context, api) {
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri), { preview: false });
     return uri;
   }));
-  // Register artipod: early for mirror documents reopened after window reload.
-  // Checkpoint command activation itself remains awaited and reports all errors.
-  if (vscode.workspace.getConfiguration('artipod.checkpoints').get('enabled', false)) {
-    void getManager().catch(error => vscode.window.showErrorMessage(`Artipod: ${error.message}`));
-  }
+  // Reopen existing pods for mirror documents/status after reload. A fresh
+  // workspace is initialized only by an explicit Artipod command (or the
+  // separately enabled experimental chat integration).
+  void (async () => {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!vscode.workspace.isTrusted || folders?.length !== 1 || folders[0].uri.scheme !== 'file' || vscode.env.remoteName) { return; }
+    if (!vscode.workspace.getConfiguration('artipod.checkpoints').get('enabled', false)) {
+      try { await fs.access(path.join(folders[0].uri.fsPath, '.artipod', 'superblock.json')); }
+      catch (error) { if (error.code === 'ENOENT') { return; } throw error; }
+    }
+    await getManager();
+  })().catch(error => vscode.window.showErrorMessage(`Artipod: ${error.message}`));
   return { getManager };
 }
 

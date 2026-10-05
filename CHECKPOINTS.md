@@ -18,6 +18,8 @@ const workspace = await ArtipodWorkspace.open({
   storePath: '/var/lib/artipod/desktop-mappings'
 });
 const beforeTurn = await workspace.create({ label: 'before request' });
+const checkpoints = await workspace.list(); // persisted metadata, oldest first
+console.log(checkpoints.map(({ checkpointId, label, isHead }) => ({ checkpointId, label, isHead })));
 await workspace.exec('echo "from the pod shell" > /terminal.txt');
 const result = await workspace.restore(beforeTurn.checkpointId);
 console.log(workspace.rootId, result.changes);
@@ -27,6 +29,9 @@ const branch = await workspace.fork(beforeTurn.checkpointId, {
   workspacePath: '/workspaces/example-branch'
 });
 ```
+
+`create()` records a manual snapshot by default. Agent integrations can pass
+`origin: 'agent-turn'` to identify their captures in the shared snapshot history.
 
 `rootId` is the real 16-digit hexadecimal `podId` stored in
 `workspace/.artipod/superblock.json`. It is stable across reopen and does not
@@ -38,6 +43,13 @@ Recreating an identical snapshot may allocate a new ID. Restoring changes HEAD
 but retains later snapshots for redo. A fork has a distinct pod ID and copies
 the selected snapshot's ancestor chain so those same snapshot IDs remain usable
 in the fork. It has independent files and an independent OCI store.
+
+`list()` returns persisted `CheckpointInfo` records in creation order (oldest
+first): `{rootId, checkpointId, label?, createdAt, parentCheckpointId, origin,
+isHead}`. `createdAt` is the snapshot's ISO timestamp, and `isHead` reflects the
+current OCI history HEAD. Listing survives workspace reopen and includes later
+snapshots retained after restoring an earlier one; it does not create a new
+snapshot. Both API-created and CLI-created snapshots use the same history.
 
 `storePath` remains an external directory for the Desktop bridge's request-ID
 mappings; it is not a second snapshot implementation. The prior prototype's

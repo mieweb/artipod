@@ -99,7 +99,7 @@ class CheckpointBridge {
         const concurrent = await this.readMapping(context);
         if (concurrent) { return this.token(concurrent); }
         await this.flushEditors();
-        const token = this.token(await this.backend.create({ label: `${context.sessionId}/${context.requestId}/${context.checkpointId}` }));
+        const token = this.token(await this.backend.create({ label: `${context.sessionId}/${context.requestId}/${context.checkpointId}`, origin: 'agent-turn' }));
         await this.writeMapping(context, token);
         return token;
       } finally { await fs.rmdir(lock); }

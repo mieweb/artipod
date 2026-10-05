@@ -21,7 +21,7 @@ try {
   pod = await createZenFsPod({ formatVersion: 1, mounts: [{ name: 'work', path: '/', mode: 'rw', source: { kind: 'hostDir', dir: workerData.workspacePath } }] }, {
     proc: false,
     cwd: '/',
-    identity: { kind: 'pod', name: basename(workerData.workspacePath), mode: 'Ozwell workspace' }
+    identity: { kind: 'pod', name: basename(workerData.workspacePath), mode: 'local workspace' }
   });
   const rootId = pod.oci.store.getSuperblock().podId;
   if (rootId !== workerData.rootId) { throw new Error('The Artipod root changed. Reload the workspace before opening a terminal.'); }

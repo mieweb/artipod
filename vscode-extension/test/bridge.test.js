@@ -34,6 +34,7 @@ test('complete workspace restore includes saved editor work and terminal creates
     async save() { await fs.writeFile(editorFile, 'pre-turn editor content'); this.isDirty = false; return true; }
   });
   const token = await bridge.capture(request);
+  assert.equal((await backend.list())[0].origin, 'agent-turn');
   await fs.writeFile(editorFile, 'agent normal edit');
   execFileSync(process.execPath, ['-e', 'const fs=require("node:fs"); fs.writeFileSync("terminal-created.bin",Buffer.from([0,255,42])); fs.unlinkSync("terminal-deleted.txt"); fs.mkdirSync("empty-terminal-directory");'], { cwd: workspacePath });
   const restarted = new CheckpointBridge(vscode, backend, path.join(temporary, 'mappings'), vscode.Uri.file(workspacePath));

@@ -8,11 +8,12 @@ import { createNativeWorkspaceFs as nativeWorkspace } from './oci/node-workspace
 import { assertSafeCheckpointMetadata } from './checkpoint-workspace.js';
 
 interface Operation {
-  operation: 'open' | 'create' | 'restore' | 'fork' | 'exec';
+  operation: 'open' | 'create' | 'list' | 'restore' | 'fork' | 'exec';
   workspacePath: string;
   rootId?: string;
   checkpointId?: string;
   label?: string;
+  origin?: 'manual' | 'agent-turn';
   destination?: string;
   destinationRootId?: string;
   destinationIdentity?: { dev: number; ino: number };
@@ -43,8 +44,25 @@ process.once('message', async (message: Operation) => {
     switch (message.operation) {
       case 'open': result = { rootId }; break;
       case 'create': {
-        const snapshot = (await snapshots.create({ label: message.label, origin: 'agent-turn' }))!;
+        if (message.origin !== undefined && message.origin !== 'manual' && message.origin !== 'agent-turn') throw new Error('Invalid Artipod snapshot origin');
+        const snapshot = (await snapshots.create({ label: message.label, origin: message.origin ?? 'manual' }))!;
         result = { rootId, checkpointId: snapshot.id, ...(message.label === undefined ? {} : { label: message.label }) };
+        break;
+      }
+      case 'list': {
+        const head = await fs.readFile(path.join(message.workspacePath, '.artipod/oci/snapshots/HEAD'), 'utf8').catch(error => {
+          if (error.code !== 'ENOENT') throw error;
+          return '';
+        });
+        result = (await snapshots.list()).map(snapshot => ({
+          rootId,
+          checkpointId: snapshot.id,
+          ...(snapshot.label === undefined ? {} : { label: snapshot.label }),
+          createdAt: snapshot.createdAt,
+          parentCheckpointId: snapshot.parent,
+          origin: snapshot.origin,
+          isHead: snapshot.id === head.trim(),
+        }));
         break;
       }
       case 'restore': {

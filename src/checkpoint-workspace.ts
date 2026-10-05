@@ -11,6 +11,14 @@ export interface Checkpoint {
   checkpointId: string;
   label?: string;
 }
+export interface CheckpointInfo extends Checkpoint {
+  /** Persisted snapshot creation time in ISO 8601 format. */
+  createdAt: string;
+  parentCheckpointId: string | null;
+  origin: 'manual' | 'agent-turn' | 'compact';
+  /** Whether this snapshot is the pod's current history HEAD. */
+  isHead: boolean;
+}
 export interface RestoreChange {
   /** Relative POSIX path; an empty path identifies the root directory mode. */
   path: string;
@@ -138,7 +146,9 @@ export class ArtipodWorkspace {
     });
   }
   /** Stop external writers first. Captures all paths except /.artipod and /proc. */
-  create(options: { label?: string } = {}): Promise<Checkpoint> { return this.#operate('create', options); }
+  create(options: { label?: string; origin?: 'manual' | 'agent-turn' } = {}): Promise<Checkpoint> { return this.#operate('create', options); }
+  /** Persisted snapshot metadata, oldest first; includes history retained after restore. */
+  list(): Promise<CheckpointInfo[]> { return this.#operate('list'); }
   async restore(checkpointId: string): Promise<RestoreResult> {
     validCheckpoint(checkpointId);
     const result = await this.#operate<RestoreResult>('restore', { checkpointId });

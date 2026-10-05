@@ -291,3 +291,33 @@ test('whole-workspace capture includes ordinary mnt, dev and branches directorie
   const index = JSON.parse(await fs.readFile(path.join(workspacePath, '.artipod/oci/snapshots', `${checkpoint.checkpointId}.index.json`)));
   assert.ok(Object.keys(index.files).every(p => !p.startsWith('/.artipod') && !p.startsWith('/proc')));
 });
+
+test('list returns persisted snapshot metadata and current HEAD after reopen and restore', async t => {
+  const { workspacePath, storePath, workspace } = await fixture(t);
+  assert.deepEqual(await workspace.list(), []);
+  await fs.writeFile(path.join(workspacePath, 'a'), 'before');
+  const first = await workspace.create({ label: 'Before first edit' });
+  await fs.writeFile(path.join(workspacePath, 'a'), 'after');
+  const second = await workspace.create();
+  const snapshots = await workspace.list();
+  const manifests = await Promise.all([first, second].map(checkpoint =>
+    fs.readFile(path.join(workspacePath, '.artipod/oci/snapshots', `${checkpoint.checkpointId}.json`), 'utf8').then(JSON.parse)
+  ));
+  assert.deepEqual(snapshots, manifests.map(manifest => ({
+    rootId: workspace.rootId,
+    checkpointId: manifest.id,
+    ...(manifest.label === undefined ? {} : { label: manifest.label }),
+    createdAt: manifest.createdAt,
+    parentCheckpointId: manifest.parent,
+    origin: manifest.origin,
+    isHead: manifest.id === second.checkpointId,
+  })));
+  assert.equal(snapshots[0].parentCheckpointId, null);
+  assert.equal(snapshots[1].parentCheckpointId, first.checkpointId);
+  assert.equal(snapshots[0].label, 'Before first edit');
+  assert.ok(snapshots.every(snapshot => Number.isFinite(Date.parse(snapshot.createdAt))));
+  const reopened = await ArtipodWorkspace.open({ workspacePath, storePath });
+  assert.deepEqual(await reopened.list(), snapshots);
+  await reopened.restore(first.checkpointId);
+  assert.deepEqual(await reopened.list(), snapshots.map(snapshot => ({ ...snapshot, isHead: snapshot.checkpointId === first.checkpointId })));
+});

@@ -1,98 +1,131 @@
-# Artipod workspace checkpoints for Ozwell Desktop
+# Artipod for Visual Studio Code
 
-This prototype realizes an actual Artipod using its ZenFS `hostDir` mount over
-the local `file://` workspace. The editor, native terminals, Git, language servers
-and the Artipod shell use that same directory. Its stable root ID is the pod ID
-in `.artipod/superblock.json`. Checkpoints use Artipod's `SnapshotManager` and OCI
-store under `.artipod/oci`, including ignored files and `.git`; `.artipod` itself
-and Artipod's runtime `/proc` are excluded. Enable
-`artipod.checkpoints.enabled` only in a dedicated, trusted, single-folder local
-workspace. The default is off. Remote and multi-root workspaces are rejected.
+Use an Artipod terminal, save workspace snapshots, and open an earlier snapshot
+as a separate workspace. These commands work in stock VS Code without editor
+patches, a global Artipod installation, or a separately installed Node.js.
 
-From the Artipod repo run `npm ci && npm run build`, then run `npm ci` and
-`npm run prepare-backend` in this directory. Load this directory with Ozwell's
-`--extensionDevelopmentPath` flag. Packaging bundles the real Artipod runtime,
-ZenFS and just-bash into `vendor/`, including the separate checkpoint and terminal
-workers. It requires no global CLI or Node executable in the installed extension.
-The `vscode:prepublish` hook performs the same bundle step. Rebuild the root and
-bundle after changing Artipod source.
+The first release supports one trusted local folder. Files stay in that folder:
+VS Code editors, native terminals, Git, language servers, and the Artipod shell
+see the same filesystem. Artipod keeps its stable pod ID and snapshot history in
+`.artipod/` inside the folder.
 
-Use **Artipod: Open Pod Terminal** from the Command Palette, or click the
-**Artipod &lt;pod ID&gt;** status item. The terminal identifies the pod and shows
-which native directory is mounted at `/`. It runs Artipod's real `TerminalSession`
-and interpreted shell in an isolated worker. For example:
+## Get started
 
-```sh
-pwd
-ls
-printf 'from the pod shell\n' > terminal.txt
-artipod snapshot ls
-```
+1. Open a dedicated project folder in VS Code and trust the workspace.
+2. Run **Artipod: Open Pod Terminal** from the Command Palette. The terminal
+   shows the pod ID and the native folder mounted at `/`.
+3. Edit and save a file, or run a shell command such as:
 
-Native Chat checkpoints appear in that snapshot history. A normal terminal
-opened with **Terminal: Create New Terminal** still runs the host shell in the
-same native directory; its filesystem changes are also captured. The Artipod
-terminal is an interpreted shell, not a full native container. Checkpoint
-operations reject while an Artipod terminal command is running; input typed
-during a checkpoint resumes afterwards.
+   ```sh
+   printf 'hello from Artipod\n' > hello.txt
+   cat hello.txt
+   ```
 
-`artipod serve --publish /absolute/path/to/workspace` can publish this folder for
-the browser UI. That browser opens a synchronized copy: `serve` snapshots the
-folder at startup and materializes pushed heads back to it. It does not attach
-the browser terminal directly to Desktop's live mount, and external native edits
-are not continuously republished. Stop browser writes during checkpoint capture
-and restore, and resync before expecting a browser copy to reflect restoration.
-For a direct CLI shell over the same live pod, use
+4. Let running terminal commands and background writers finish. Run
+   **Artipod: Create Workspace Snapshot** and optionally give it a label.
+5. Make more changes. Run **Artipod: Open Snapshot in New Workspace**, choose
+   the saved snapshot, and select an existing empty folder outside the source
+   workspace. VS Code opens that fork in a new window.
+
+Your original folder and its unsaved buffers remain in place. The fork has a
+new pod ID, the selected filesystem state, and the copied snapshot history.
+Work can continue independently in either workspace.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| **Artipod: Open Pod Terminal** | Opens the interpreted Artipod shell over the current folder. The Artipod status item opens the same shell. |
+| **Artipod: Create Workspace Snapshot** | Saves existing dirty workspace text/notebook documents, then captures the folder, including terminal changes. |
+| **Artipod: Open Snapshot in New Workspace** | Lists snapshots and forks the selected state into an empty folder, then opens a new VS Code window. |
+| **Artipod: Open Active File in Workspace Mirror** | Opens the active local file through the writable `artipod://` filesystem provider. |
+
+Save new untitled buffers into the workspace before creating a snapshot: they
+are not filesystem entries yet. Custom editors must be saved first. If a save
+fails or a workspace editor remains dirty, snapshot creation stops.
+
+Snapshots include ignored files, hidden files, `.git`, binary files, empty
+directories, file modes, and symlinks. `.artipod` itself and Artipod's reserved
+`/proc` runtime path are excluded. Snapshot IDs use `snap-…`; the pod ID remains
+stable when the workspace is reopened. History stays on disk without automatic
+garbage collection.
+
+The Artipod terminal runs an interpreted shell, not the host operating-system
+shell or a native container. Use `help` to see its available commands and
+`artipod snapshot ls` to inspect the same snapshot history. A regular VS Code
+terminal still runs your normal shell in the native directory.
+
+The optional `artipod://` mirror reads and writes the same files. It forwards
+native watcher events so terminal writes reach mirror documents. Keep the
+ordinary local folder as the workspace so native terminals and tools have a
+filesystem working directory.
+
+## Current scope
+
+- VS Code **1.101 or later**, with a desktop Node.js extension host. The runtime
+  targets Node.js 22, introduced in VS Code 1.101.
+- One trusted local folder containing an unencrypted Artipod. Remote, browser,
+  multi-root, and virtual workspaces are not supported in this release.
+- The local implementation uses OS filesystem operations. macOS is exercised
+  by the release smoke test; Linux and Windows need separate platform testing,
+  especially for permissions and symlinks.
+- Wait for background tasks and native terminal writes to finish before
+  capturing a snapshot. The extension coordinates its own Artipod terminals;
+  it cannot stop other processes writing to the folder.
+- Opening a snapshot always creates a separate workspace. This release does
+  not expose an in-place restore command or rewind chat conversations.
+
+`artipod serve --publish /absolute/path/to/workspace` can expose the folder to
+Artipod's browser UI when the CLI is installed separately. The browser uses a
+synchronized copy; it does not attach directly to the live Desktop mount.
+For a direct CLI shell over that same folder, use
 `artipod run -it --dir /absolute/path/to/workspace`.
 
-The small Ozwell core patch awaits capture immediately before invoking an agent
-and invokes restore from the existing **Restore Checkpoint** action. Conversation
-history handling stays in VS Code. The extension cannot install that internal
-hook using the stable public extension API alone.
+## Experimental native Chat integration
 
-The internal commands use this protocol:
+`artipod.checkpoints.enabled` defaults to `false`. Leave it off in stock VS
+Code. The terminal, manual snapshots, forks, and mirror do not need it.
 
-| Command | Input | Result |
-| --- | --- | --- |
-| `_artipod.checkpoints.capture` | `{sessionId, requestId, checkpointId, requireExisting?}` | `{providerId: 'artipod', rootId, checkpointId}` |
-| `_artipod.checkpoints.restore` | Same VS Code IDs | Artipod IDs, `workspaceUri`, `workspaceAliases`, `changes: [{uri, type}]` |
-| `_artipod.checkpoints.fork` | Same IDs plus absolute `targetPath` for an empty existing directory; optional `targetSessionId` | Artipod IDs and destination `workspaceUri` |
+This setting enables an internal bridge for a separate Ozwell/VS Code core
+experiment. That experiment captures before an agent turn and delegates the
+native **Restore Checkpoint** action to Artipod. The core patch is not part of
+this extension and is not required for the standalone commands above.
 
-Input `checkpointId` is the VS Code request boundary (or a temporary redo key).
-Output `checkpointId` is Artipod's stable `snap-…` snapshot ID. The durable
-mapping is keyed by the complete session/request/checkpoint tuple and root ID.
-Mappings live in extension global storage outside the pod; filesystem snapshots
-live in the pod's own OCI store.
-Repeated capture returns the original snapshot. Unknown historical checkpoints
-fail closed; they never silently degrade into a partial file restore. Capture
-saves dirty text and notebook documents inside the root first and fails if a save fails.
-Resumed AgentHost turns pass `requireExisting: true`: a missing mapping is rejected
-before saving editors or creating a snapshot, because the pre-turn state can no
-longer be reconstructed. This flag does not change the mapping key.
-`workspaceUri` retains the original folder URI spelling; aliases cover the
-canonical local path and the Artipod mirror so the core also reloads their models.
+The bridge commands `_artipod.checkpoints.capture`, `.restore`, and `.fork`
+map `(sessionId, requestId, checkpointId)` tuples to Artipod snapshot IDs. Their
+mappings live in extension global storage outside the workspace. They are
+internal integration commands rather than a public extension API.
 
-The extension also registers a writable `artipod://<root-id>/...`
-`FileSystemProvider` mirror. **Artipod: Open Active File in Workspace Mirror**
-opens the active local file through that provider. Keep the `file://` folder as
-the workspace: a virtual URI cannot supply a native terminal working directory.
-The provider forwards native file watcher events and emits explicit precise
-create/change/delete events after restore. The Ozwell core patch reloads local
-models and refreshes native Explorer/watchers after the complete restore,
-including dirty loaded documents whose disk bytes did not change.
+## Build and install a VSIX
 
-Run `npm test` here for bridge and provider tests. They use the real Artipod
-backend with minimal VS Code API doubles; they cover ordinary editor saves,
-actual terminal subprocess writes/deletes, durable mappings after restart,
-isolated forks, provider change events and path escape rejection. They do not
-replace the Ozwell native checkpoint action integration tests or a desktop smoke
-test.
+From the Artipod repository, using Node.js 22 or later:
 
-This uses Artipod's native snapshot layers and materialized checkout over a local
-directory. Pause external writers before creating or restoring a checkpoint.
-The extension cannot stop host terminal processes or browser sync writes.
-Storage is retained without automatic garbage collection.
-Only request boundaries captured by the core patch have whole-workspace
-semantics; arbitrary per-tool undo points need their own capture hook. Fork is
-available through the bridge and backend API; automatic conversation branching
-into a new physical workspace requires separate UI/lifecycle work.
+```sh
+npm ci
+npm run build
+cd vscode-extension
+npm ci
+npm test
+npm run package:vsix
+```
+
+The package command rebuilds the backend, prepares the runtime, and writes
+`dist/artipod-0.1.0.vsix`. It does not publish anything. In VS Code, run
+**Extensions: Install from VSIX…** and select that file.
+
+Packaging pins `@vscode/vsce` in the extension lockfile. The runtime is supplied
+inside `vendor/`, including separately replaceable LGPL libraries and their
+exact nested dependencies. It never downloads packages when activated.
+See [third-party notices](THIRD_PARTY_NOTICES.md) and
+[source/rebuild instructions](SOURCES.md).
+
+The tests use the real Artipod backend with small VS Code API doubles. They
+cover native terminal writes, durable snapshots, isolated forks, cancellation,
+document saves, filesystem events, path validation, and a copied runtime
+outside the source checkout. Test the resulting VSIX in an unmodified VS Code
+build before publishing.
+
+The Marketplace publisher must match an account authorized to publish this
+extension. The manifest currently uses `artipod`; confirm that publisher before
+performing a Marketplace release. Packaging a VSIX does not require publisher
+credentials.
