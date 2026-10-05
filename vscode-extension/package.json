@@ -3,7 +3,7 @@
   "displayName": "Artipod",
   "description": "An Artipod terminal, workspace snapshots, and isolated forks in VS Code.",
   "version": "0.1.0",
-  "publisher": "artipod",
+  "publisher": "mieweb",
   "engines": {
     "vscode": "^1.101.0"
   },

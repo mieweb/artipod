@@ -126,6 +126,5 @@ outside the source checkout. Test the resulting VSIX in an unmodified VS Code
 build before publishing.
 
 The Marketplace publisher must match an account authorized to publish this
-extension. The manifest currently uses `artipod`; confirm that publisher before
-performing a Marketplace release. Packaging a VSIX does not require publisher
-credentials.
+extension. The manifest uses the `mieweb` publisher. Packaging a VSIX does not
+require publisher credentials.
