@@ -9,16 +9,19 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # authenticate coverage uploads without a stored token
 
     strategy:
       matrix:
         node-version: [20.x, 22.x]
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v7
     
     - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v5
+      uses: actions/setup-node@v7
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
@@ -38,10 +41,25 @@ jobs:
     - name: Test Coverage
       run: npm run test:coverage
     
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+    # Keep coverage available even when the external reporting service is down.
+    - name: Save coverage report
+      uses: actions/upload-artifact@v7
       if: matrix.node-version == '20.x'
       with:
+        name: core-coverage
+        path: coverage/lcov.info
+        if-no-files-found: error
+        retention-days: 14
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v7
+      if: matrix.node-version == '20.x'
+      with:
+        use_oidc: true
+        # Use the official PyPI distribution while cli.codecov.io's download
+        # endpoint fails TLS handshakes on GitHub-hosted runners.
+        use_pypi: true
+        version: v11.3.1
         files: ./coverage/lcov.info
         flags: unittests
         name: codecov-umbrella
@@ -54,10 +72,10 @@ jobs:
         working-directory: examples/artipod-spa
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v7
 
     - name: Use Node.js 20.x
-      uses: actions/setup-node@v5
+      uses: actions/setup-node@v7
       with:
         node-version: 20.x
 
