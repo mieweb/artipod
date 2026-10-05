@@ -66,8 +66,9 @@ filesystem working directory.
   targets Node.js 22, introduced in VS Code 1.101.
 - One trusted local folder containing an unencrypted Artipod. Remote, browser,
   multi-root, and virtual workspaces are not supported in this release.
-- The local implementation uses OS filesystem operations. macOS is exercised
-  by the release smoke test; Linux and Windows need separate platform testing,
+- The local implementation uses OS filesystem operations. CI tests and packages
+  the extension on Linux and macOS with Node.js 22 and 24; the graphical VS Code
+  smoke test was performed on macOS. Windows needs separate platform testing,
   especially for permissions and symlinks.
 - Wait for background tasks and native terminal writes to finish before
   capturing a snapshot. The extension coordinates its own Artipod terminals;
