@@ -142,7 +142,7 @@ test('activation registers the exact internal protocol and enforces workspace su
   const { temporary, workspacePath, vscode } = await fixture(t);
   const context = { globalStorageUri: vscode.Uri.file(path.join(temporary, 'globalStorage')), subscriptions: [] };
   t.after(() => context.subscriptions.forEach(value => value.dispose()));
-  const extension = activate(context, vscode);
+  const extension = await activate(context, vscode);
   await extension.getManager();
   const token = await vscode.commands.executeCommand('_artipod.checkpoints.capture', request);
   assert.equal(token.providerId, 'artipod');

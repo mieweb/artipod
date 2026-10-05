@@ -31,7 +31,7 @@ async function fixture(t) {
   const execute = vscode.commands.executeCommand;
   vscode.commands.executeCommand = (name, ...args) => name === 'vscode.openFolder' ? opened.push(args) : execute(name, ...args);
   const context = { globalStorageUri: vscode.Uri.file(path.join(temporary, 'globalStorage')), subscriptions: [] };
-  const extension = activate(context, vscode);
+  const extension = await activate(context, vscode);
   t.after(async () => {
     context.subscriptions.forEach(value => value.dispose());
     await Promise.all(terminals.map(terminal => terminal.worker?.terminate()));

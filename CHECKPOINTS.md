@@ -97,8 +97,16 @@ Artipod `TerminalSession` or use the CLI.
 - Stop terminal commands, tasks, background servers and other external writers
   before capture or restore. A workspace lock serializes checkpoint API calls
   across processes; it does not pause native processes, CLI/serve commands, or
-  independently owned Artipod terminals. The lock lives in
-  `.artipod/checkpoint-lock`; remove a stale lock only after its owner is stopped.
+  independently owned Artipod terminals. API callers sharing the same user and
+  canonical `os.tmpdir()` use a private `artipod-checkpoints-<uid>` directory
+  there, with a lock named by the SHA-256 of the canonical workspace path.
+  This mutex stays held through final root-permission changes, including fork
+  destination finalization; it is independent of caller mapping stores and
+  workspace aliases. `.artipod/checkpoint-lock` is also retained for older
+  callers. Busy errors identify the relevant lock path; remove stale locks only
+  after their owners are stopped. Workspaces containing the shared temporary
+  lock directory are rejected so locks cannot enter snapshots. No writable
+  workspace parent is required.
 - This is not an atomic storage snapshot or a process isolation boundary.
   Validation fails before workspace mutation, but an I/O error or crash during
   application can leave a partial restore. There is no crash journal or fsync

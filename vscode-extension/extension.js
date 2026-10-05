@@ -19,7 +19,7 @@ async function loadBackend() {
   return import(pathToFileURL(modulePath).href);
 }
 
-function activate(context, api) {
+async function activate(context, api) {
   const vscode = api || require('vscode');
   let manager;
   let activeWorkspace;
@@ -89,7 +89,7 @@ function activate(context, api) {
   // Reopen existing pods for mirror documents/status after reload. A fresh
   // workspace is initialized only by an explicit Artipod command (or the
   // separately enabled experimental chat integration).
-  void (async () => {
+  await (async () => {
     const folders = vscode.workspace.workspaceFolders;
     if (!vscode.workspace.isTrusted || folders?.length !== 1 || folders[0].uri.scheme !== 'file' || vscode.env.remoteName) { return; }
     if (!vscode.workspace.getConfiguration('artipod.checkpoints').get('enabled', false)) {
@@ -97,7 +97,10 @@ function activate(context, api) {
       catch (error) { if (error.code === 'ENOENT') { return; } throw error; }
     }
     await getManager();
-  })().catch(error => vscode.window.showErrorMessage(`Artipod: ${error.message}`));
+  })().catch(error => {
+    void vscode.window.showErrorMessage(`Artipod: ${error.message}`);
+    throw error;
+  });
   return { getManager };
 }
 

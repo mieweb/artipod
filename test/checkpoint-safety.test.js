@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import * as fs from 'node:fs/promises';
+import nativeFs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { test } from 'node:test';
 import { ArtipodWorkspace } from '../dist/checkpoint-workspace.js';
+
+const exec = promisify(execFile);
 
 async function fixture(t) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'artipod-checkpoint-safety-'));
@@ -70,7 +76,7 @@ for (const separateSources of [false, true]) {
     ]);
     assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
     const failure = results.find(result => result.status === 'rejected');
-    assert.match(failure.reason.message, /empty|reserved/);
+    assert.match(failure.reason.message, /empty|reserved|busy/);
     const winner = results.find(result => result.status === 'fulfilled').value;
     assert.equal(await fs.readFile(path.join(destination, 'a'), 'utf8'), results[0].status === 'fulfilled' ? 'baseline' : 'second snapshot');
     assert.equal(JSON.parse(await fs.readFile(path.join(destination, '.artipod/superblock.json'))).podId, winner.rootId);
@@ -142,4 +148,91 @@ test('restore and fork finish HEAD and lock bookkeeping before applying an unsea
   assert.equal(await fs.readFile(path.join(destination, 'a'), 'utf8'), 'baseline');
   assert.equal((await fs.readFile(path.join(destination, '.artipod/oci/snapshots/HEAD'), 'utf8')).trim(), checkpoint.checkpointId);
   await assert.rejects(fs.access(path.join(destination, '.artipod/checkpoint-lock')), { code: 'ENOENT' });
+});
+
+for (const operation of ['restore', 'fork']) {
+  test(`${operation} excludes another process until the final root mode is applied`, async t => {
+    const { base, workspacePath, workspace } = await fixture(t);
+    await fs.chmod(workspacePath, 0o500);
+    const checkpoint = await workspace.create();
+    await fs.chmod(workspacePath, 0o700);
+    const destination = operation === 'restore' ? workspacePath : path.join(base, 'fork');
+    if (operation === 'fork') await fs.mkdir(destination);
+    const canonicalDestination = await fs.realpath(destination);
+    const alias = path.join(base, 'alias');
+    await fs.symlink(destination, alias);
+    const originalChmod = nativeFs.chmod;
+    let entered;
+    let release;
+    const finalizing = new Promise(resolve => { entered = resolve; });
+    const continueFinalizing = new Promise(resolve => { release = resolve; });
+    const chmodMock = t.mock.method(nativeFs, 'chmod', async (directory, mode) => {
+      if (directory === canonicalDestination && mode === 0o500) {
+        entered();
+        await continueFinalizing;
+      }
+      return originalChmod(directory, mode);
+    });
+    syncBuiltinESMExports();
+    const pending = operation === 'restore' ? workspace.restore(checkpoint.checkpointId) : workspace.fork(checkpoint.checkpointId, { workspacePath: destination });
+    try {
+      await Promise.race([finalizing, pending.then(() => { throw new Error('Operation completed without finalizing the root mode'); })]);
+      await assert.rejects(fs.access(path.join(destination, '.artipod/checkpoint-lock')), { code: 'ENOENT' });
+      // A distinct process, a symlink alias and another mapping store must all
+      // address the same mutex while the root still has its temporary mode.
+      const contender = await exec(process.execPath, ['--input-type=module', '-e', `
+        import { ArtipodWorkspace } from ${JSON.stringify(new URL('../dist/checkpoint-workspace.js', import.meta.url).href)};
+        try {
+          const workspace = await ArtipodWorkspace.open({ workspacePath: process.argv[1], storePath: process.argv[2] });
+          console.log(JSON.stringify({ checkpoint: await workspace.create() }));
+        } catch (error) { console.log(JSON.stringify({ error: error.message })); }
+      `, alias, path.join(base, 'other-mappings')]);
+      assert.match(JSON.parse(contender.stdout).error, /checkpoint store is busy/);
+      release();
+      await pending;
+      assert.equal((await fs.lstat(destination)).mode & 0o777, 0o500);
+      const reopened = await ArtipodWorkspace.open({ workspacePath: alias, storePath: path.join(base, 'other-mappings') });
+      assert.equal((await reopened.list()).length, 1, 'the contender did not capture the temporary root mode');
+      const next = await reopened.create();
+      const manifest = JSON.parse(await fs.readFile(path.join(destination, '.artipod/oci/snapshots', `${next.checkpointId}.json`), 'utf8'));
+      assert.equal(manifest.rootModes['/'], 0o500);
+    } finally {
+      release();
+      await pending.catch(() => {});
+      chmodMock.mock.restore();
+      syncBuiltinESMExports();
+      await originalChmod(destination, 0o700);
+    }
+  });
+}
+
+for (const kind of ['symlink', 'file', 'public-directory']) {
+  test(`rejects an unsafe external mutex directory (${kind}) without touching its contents`, async t => {
+    const { base, workspace } = await fixture(t);
+    const temporary = path.join(base, 'temporary');
+    await fs.mkdir(temporary);
+    const mutexDirectory = path.join(temporary, `artipod-checkpoints-${process.getuid()}`);
+    const outside = path.join(base, 'outside');
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, 'keep'), 'untouched');
+    if (kind === 'symlink') await fs.symlink(outside, mutexDirectory);
+    else if (kind === 'file') await fs.writeFile(mutexDirectory, 'untouched');
+    else {
+      await fs.mkdir(mutexDirectory);
+      await fs.chmod(mutexDirectory, 0o755);
+    }
+    t.mock.method(os, 'tmpdir', () => temporary);
+    await assert.rejects(workspace.create(), /Unsafe Artipod checkpoint lock directory/);
+    assert.deepEqual(await fs.readdir(outside), ['keep']);
+    assert.equal(await fs.readFile(path.join(outside, 'keep'), 'utf8'), 'untouched');
+    if (kind === 'file') assert.equal(await fs.readFile(mutexDirectory, 'utf8'), 'untouched');
+    if (kind === 'public-directory') assert.deepEqual(await fs.readdir(mutexDirectory), []);
+  });
+}
+
+test('rejects a workspace that would capture its external mutex directory', async t => {
+  const { workspacePath, workspace } = await fixture(t);
+  t.mock.method(os, 'tmpdir', () => workspacePath);
+  await assert.rejects(workspace.create(), /must not contain the shared temporary checkpoint lock directory/);
+  assert.deepEqual((await fs.readdir(workspacePath)).sort(), ['.artipod', 'a']);
 });

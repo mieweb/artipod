@@ -84,6 +84,12 @@ const SNAP_DIR = `${OCI_ROOT}/snapshots`;
 const RESERVED_ROOTS = ['/.artipod', '/proc'];
 const DEFAULT_EXCLUDE = [...RESERVED_ROOTS, '/mnt', '/dev', '/branches'];
 
+/** Native host volumes may alias case variants of metadata/runtime roots. */
+function reservedPath(path: string): boolean {
+  const folded = path.toLowerCase();
+  return RESERVED_ROOTS.some(root => folded === root || folded.startsWith(`${root}/`));
+}
+
 function snapshotId(): string {
   const buf = new Uint8Array(6);
   globalThis.crypto.getRandomValues(buf);
@@ -112,7 +118,7 @@ export class SnapshotManager {
   }
 
   private excluded(path: string): boolean {
-    return this.exclude.some((e) => path === e || path.startsWith(`${e}/`));
+    return reservedPath(path) || this.exclude.some((e) => path === e || path.startsWith(`${e}/`));
   }
 
   // --- workspace walk ---------------------------------------------------------
@@ -153,7 +159,7 @@ export class SnapshotManager {
     if (!path.startsWith('/') || path.includes('\\') || path.includes('\0') || path.split('/').slice(1).some(p => !p || p === '.' || p === '..')) {
       throw new Error(`Invalid Artipod snapshot path: ${JSON.stringify(path)}`);
     }
-    if (!this.roots.some(r => r === '/' || path.startsWith(`${r}/`)) || (honorExcludes ? this.excluded(path) : RESERVED_ROOTS.some(root => path === root || path.startsWith(`${root}/`)))) {
+    if (!this.roots.some(r => r === '/' || path.startsWith(`${r}/`)) || reservedPath(path) || (honorExcludes && this.excluded(path))) {
       throw new Error(`Artipod snapshot path is outside captured roots: ${path}`);
     }
   }
@@ -371,9 +377,7 @@ export class SnapshotManager {
     if (!destination.startsWith('/') || destination.includes('\\') || destination.includes('\0') || destination.split('/').slice(1).some(p => !p || p === '.' || p === '..')) {
       throw new Error('Snapshot checkout requires an absolute, non-root destination');
     }
-    // Reserve case variants too: native host volumes may be case-insensitive.
-    const reservedDestination = destination.toLowerCase();
-    if (RESERVED_ROOTS.some(root => reservedDestination === root || reservedDestination.startsWith(`${root}/`))) {
+    if (reservedPath(destination)) {
       throw new Error('Snapshot checkout destination must be outside reserved Artipod metadata and runtime paths');
     }
     // Validate every byte/path before even creating the destination directory.
