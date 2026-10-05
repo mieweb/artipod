@@ -134,7 +134,7 @@
     "fflate": "^0.8.3",
     "globals": "^17.13.0",
     "isomorphic-git": "^1.25.0",
-    "just-bash": "3.2.0",
+    "just-bash": "3.4.2",
     "typescript": "^5.3.3",
     "vitest": "^3.2.4"
   },
@@ -145,7 +145,7 @@
     "dockerode": "^4.0.9 || ^5.0.0",
     "fflate": "^0.8.2",
     "isomorphic-git": "^1.25.0",
-    "just-bash": "3.2.0"
+    "just-bash": "3.4.2"
   },
   "peerDependenciesMeta": {
     "dockerode": {
