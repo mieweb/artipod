@@ -6,6 +6,9 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # Parser/plugin and ESLint peer requirements must move together.
+      lint-tooling:
+        patterns: ["eslint", "@eslint/js", "@typescript-eslint/*"]
       dev-dependencies:
         dependency-type: development
         update-types: [minor, patch]
@@ -13,6 +16,26 @@ updates:
         dependency-type: production
         update-types: [minor, patch]
     ignore:
+      # #65: match the oldest supported runtime (Node 20). Revisit with the
+      # package engines and CI matrix when that compatibility promise changes.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+      # #66: TypeScript 7 removes compiler APIs used by typescript-eslint.
+      # Revisit when its support matrix includes TS 7 and lint/build both pass.
+      # https://typescript-eslint.io/users/dependency-versions/
+      - dependency-name: typescript
+        versions: [">=7.0.0 <8.0.0"]
+      # #69: Vitest 5 requires Node >=22.12 and newer Node types. Revisit as
+      # a coordinated test-toolchain migration after deciding Node 20 support.
+      - dependency-name: vitest
+        versions: [">=5.0.0 <6.0.0"]
+      - dependency-name: "@vitest/*"
+        versions: [">=5.0.0 <6.0.0"]
+      # #78: 2.7.6 breaks Passthrough overwrites (undefined chmod mode) and
+      # CoW/encrypted writes. Revisit a fixed release with the filesystem and
+      # CLI suites passing; only this known-bad version is excluded.
+      - dependency-name: "@zenfs/core"
+        versions: ["2.7.6"]
       # Peer deps: a major bump changes what consumers must install — decide by hand.
       - dependency-name: dockerode
         update-types: [version-update:semver-major]
@@ -42,8 +65,30 @@ updates:
       interval: weekly
     open-pull-requests-limit: 3
     groups:
+      lint-tooling:
+        patterns: ["eslint", "@eslint/js", "eslint-config-next", "@typescript-eslint/*"]
       all-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # #67: keep Next's lint config aligned with the Next 15 app. Revisit
+      # with a Next 16 migration and fixes for its React Compiler diagnostics.
+      - dependency-name: eslint-config-next
+        versions: [">=16.0.0 <17.0.0"]
+      # Next 15's lint config supports ESLint through 9. Revisit together
+      # with the framework/config migration above, not as an isolated bump.
+      - dependency-name: eslint
+        versions: [">=10.0.0 <11.0.0"]
+      - dependency-name: "@eslint/js"
+        versions: [">=10.0.0 <11.0.0"]
+      # The SPA shares the Node 20 and typescript-eslint constraints above.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+      - dependency-name: typescript
+        versions: [">=7.0.0 <8.0.0"]
+      - dependency-name: vitest
+        versions: [">=5.0.0 <6.0.0"]
+      - dependency-name: "@vitest/*"
+        versions: [">=5.0.0 <6.0.0"]
 
   - package-ecosystem: npm
     directory: /examples/mcp-server
