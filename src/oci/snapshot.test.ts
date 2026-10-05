@@ -288,6 +288,38 @@ describe('in-place snapshot restore', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('native snapshot root modes', () => {
+  it('checks out nested roots before applying restrictive parent root modes', async () => {
+    const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-checkout-modes-'));
+    const destination = path.join(directory, 'branches', 'nested');
+    try {
+      const filesystem = createNativeWorkspaceFs(directory);
+      const store = new OciStore(filesystem);
+      await store.init();
+      await nativeFs.mkdir(path.join(directory, 'repo', 'nested'), { recursive: true });
+      await nativeFs.writeFile(path.join(directory, 'repo', 'nested', 'file'), 'preserved');
+      const snapshots = new SnapshotManager({ zfs: filesystem, store, roots: ['/', '/repo', '/repo/nested'] });
+      const snapshot = (await snapshots.create())!;
+      // Keep ancestor-first manifest order to exercise an unsearchable outer
+      // root and restrictive roots at more than one depth.
+      snapshot.rootModes = { '/': 0o000, '/repo': 0o500, '/repo/nested': 0o400 };
+      await nativeFs.writeFile(path.join(directory, '.artipod/oci/snapshots', `${snapshot.id}.json`), JSON.stringify(snapshot));
+      expect(await snapshots.checkout(snapshot.id, '/branches/nested')).toBe('/branches/nested');
+      expect((await nativeFs.stat(destination)).mode & 0o777).toBe(0o000);
+      await nativeFs.chmod(destination, 0o700);
+      expect((await nativeFs.stat(path.join(destination, 'repo'))).mode & 0o777).toBe(0o500);
+      expect((await nativeFs.stat(path.join(destination, 'repo', 'nested'))).mode & 0o777).toBe(0o400);
+      await nativeFs.chmod(path.join(destination, 'repo', 'nested'), 0o700);
+      expect(await nativeFs.readFile(path.join(destination, 'repo', 'nested', 'file'), 'utf8')).toBe('preserved');
+    } finally {
+      for (const relative of ['', 'repo', 'repo/nested']) {
+        await nativeFs.chmod(path.join(destination, relative), 0o700).catch(error => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      }
+      await nativeFs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each([0o400, 0o000])('commits HEAD before applying root mode %i', async mode => {
     const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-snapshot-mode-'));
     try {
@@ -323,6 +355,23 @@ describe.skipIf(process.platform === 'win32')('native snapshot root modes', () =
     expect((await zfs.promises.stat('/')).mode & 0o700).toBe(0o700);
     expect(await zfs.promises.readFile('/.artipod/oci/snapshots/HEAD', 'utf8')).toBe(before.id);
   });
+});
+
+it.each(['/.artipod', '/.artipod/oci/upper', '/.artipod/new/branch', '/.ARTIPOD/oci/upper', '/proc', '/proc/new/branch', '/PrOc/branch'])('checkout rejects reserved destination %s without changing it', async destination => {
+  await sandbox.exec('echo baseline > /repo/a');
+  const snapshot = (await pod.snapshots.create())!;
+  const previousEntries = await zfs.promises.readdir(destination).catch(() => undefined);
+  await expect(pod.snapshots.checkout(snapshot.id, destination)).rejects.toThrow(/outside reserved Artipod metadata and runtime paths/);
+  expect(await zfs.promises.readdir(destination).catch(() => undefined)).toEqual(previousEntries);
+  expect(await pod.snapshots.get(snapshot.id)).toEqual(snapshot);
+  expect(await pod.snapshots.diff(snapshot.id)).toEqual({ added: [], modified: [], deleted: [] });
+});
+
+it.each(['/.artipod-project', '/processor'])('checkout permits ordinary destinations sharing a reserved prefix: %s', async destination => {
+  await sandbox.exec('echo baseline > /repo/a');
+  const snapshot = (await pod.snapshots.create())!;
+  expect(await pod.snapshots.checkout(snapshot.id, destination)).toBe(destination);
+  expect(await zfs.promises.readFile(`${destination}/repo/a`, 'utf8')).toBe('baseline\n');
 });
 
 

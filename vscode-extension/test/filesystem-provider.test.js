@@ -73,6 +73,10 @@ test('mirror rejects foreign roots, parent traversal and symlink escapes', async
   await fs.symlink(path.join(temporary, 'outside'), path.join(workspacePath, 'escape'));
   await assert.rejects(provider.readFile(provider.uri('escape/keep.txt')), { code: 'NoPermissions' });
   await assert.rejects(provider.writeFile(provider.uri('escape/new.txt'), Buffer.from('bad'), { create: true, overwrite: true }), { code: 'NoPermissions' });
+  await fs.writeFile(path.join(workspacePath, 'source.txt'), 'source');
+  await assert.rejects(provider.rename(provider.uri('source.txt'), provider.uri('escape'), { overwrite: true }), { code: 'NoPermissions' });
+  await assert.rejects(provider.rename(provider.uri('source.txt'), provider.uri('escape/keep.txt'), { overwrite: true }), { code: 'NoPermissions' });
+  assert.equal(await fs.readFile(path.join(workspacePath, 'source.txt'), 'utf8'), 'source');
   assert.equal(await fs.readFile(path.join(temporary, 'outside', 'keep.txt'), 'utf8'), 'keep');
 });
 
@@ -81,6 +85,128 @@ test('rename cannot erase an ancestor or the workspace root', async t => {
   await fs.mkdir(path.join(workspacePath, 'parent'));
   await fs.writeFile(path.join(workspacePath, 'parent', 'child.txt'), 'keep');
   await assert.rejects(provider.rename(provider.uri('parent/child.txt'), provider.uri('parent'), { overwrite: true }), { code: 'NoPermissions' });
+  await assert.rejects(provider.rename(provider.uri('parent'), provider.uri('parent/child.txt'), { overwrite: true }), { code: 'NoPermissions' });
+  await assert.rejects(provider.rename(provider.uri('parent'), provider.uri(), { overwrite: true }), { code: 'NoPermissions' });
+  await assert.rejects(provider.rename(provider.uri(), provider.uri('parent'), { overwrite: true }), { code: 'NoPermissions' });
   await assert.rejects(provider.delete(provider.uri(), { recursive: true }), { code: 'NoPermissions' });
   assert.equal(await fs.readFile(path.join(workspacePath, 'parent', 'child.txt'), 'utf8'), 'keep');
+});
+
+test('rename resolves directory aliases while replacing final symlinks themselves', async t => {
+  const { provider, workspacePath } = await fixture(t);
+  await fs.mkdir(path.join(workspacePath, 'a', 'b'), { recursive: true });
+  await fs.writeFile(path.join(workspacePath, 'a', 'b', 'file.txt'), 'source');
+  await fs.writeFile(path.join(workspacePath, 'a', 'b', 'keep.txt'), 'keep');
+  await fs.symlink('a', path.join(workspacePath, 'link'));
+  const events = [];
+  provider.onDidChangeFile(batch => events.push(...batch));
+  const source = provider.uri('a/b/file.txt');
+  await assert.rejects(provider.rename(source, provider.uri('link/b'), { overwrite: true }), { code: 'NoPermissions' });
+  await provider.rename(source, provider.uri('link/b/file.txt'), { overwrite: true });
+  assert.equal(await fs.readFile(path.join(workspacePath, 'a', 'b', 'file.txt'), 'utf8'), 'source');
+  assert.deepEqual(events, [], 'renaming an entry to the same entry through an alias is a no-op');
+  // The final symlink may point to a source ancestor, but removing the link
+  // itself is safe and must not recursively delete its target.
+  await provider.rename(source, provider.uri('link'), { overwrite: true });
+  assert.equal(await fs.readFile(path.join(workspacePath, 'link'), 'utf8'), 'source');
+  assert.equal(await fs.readFile(path.join(workspacePath, 'a', 'b', 'keep.txt'), 'utf8'), 'keep');
+  await assert.rejects(fs.lstat(path.join(workspacePath, 'a', 'b', 'file.txt')), { code: 'ENOENT' });
+});
+
+test('mirror creation rejects dangling leaf and ancestor symlinks without changing outside paths', async t => {
+  for (const targetType of ['relative', 'absolute']) {
+    for (const position of ['leaf', 'ancestor']) {
+      await t.test(`${targetType} ${position}`, async t => {
+        const { provider, workspacePath, temporary } = await fixture(t);
+        const outside = path.join(temporary, 'outside');
+        await fs.mkdir(outside);
+        await fs.writeFile(path.join(outside, 'keep.txt'), 'keep');
+        const target = path.join(outside, 'missing');
+        const link = path.join(workspacePath, 'link');
+        const linkTarget = targetType === 'relative' ? path.relative(workspacePath, target) : target;
+        await fs.symlink(linkTarget, link);
+        const uri = provider.uri(position === 'leaf' ? 'link' : 'link/nested/new.txt');
+        await assert.rejects(provider.writeFile(uri, Buffer.from('bad'), { create: true, overwrite: true }), { code: 'NoPermissions' });
+        await assert.rejects(provider.createDirectory(uri), { code: 'NoPermissions' });
+        await fs.writeFile(path.join(workspacePath, 'source.txt'), 'source');
+        await assert.rejects(provider.rename(provider.uri('source.txt'), uri, { overwrite: true }), { code: 'NoPermissions' });
+        assert.equal(await fs.readFile(path.join(workspacePath, 'source.txt'), 'utf8'), 'source');
+        assert.equal(await fs.readlink(link), linkTarget, 'the rejected operation leaves the dangling link intact');
+        assert.deepEqual(await fs.readdir(outside), ['keep.txt']);
+        assert.equal(await fs.readFile(path.join(outside, 'keep.txt'), 'utf8'), 'keep');
+        await assert.rejects(fs.lstat(target), { code: 'ENOENT' });
+      });
+    }
+  }
+});
+
+test('rename overwrite replaces files, directories and internal symlinks', async t => {
+  for (const sourceType of ['file', 'directory']) {
+    for (const destinationType of ['file', 'directory', 'symlink']) {
+      await t.test(`${sourceType} onto ${destinationType}`, async t => {
+        const { provider, workspacePath } = await fixture(t);
+        const source = path.join(workspacePath, 'source');
+        const destination = path.join(workspacePath, 'destination');
+        if (sourceType === 'directory') {
+          await fs.mkdir(source);
+          await fs.writeFile(path.join(source, 'child.txt'), 'source');
+        } else { await fs.writeFile(source, 'source'); }
+        if (destinationType === 'directory') {
+          await fs.mkdir(destination);
+          await fs.writeFile(path.join(destination, 'old.txt'), 'old');
+        } else if (destinationType === 'symlink') {
+          await fs.writeFile(path.join(workspacePath, 'target.txt'), 'keep target');
+          await fs.symlink('target.txt', destination);
+        } else { await fs.writeFile(destination, 'old'); }
+        await assert.rejects(provider.rename(provider.uri('source'), provider.uri('destination'), { overwrite: false }), { code: 'FileExists' });
+        assert.equal(await fs.readFile(sourceType === 'directory' ? path.join(source, 'child.txt') : source, 'utf8'), 'source');
+        await provider.rename(provider.uri('source'), provider.uri('destination'), { overwrite: true });
+        await assert.rejects(fs.lstat(source), { code: 'ENOENT' });
+        assert.equal((await fs.lstat(destination)).isDirectory(), sourceType === 'directory');
+        assert.equal(await fs.readFile(sourceType === 'directory' ? path.join(destination, 'child.txt') : destination, 'utf8'), 'source');
+        if (sourceType === 'directory') { assert.deepEqual(await fs.readdir(destination), ['child.txt']); }
+        if (destinationType === 'symlink') { assert.equal(await fs.readFile(path.join(workspacePath, 'target.txt'), 'utf8'), 'keep target'); }
+      });
+    }
+  }
+});
+
+test('rename preserves native behavior for two hard links to the same inode', async t => {
+  const { provider, workspacePath, temporary } = await fixture(t);
+  const source = path.join(workspacePath, 'source.txt');
+  const destination = path.join(workspacePath, 'destination.txt');
+  await fs.writeFile(source, 'same inode');
+  await fs.link(source, destination);
+  await assert.rejects(provider.rename(provider.uri('source.txt'), provider.uri('destination.txt'), { overwrite: false }), { code: 'FileExists' });
+  // Compare against native rename instead of assuming whether the platform
+  // leaves both links in place when they identify the same file.
+  const nativeSource = path.join(temporary, 'native-source.txt');
+  const nativeDestination = path.join(temporary, 'native-destination.txt');
+  await fs.writeFile(nativeSource, 'same inode');
+  await fs.link(nativeSource, nativeDestination);
+  await fs.rename(nativeSource, nativeDestination);
+  await provider.rename(provider.uri('source.txt'), provider.uri('destination.txt'), { overwrite: true });
+  const exists = filename => fs.lstat(filename).then(() => true, error => { if (error.code === 'ENOENT') { return false; } throw error; });
+  assert.equal(await exists(source), await exists(nativeSource));
+  assert.equal(await fs.readFile(destination, 'utf8'), 'same inode');
+  assert.equal((await fs.lstat(destination)).nlink, (await fs.lstat(nativeDestination)).nlink);
+});
+
+test('case-only rename does not remove its source on a case-insensitive filesystem', async t => {
+  const { provider, workspacePath } = await fixture(t);
+  const source = path.join(workspacePath, 'name.txt');
+  const destination = path.join(workspacePath, 'NAME.txt');
+  await fs.writeFile(source, 'keep case-only rename');
+  try { await fs.lstat(destination); }
+  catch (error) {
+    if (error.code !== 'ENOENT') { throw error; }
+    t.skip('The test filesystem is case-sensitive.');
+    return;
+  }
+  await assert.rejects(provider.rename(provider.uri('name.txt'), provider.uri('NAME.txt'), { overwrite: false }), { code: 'FileExists' });
+  await provider.rename(provider.uri('name.txt'), provider.uri('NAME.txt'), { overwrite: true });
+  assert.equal(await fs.readFile(destination, 'utf8'), 'keep case-only rename');
+  const names = await fs.readdir(workspacePath);
+  assert.ok(names.includes('NAME.txt'));
+  assert.ok(!names.includes('name.txt'));
 });

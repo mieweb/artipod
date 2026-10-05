@@ -4,9 +4,11 @@ The Marketplace extension is `mieweb.artipod`. Version 0.1.0 was uploaded
 manually as a pre-release. Future updates use `.github/workflows/vscode-extension.yml`:
 
 - Pull requests and main/develop pushes run checkpoint and extension tests on
-  Linux and macOS, package a pre-release VSIX, and upload both build artifacts.
-- A `vscode-vVERSION` tag runs the same checks and publishes the tested Linux
-  artifact, which is a universal VSIX. Both platform jobs must pass.
+  Linux and macOS with Node.js 22 and 24, package a pre-release VSIX, and upload
+  all four build artifacts. Node.js 22 covers the minimum extension runtime.
+- A `vscode-vVERSION` tag runs the same checks and publishes the tested
+  `artipod-vsix-linux-node24` artifact, which is a universal VSIX. All four
+  platform/runtime jobs must pass.
 - Manual workflow runs build artifacts. Selecting **verify_publisher** also
   signs in and prints the Marketplace identity ID; it never publishes.
 

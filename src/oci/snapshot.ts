@@ -81,7 +81,8 @@ export interface SnapshotRestoreChange {
 }
 
 const SNAP_DIR = `${OCI_ROOT}/snapshots`;
-const DEFAULT_EXCLUDE = ['/.artipod', '/proc', '/mnt', '/dev', '/branches'];
+const RESERVED_ROOTS = ['/.artipod', '/proc'];
+const DEFAULT_EXCLUDE = [...RESERVED_ROOTS, '/mnt', '/dev', '/branches'];
 
 function snapshotId(): string {
   const buf = new Uint8Array(6);
@@ -102,7 +103,7 @@ export class SnapshotManager {
     this.zfs = options.zfs;
     this.store = options.store;
     this.roots = options.roots;
-    this.exclude = [...(options.defaultExcludes === false ? ['/.artipod', '/proc'] : DEFAULT_EXCLUDE), ...(options.exclude ?? [])];
+    this.exclude = [...(options.defaultExcludes === false ? RESERVED_ROOTS : DEFAULT_EXCLUDE), ...(options.exclude ?? [])];
     this.workspaceFs = options.workspaceFs ?? options.zfs;
   }
 
@@ -152,7 +153,7 @@ export class SnapshotManager {
     if (!path.startsWith('/') || path.includes('\\') || path.includes('\0') || path.split('/').slice(1).some(p => !p || p === '.' || p === '..')) {
       throw new Error(`Invalid Artipod snapshot path: ${JSON.stringify(path)}`);
     }
-    if (!this.roots.some(r => r === '/' || path.startsWith(`${r}/`)) || (honorExcludes ? this.excluded(path) : ['/.artipod', '/proc'].some(root => path === root || path.startsWith(`${root}/`)))) {
+    if (!this.roots.some(r => r === '/' || path.startsWith(`${r}/`)) || (honorExcludes ? this.excluded(path) : RESERVED_ROOTS.some(root => path === root || path.startsWith(`${root}/`)))) {
       throw new Error(`Artipod snapshot path is outside captured roots: ${path}`);
     }
   }
@@ -370,6 +371,11 @@ export class SnapshotManager {
     if (!destination.startsWith('/') || destination.includes('\\') || destination.includes('\0') || destination.split('/').slice(1).some(p => !p || p === '.' || p === '..')) {
       throw new Error('Snapshot checkout requires an absolute, non-root destination');
     }
+    // Reserve case variants too: native host volumes may be case-insensitive.
+    const reservedDestination = destination.toLowerCase();
+    if (RESERVED_ROOTS.some(root => reservedDestination === root || reservedDestination.startsWith(`${root}/`))) {
+      throw new Error('Snapshot checkout destination must be outside reserved Artipod metadata and runtime paths');
+    }
     // Validate every byte/path before even creating the destination directory.
     const { head, target } = await this.validatedSnapshot(id, false);
     const p = this.workspaceFs.promises;
@@ -403,11 +409,15 @@ export class SnapshotManager {
         }
       }
     }
-    // Apply restrictive directory modes only after descendants are populated.
-    for (const [path, entry] of entries.reverse()) if (entry.type === 'dir') await p.chmod(`${destination}${path}`, entry.mode);
+    const directoryModes = new Map(entries.filter(([, entry]) => entry.type === 'dir').map(([path, entry]) => [path, entry.mode]));
     for (const [root, mode] of Object.entries(head.rootModes ?? {})) {
       await p.mkdir(root === '/' ? destination : `${destination}${root}`, { recursive: true });
-      await p.chmod(root === '/' ? destination : `${destination}${root}`, mode);
+      directoryModes.set(root, mode);
+    }
+    // Finalize all directory modes together, deepest first: a captured root
+    // may be nested beneath another root or an ordinary restrictive directory.
+    for (const [directory, mode] of [...directoryModes].sort(([a], [b]) => b.split('/').length - a.split('/').length || b.localeCompare(a))) {
+      await p.chmod(directory === '/' ? destination : `${destination}${directory}`, mode);
     }
     return destination;
   }

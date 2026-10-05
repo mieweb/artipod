@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   build-test-package:
-    name: Build, test, and package (${{ matrix.platform }})
+    name: Build, test, and package (${{ matrix.platform }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -27,18 +27,26 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux
+            node-version: '22'
           - os: macos-latest
             platform: macos
+            node-version: '22'
+          - os: ubuntu-latest
+            platform: linux
+            node-version: '24'
+          - os: macos-latest
+            platform: macos
+            node-version: '24'
 
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - name: Use Node.js 24
+      - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v5
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -78,7 +86,7 @@ jobs:
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
-          name: artipod-vsix-${{ matrix.platform }}
+          name: artipod-vsix-${{ matrix.platform }}-node${{ matrix.node-version }}
           path: vscode-extension/dist/*.vsix
           if-no-files-found: error
           retention-days: 14
@@ -115,7 +123,7 @@ jobs:
       - name: Download tested VSIX
         uses: actions/download-artifact@v4
         with:
-          name: artipod-vsix-linux
+          name: artipod-vsix-linux-node24
           path: vscode-extension/dist
 
       - name: Check publishing identity configuration

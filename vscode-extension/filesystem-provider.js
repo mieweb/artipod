@@ -55,6 +55,12 @@ class ArtipodFileSystemProvider {
         if (error.code !== 'ENOENT' || !allowMissing || ancestor === this.root) {
           throw this.convertError(error, uri);
         }
+        // realpath also reports ENOENT for a dangling symlink. It is not a
+        // missing path component: creating through it could escape the root.
+        let info;
+        try { info = await fs.lstat(ancestor); }
+        catch (error) { if (error.code !== 'ENOENT') { throw this.convertError(error, uri); } }
+        if (info?.isSymbolicLink()) { throw this.vscode.FileSystemError.NoPermissions(uri); }
         ancestor = path.dirname(ancestor);
       }
     }
@@ -129,10 +135,21 @@ class ArtipodFileSystemProvider {
     if (source === this.root || destination === this.root) { throw this.vscode.FileSystemError.NoPermissions(oldUri); }
     if (source === destination) { return; }
     if (isWithin(source, destination) || isWithin(destination, source)) { throw this.vscode.FileSystemError.NoPermissions(newUri); }
+    // Resolve parent aliases before removing a destination. Leave the final
+    // component unresolved: rename replaces a symlink, not its target.
+    const sourceEntry = path.join(await fs.realpath(path.dirname(source)), path.basename(source));
+    const destinationEntry = path.join(await fs.realpath(path.dirname(destination)), path.basename(destination));
+    if (sourceEntry === destinationEntry) { return; }
+    if (isWithin(sourceEntry, destinationEntry) || isWithin(destinationEntry, sourceEntry)) { throw this.vscode.FileSystemError.NoPermissions(newUri); }
     try {
       const destinationInfo = await fs.lstat(destination);
       if (!options.overwrite) { throw this.vscode.FileSystemError.FileExists(newUri); }
-      if (destinationInfo.isDirectory()) { await fs.rm(destination, { recursive: true }); }
+      const sourceInfo = await fs.lstat(source);
+      // Case-only renames and hard links can name the same inode. Let rename
+      // handle them; removing the destination could remove the source itself.
+      if (sourceInfo.dev !== destinationInfo.dev || sourceInfo.ino !== destinationInfo.ino) {
+        await fs.rm(destination, { recursive: destinationInfo.isDirectory() });
+      }
     } catch (error) { if (error.code !== 'ENOENT') { throw this.convertError(error, newUri); } }
     await fs.rename(source, destination);
     this.emitter.fire([{ uri: oldUri, type: this.vscode.FileChangeType.Deleted }, { uri: newUri, type: this.vscode.FileChangeType.Created }]);
