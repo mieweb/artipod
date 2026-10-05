@@ -47,7 +47,7 @@ export function normalizePath(path: string): string {
     if (part === '..') resolved.pop();
     else resolved.push(part);
   }
-  return `/${resolved.join('/')}` || '/';
+  return `/${resolved.join('/')}`;
 }
 
 export class ZenFsAdapter implements IFileSystem {

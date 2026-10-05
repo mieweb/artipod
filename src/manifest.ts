@@ -109,7 +109,7 @@ export function parseManifest(json: string): PodManifest {
   try {
     raw = JSON.parse(json);
   } catch (e) {
-    throw new Error(`Pod manifest is not valid JSON: ${(e as Error).message}`);
+    throw new Error(`Pod manifest is not valid JSON: ${(e as Error).message}`, { cause: e });
   }
   return validateManifest(raw as PodManifest);
 }

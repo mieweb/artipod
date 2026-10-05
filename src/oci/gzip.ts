@@ -15,6 +15,7 @@ export async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
   } catch (e) {
     throw new Error(
       `gunzip: no DecompressionStream in this environment and the fflate fallback is unavailable (${(e as Error).message})`,
+      { cause: e },
     );
   }
 }

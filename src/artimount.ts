@@ -37,7 +37,7 @@ export class ArtiMount {
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        throw new Error(`Mount path ${this.rootPath} does not exist`);
+        throw new Error(`Mount path ${this.rootPath} does not exist`, { cause: error });
       }
       throw error;
     }
@@ -152,7 +152,7 @@ export class ArtiMount {
       return lines.slice(start, end).join('\n');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        throw new Error(`File not found: ${relativePath}`);
+        throw new Error(`File not found: ${relativePath}`, { cause: error });
       }
       throw error;
     }
