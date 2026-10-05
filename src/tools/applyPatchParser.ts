@@ -578,7 +578,6 @@ export class Parser {
             if (canon(fileLines[i]!.trim()) === canon(defStr)) {
               index = i + 1;
               this.fuzz++;
-              found = true;
               break;
             }
           }

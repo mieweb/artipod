@@ -168,7 +168,7 @@ export function parseToolFile(file: string, text: string): McpToolDescriptor[] {
   try {
     json = JSON.parse(text);
   } catch (e) {
-    throw new Error(`${file}: invalid JSON — ${(e as Error).message}`);
+    throw new Error(`${file}: invalid JSON — ${(e as Error).message}`, { cause: e });
   }
   const list = Array.isArray(json) ? json : [json];
   return list.map((d, i) => {

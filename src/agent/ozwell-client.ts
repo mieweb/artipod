@@ -80,6 +80,7 @@ export class OzwellClient implements ChatCompletionClient {
       if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(
           options.signal?.aborted ? 'Request aborted' : `Request timed out after ${this.config.timeout}ms`,
+          { cause: error },
         );
       }
       throw error;
