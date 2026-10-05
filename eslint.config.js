@@ -23,5 +23,10 @@ export default defineConfig({
     '@typescript-eslint/explicit-function-return-type': 'off',
     '@typescript-eslint/explicit-module-boundary-types': 'off',
     '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    // Preserve checks removed or relaxed in the newer recommended preset.
+    'no-constant-condition': ['error', { checkLoops: 'all' }],
+    'no-extra-semi': 'error',
+    'no-inner-declarations': ['error', 'functions', { blockScopedFunctions: 'disallow' }],
+    'no-mixed-spaces-and-tabs': 'error',
   },
 });
