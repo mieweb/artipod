@@ -46,6 +46,10 @@ jobs:
       if: matrix.node-version == '20.x'
       with:
         use_oidc: true
+        # Use the official PyPI distribution while cli.codecov.io's download
+        # endpoint fails TLS handshakes on GitHub-hosted runners.
+        use_pypi: true
+        version: v11.3.1
         files: ./coverage/lcov.info
         flags: unittests
         name: codecov-umbrella
