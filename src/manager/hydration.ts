@@ -55,6 +55,29 @@ const child = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}
 
 const renameFailed = (from: string, to: string) =>
   Object.assign(new Error(`ENOENT: rename '${from}' -> '${to}' did not land in the overlay`), { code: 'ENOENT' });
+const renameRejected = (code: string, from: string, to: string) =>
+  Object.assign(new Error(`${code}: rename '${from}' -> '${to}'`), { code });
+
+/**
+ * The upper may lack a destination that only the lower has, so it would accept
+ * moves the merged tree must refuse (POSIX rename rules).
+ */
+function checkRenameTarget(
+  from: string,
+  to: string,
+  fromIsDir: boolean,
+  target: { mode: number } | undefined,
+  targetEntries: () => string[]
+): void {
+  if (fromIsDir && to.startsWith(`${from}/`)) throw renameRejected('EINVAL', from, to);
+  if (!target) return;
+  if (isDir(target)) {
+    if (!fromIsDir) throw renameRejected('EISDIR', from, to);
+    if (targetEntries().length) throw renameRejected('ENOTEMPTY', from, to);
+  } else if (fromIsDir) {
+    throw renameRejected('ENOTDIR', from, to);
+  }
+}
 
 /**
  * ZenFS's CopyOnWrite journal is append-only: once a lower path is deleted,
@@ -152,8 +175,12 @@ export function clearWhiteoutsOnCreate(cow: CowInternals): void {
 
   cow.rename = async function (this: unknown, from: string, to: string) {
     if (from === to) return rename.call(this, from, to);
+    const fromIsDir = isDir(await cow.stat(from));
+    const target = await cow.stat(to).catch(() => undefined);
+    const targetEntries = target && isDir(target) ? await cow.readdir(to) : [];
+    checkRenameTarget(from, to, fromIsDir, target, () => targetEntries);
     const source = await lowerTree(from);
-    if (isDir(await cow.stat(from))) {
+    if (fromIsDir) {
       await cow.createParentDirectories(from);
       if (!(await writable.exists(from))) await writable.mkdir(from, await readable.stat(from));
       await materialize(from);
@@ -170,8 +197,16 @@ export function clearWhiteoutsOnCreate(cow: CowInternals): void {
   };
   cow.renameSync = function (this: unknown, from: string, to: string) {
     if (from === to) return renameSync.call(this, from, to);
+    const fromIsDir = isDir(cow.statSync(from));
+    let target: { mode: number } | undefined;
+    try {
+      target = cow.statSync(to);
+    } catch {
+      target = undefined;
+    }
+    checkRenameTarget(from, to, fromIsDir, target, () => cow.readdirSync(to));
     const source = lowerTreeSync(from);
-    if (isDir(cow.statSync(from))) {
+    if (fromIsDir) {
       cow.createParentDirectoriesSync(from);
       if (!writable.existsSync(from)) writable.mkdirSync(from, readable.statSync(from));
       materializeSync(from);
