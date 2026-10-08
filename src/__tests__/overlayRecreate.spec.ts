@@ -232,8 +232,7 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
       clearWhiteoutsOnCreate(cow as unknown as CowInternals);
       if (targetExists) {
         // An existing upper target makes `exists(to)` true even though nothing moved.
-        await cow.mkdir('/d/b.txt', { mode: 0o40755, uid: 0, gid: 0 });
-        await cow.mkdir('/d/c.txt', { mode: 0o40755, uid: 0, gid: 0 });
+        for (const name of ['b.txt', 'c.txt']) await cow.createFile(`/d/${name}`, { mode: 0o100644, uid: 0, gid: 0 });
       }
 
       // ZenFS CoW swallows writable-layer rename errors for sources that
@@ -315,6 +314,45 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
     expect(cow.existsSync('/d')).toBe(false);
     expect(cow.existsSync('/d/keep.txt')).toBe(false);
   });
+
+  it.each(['async', 'sync'] as const)(
+    '%s rename refuses lower-only destinations the merged tree must reject',
+    async (mode) => {
+      const lower = await resolveMountConfig({ backend: InMemory });
+      const upper = await resolveMountConfig({ backend: InMemory });
+      const dirStats = { mode: 0o40755, uid: 0, gid: 0 };
+      const fileStats = { mode: 0o100644, uid: 0, gid: 0 };
+      const bytes = (s: string) => new TextEncoder().encode(s);
+      await lower.mkdir('/full', dirStats);
+      await lower.createFile('/full/kid.txt', fileStats);
+      await lower.write('/full/kid.txt', bytes('kid'), 0);
+      await lower.createFile('/plain.txt', fileStats);
+      await lower.write('/plain.txt', bytes('lower'), 0);
+      const cow = new CopyOnWriteFS(lower, upper);
+      clearWhiteoutsOnCreate(cow as unknown as CowInternals);
+      await cow.createFile('/f.txt', fileStats);
+      await cow.write('/f.txt', bytes('upper'), 0);
+      await cow.mkdir('/src', dirStats);
+      await cow.createFile('/src/s.txt', fileStats);
+
+      const mv = async (a: string, b: string) => (mode === 'async' ? cow.rename(a, b) : cow.renameSync(a, b));
+      await expect(mv('/f.txt', '/full')).rejects.toThrow(/EISDIR/);
+      await expect(mv('/src', '/full')).rejects.toThrow(/ENOTEMPTY/);
+      await expect(mv('/src', '/plain.txt')).rejects.toThrow(/ENOTDIR/);
+      await expect(mv('/src', '/src/inner')).rejects.toThrow(/EINVAL/);
+
+      const entries = (cow as unknown as CowInternals).journal.entries;
+      expect(entries.filter((e) => e.op === 'delete')).toEqual([]);
+      expect(cow.readdirSync('/full')).toEqual(['kid.txt']);
+      expect(cow.existsSync('/f.txt') && cow.existsSync('/src/s.txt')).toBe(true);
+
+      // Replacing a lower-only file is still allowed.
+      await mv('/f.txt', '/plain.txt');
+      expect(upper.existsSync('/plain.txt')).toBe(true);
+      expect(cow.existsSync('/f.txt')).toBe(false);
+      expect(entries.filter((e) => e.op === 'delete')).toEqual([]);
+    }
+  );
 
   it('a genuine delete (not recreated) still whites the file out', async () => {
     const pod = await openPod();
