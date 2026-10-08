@@ -252,6 +252,70 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
     }
   );
 
+  it('mv of a lower dir after editing one child keeps the untouched children', async () => {
+    const pod = await openPod();
+    const shell = pod.createSandbox({ confineTo: '/project' });
+
+    // Editing a.txt copies /d into the upper with only that child.
+    await shell.exec('printf edited > /d/a.txt');
+    await shell.exec('mv /d /e');
+    expect((await shell.exec('ls /e')).stdout).toBe('a.txt\nkeep.txt\n');
+    expect((await shell.exec('cat /e/keep.txt')).stdout).toBe('keep');
+    expect((await shell.exec('ls /')).stdout).not.toContain('d\n');
+
+    const push = await pod.pushBasis();
+    expect(push?.pushed).toBe(true);
+
+    await materializeRef(remote, REF, dir);
+    expect(await nodeReadFile(join(dir, 'e', 'a.txt'), 'utf8')).toBe('edited');
+    expect(await nodeReadFile(join(dir, 'e', 'keep.txt'), 'utf8')).toBe('keep');
+    expect(existsSync(join(dir, 'd', 'a.txt'))).toBe(false);
+    expect(existsSync(join(dir, 'd', 'keep.txt'))).toBe(false);
+    pod.dispose();
+  });
+
+  it('mv a dir over a previously deleted lower dir shows only the moved children', async () => {
+    const pod = await openPod();
+    const shell = pod.createSandbox({ confineTo: '/project' });
+
+    await shell.exec('rm -rf /d');
+    await shell.exec('mkdir /x');
+    await shell.exec('printf new > /x/a.txt');
+    await shell.exec('mv /x /d');
+    // a.txt was whited out by rm -rf; keep.txt is only in the lower.
+    expect((await shell.exec('ls /d')).stdout).toBe('a.txt\n');
+    expect((await shell.exec('cat /d/a.txt')).stdout).toBe('new');
+
+    const push = await pod.pushBasis();
+    expect(push?.pushed).toBe(true);
+
+    await materializeRef(remote, REF, dir);
+    expect(await nodeReadFile(join(dir, 'd', 'a.txt'), 'utf8')).toBe('new');
+    expect(existsSync(join(dir, 'd', 'keep.txt'))).toBe(false);
+    expect(existsSync(join(dir, 'x'))).toBe(false);
+    pod.dispose();
+  });
+
+  it('renameSync of a partially copied-up lower dir moves every child', async () => {
+    const lower = await resolveMountConfig({ backend: InMemory });
+    const upper = await resolveMountConfig({ backend: InMemory });
+    const file = { mode: 0o100644, uid: 0, gid: 0 };
+    await lower.mkdir('/d', { mode: 0o40755, uid: 0, gid: 0 });
+    for (const name of ['a.txt', 'keep.txt']) {
+      await lower.createFile(`/d/${name}`, file);
+      await lower.write(`/d/${name}`, new TextEncoder().encode(name), 0);
+    }
+    const cow = new CopyOnWriteFS(lower, upper);
+    clearWhiteoutsOnCreate(cow as unknown as CowInternals);
+
+    cow.writeSync('/d/a.txt', new TextEncoder().encode('A'), 0);
+    cow.renameSync('/d', '/e');
+
+    expect(cow.readdirSync('/e').sort()).toEqual(['a.txt', 'keep.txt']);
+    expect(cow.existsSync('/d')).toBe(false);
+    expect(cow.existsSync('/d/keep.txt')).toBe(false);
+  });
+
   it('a genuine delete (not recreated) still whites the file out', async () => {
     const pod = await openPod();
     const shell = pod.createSandbox({ confineTo: '/project' });
