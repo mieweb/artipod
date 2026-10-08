@@ -557,22 +557,17 @@ export class Hydrator {
     });
   }
 
-  /** Current deletions (journal → stamped map; stamps survive re-opens). */
-  async overlayDeletions(ref: string): Promise<Map<string, number>> {
+  /**
+   * Current deletions (journal → stamped map; stamps survive re-opens).
+   * Accurate for re-created paths because {@link clearWhiteoutsOnCreate}
+   * drops a path's delete entries when the overlay creates it again.
+   */
+  overlayDeletions(ref: string): Map<string, number> {
     const overlay = this.overlays.get(ref);
     if (!overlay) return new Map();
     const live = new Set<string>();
     for (const entry of overlay.journal.entries) {
-      // The CoW journal's `delete` log is append-only: recreating a path
-      // (createFile/mkdir/rename/write over a whited-out lower file) never
-      // clears its stale `delete` entry, so `isDeleted` keeps reporting the
-      // path as gone. Trusting it alone emitted a whiteout for a path the
-      // upper had just rewritten — and the whiteout (last layer) won the OCI
-      // merge, silently dropping the file on push. Confirm the path is truly
-      // absent from the writable upper before treating it as a deletion.
-      if (overlay.journal.isDeleted(entry.path) && !(await this.upperHas(overlay.upperAt, entry.path))) {
-        live.add(entry.path);
-      }
+      if (overlay.journal.isDeleted(entry.path)) live.add(entry.path);
     }
     for (const path of live) {
       if (!overlay.deletionStamps.has(path)) overlay.deletionStamps.set(path, Date.now());
@@ -581,16 +576,6 @@ export class Hydrator {
       if (!live.has(path)) overlay.deletionStamps.delete(path); // re-created
     }
     return overlay.deletionStamps;
-  }
-
-  /** Does the overlay's writable upper currently hold this pod path? */
-  private async upperHas(upperAt: string, path: string): Promise<boolean> {
-    try {
-      await this.p.stat(`${upperAt}${path}`);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   closeOverlay(ref: string): void {
