@@ -50,7 +50,7 @@ const renameFailed = (from: string, to: string) =>
  * the moved file would reappear at its old path; record that deletion.
  * ZenFS swallows a failed upper-layer rename (e.g. into a directory that only
  * exists in the lower layer), so copy the target's parents up first and only
- * touch the journal once the target has actually landed.
+ * touch the journal once the source has left the upper and the target is in it.
  */
 /** @internal Exported for tests. */
 export function clearWhiteoutsOnCreate(cow: CowInternals): void {
@@ -75,21 +75,24 @@ export function clearWhiteoutsOnCreate(cow: CowInternals): void {
 
   const rename = cow.rename as (from: string, to: string) => Promise<void>;
   cow.rename = async function (this: unknown, from: string, to: string) {
+    if (from === to) return rename.call(this, from, to);
     const inLower = await cow.readable.exists(from);
-    if (from !== to) await cow.createParentDirectories(to);
+    await cow.createParentDirectories(to);
     await rename.call(this, from, to);
-    if (!(await cow.writable.exists(to))) throw renameFailed(from, to);
+    // A pre-existing target also passes `exists(to)`, so require the source to be gone too.
+    if ((await cow.writable.exists(from)) || !(await cow.writable.exists(to))) throw renameFailed(from, to);
     forget(to);
-    if (inLower && from !== to) whiteOut(from);
+    if (inLower) whiteOut(from);
   };
   const renameSync = cow.renameSync as (from: string, to: string) => void;
   cow.renameSync = function (this: unknown, from: string, to: string) {
+    if (from === to) return renameSync.call(this, from, to);
     const inLower = cow.readable.existsSync(from);
-    if (from !== to) cow.createParentDirectoriesSync(to);
+    cow.createParentDirectoriesSync(to);
     renameSync.call(this, from, to);
-    if (!cow.writable.existsSync(to)) throw renameFailed(from, to);
+    if (cow.writable.existsSync(from) || !cow.writable.existsSync(to)) throw renameFailed(from, to);
     forget(to);
-    if (inLower && from !== to) whiteOut(from);
+    if (inLower) whiteOut(from);
   };
 }
 
