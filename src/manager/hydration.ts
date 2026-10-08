@@ -29,11 +29,17 @@ const PARTIAL_DIR = '/.artipod/oci/partial';
 const decoder = new TextDecoder();
 
 /** The parts of ZenFS's CopyOnWriteFS that {@link clearWhiteoutsOnCreate} patches. */
-interface CowInternals {
+export interface CowInternals {
   journal: { entries: { op: string; path: string }[] };
   readable: { exists(path: string): Promise<boolean>; existsSync(path: string): boolean };
+  writable: { exists(path: string): Promise<boolean>; existsSync(path: string): boolean };
+  createParentDirectories(path: string): Promise<void>;
+  createParentDirectoriesSync(path: string): void;
   [method: string]: unknown;
 }
+
+const renameFailed = (from: string, to: string) =>
+  Object.assign(new Error(`ENOENT: rename '${from}' -> '${to}' did not land in the overlay`), { code: 'ENOENT' });
 
 /**
  * ZenFS's CopyOnWrite journal is append-only: once a lower path is deleted,
@@ -42,8 +48,12 @@ interface CowInternals {
  * the push emits a whiteout over it. Clear a path's delete entries whenever
  * the overlay creates it. `rename` also never whites out a lower source, so
  * the moved file would reappear at its old path; record that deletion.
+ * ZenFS swallows a failed upper-layer rename (e.g. into a directory that only
+ * exists in the lower layer), so copy the target's parents up first and only
+ * touch the journal once the target has actually landed.
  */
-function clearWhiteoutsOnCreate(cow: CowInternals): void {
+/** @internal Exported for tests. */
+export function clearWhiteoutsOnCreate(cow: CowInternals): void {
   const forget = (path: string) => {
     cow.journal.entries = cow.journal.entries.filter((e) => !(e.op === 'delete' && e.path === path));
   };
@@ -66,14 +76,18 @@ function clearWhiteoutsOnCreate(cow: CowInternals): void {
   const rename = cow.rename as (from: string, to: string) => Promise<void>;
   cow.rename = async function (this: unknown, from: string, to: string) {
     const inLower = await cow.readable.exists(from);
+    if (from !== to) await cow.createParentDirectories(to);
     await rename.call(this, from, to);
+    if (!(await cow.writable.exists(to))) throw renameFailed(from, to);
     forget(to);
     if (inLower && from !== to) whiteOut(from);
   };
   const renameSync = cow.renameSync as (from: string, to: string) => void;
   cow.renameSync = function (this: unknown, from: string, to: string) {
     const inLower = cow.readable.existsSync(from);
+    if (from !== to) cow.createParentDirectoriesSync(to);
     renameSync.call(this, from, to);
+    if (!cow.writable.existsSync(to)) throw renameFailed(from, to);
     forget(to);
     if (inLower && from !== to) whiteOut(from);
   };

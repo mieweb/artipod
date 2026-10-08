@@ -20,7 +20,8 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { configure, InMemory, fs as zfs, umount, mounts as zenMounts } from '@zenfs/core';
+import { configure, CopyOnWriteFS, InMemory, resolveMountConfig, fs as zfs, umount, mounts as zenMounts } from '@zenfs/core';
+import { clearWhiteoutsOnCreate, type CowInternals } from '../manager/hydration.js';
 import { sha256, type Digest } from '../oci/digest.js';
 import type { StoredRef } from '../oci/store.js';
 import type { ImageManifest } from '../oci/pull.js';
@@ -148,10 +149,8 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
     const shell = pod.createSandbox({ confineTo: '/project' });
 
     // Touch a sibling first so /d is materialized in the writable upper (the
-    // realistic state of an active session). ZenFS CoW `rename` does not
-    // create parent directories in the writable, so without this the rename
-    // target's content would never land — a SEPARATE upstream bug, orthogonal
-    // to the whiteout-wins data loss under test here.
+    // realistic state of an active session). The lower-only parent case is
+    // covered separately below.
     await shell.exec('printf sib > /d/sib.txt');
     await shell.exec('rm -f /d/a.txt');
     await shell.exec('printf two > /src.txt');
@@ -200,6 +199,49 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
     expect(existsSync(join(dir, 'd', 'a.txt'))).toBe(false);
     expect(await nodeReadFile(join(dir, 'd', 'b.txt'), 'utf8')).toBe('one');
     pod.dispose();
+  });
+
+  it('mv into a directory that only exists in the lower lands the file', async () => {
+    const pod = await openPod();
+    const shell = pod.createSandbox({ confineTo: '/project' });
+
+    // /d has never been written in this session, so it only exists in the
+    // lower. ZenFS CoW `rename` alone would silently drop the move.
+    await shell.exec('printf two > /src.txt');
+    await shell.exec('mv /src.txt /d/moved.txt');
+    expect((await shell.exec('cat /d/moved.txt')).stdout).toBe('two');
+    expect((await shell.exec('ls /')).stdout).not.toContain('src.txt');
+
+    const push = await pod.pushBasis();
+    expect(push?.pushed).toBe(true);
+
+    await materializeRef(remote, REF, dir);
+    expect(await nodeReadFile(join(dir, 'd', 'moved.txt'), 'utf8')).toBe('two');
+    expect(existsSync(join(dir, 'src.txt'))).toBe(false);
+    pod.dispose();
+  });
+
+  it('a rename the writable layer rejects keeps the lower source (no whiteout)', async () => {
+    const lower = await resolveMountConfig({ backend: InMemory });
+    const upper = await resolveMountConfig({ backend: InMemory });
+    await lower.mkdir('/d', { mode: 0o40755, uid: 0, gid: 0 });
+    await lower.createFile('/d/a.txt', { mode: 0o100644, uid: 0, gid: 0 });
+    const cow = new CopyOnWriteFS(lower, upper);
+    clearWhiteoutsOnCreate(cow as unknown as CowInternals);
+
+    // ZenFS CoW swallows writable-layer rename errors for sources that
+    // aren't already deleted; the wrapper must not white out the source.
+    const failing = () => Promise.reject(Object.assign(new Error('EIO'), { code: 'EIO' }));
+    upper.rename = failing;
+    upper.renameSync = () => {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    };
+
+    await expect(cow.rename('/d/a.txt', '/d/b.txt')).rejects.toThrow(/ENOENT/);
+    expect(() => cow.renameSync('/d/a.txt', '/d/c.txt')).toThrow(/ENOENT/);
+    const entries = (cow as unknown as CowInternals).journal.entries;
+    expect(entries.filter((e) => e.op === 'delete')).toEqual([]);
+    expect(await cow.exists('/d/a.txt')).toBe(true);
   });
 
   it('a genuine delete (not recreated) still whites the file out', async () => {
