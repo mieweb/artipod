@@ -11,6 +11,7 @@ import {
   IApplyPatchParams,
 } from './types.js';
 import { applyPatchDefinition } from './definitions.js';
+import { resolvePosix } from '../pathUtils.js';
 import {
   processPatch,
   applyCommit,
@@ -66,7 +67,9 @@ export class ApplyPatchTool implements ToolHandler<IApplyPatchParams, EditResult
         async (filePath: string) => {
           await this.mount.remove(this.resolveRelativePath(filePath));
           changedFiles.push(filePath + ' (deleted)');
-        }
+        },
+        (a: string, b: string) =>
+          resolvePosix('/', this.resolveRelativePath(a)) === resolvePosix('/', this.resolveRelativePath(b))
       );
 
       return {

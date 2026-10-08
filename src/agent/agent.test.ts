@@ -210,6 +210,27 @@ describe('tool surface serializers', () => {
       'to.txt',
     ]);
   });
+
+  it('apply_patch Move to the same file (in another spelling) keeps it', async () => {
+    const tools = createSandboxTools(sandbox);
+    await sandbox.exec('echo same > /repo/same.txt');
+
+    const result = await tools.get('apply_patch')!.execute({
+      input: [
+        '*** Begin Patch',
+        '*** Update File: /repo/same.txt',
+        '*** Move to: /repo/./same.txt',
+        '@@',
+        '-same',
+        '+still here',
+        '*** End Patch',
+      ].join('\n'),
+      explanation: 'no-op move',
+    });
+
+    expect(result.success).toBe(true);
+    expect((await sandbox.exec('cat /repo/same.txt')).stdout).toBe('still here\n');
+  });
 });
 
 describe('truncateOutput', () => {
