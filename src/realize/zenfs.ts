@@ -434,7 +434,7 @@ export async function createZenFsPod(
           zfs,
           ref: basis!.ref,
           upperAt: overlay.upperAt,
-          deletions: hydrator.overlayDeletions(basis!.ref),
+          deletions: await hydrator.overlayDeletions(basis!.ref),
           actor,
           remote,
         });
