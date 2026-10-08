@@ -28,6 +28,57 @@ const PARTIAL_DIR = '/.artipod/oci/partial';
 
 const decoder = new TextDecoder();
 
+/** The parts of ZenFS's CopyOnWriteFS that {@link clearWhiteoutsOnCreate} patches. */
+interface CowInternals {
+  journal: { entries: { op: string; path: string }[] };
+  readable: { exists(path: string): Promise<boolean>; existsSync(path: string): boolean };
+  [method: string]: unknown;
+}
+
+/**
+ * ZenFS's CopyOnWrite journal is append-only: once a lower path is deleted,
+ * `isDeleted` stays true even after the path is created again in the upper.
+ * `readdir` then hides the new file while `stat`/`read` still find it, and
+ * the push emits a whiteout over it. Clear a path's delete entries whenever
+ * the overlay creates it. `rename` also never whites out a lower source, so
+ * the moved file would reappear at its old path; record that deletion.
+ */
+function clearWhiteoutsOnCreate(cow: CowInternals): void {
+  const forget = (path: string) => {
+    cow.journal.entries = cow.journal.entries.filter((e) => !(e.op === 'delete' && e.path === path));
+  };
+  const whiteOut = (path: string) => {
+    cow.journal.entries.push({ op: 'delete', path });
+  };
+  const wrap = (name: string, createdArg: number) => {
+    const original = cow[name] as ((...args: unknown[]) => unknown) | undefined;
+    if (typeof original !== 'function') return;
+    cow[name] = function (this: unknown, ...args: unknown[]) {
+      const result = original.apply(this, args);
+      if (result instanceof Promise) return result.then((value) => (forget(args[createdArg] as string), value));
+      forget(args[createdArg] as string);
+      return result;
+    };
+  };
+  for (const name of ['createFile', 'createFileSync', 'mkdir', 'mkdirSync']) wrap(name, 0);
+  for (const name of ['link', 'linkSync']) wrap(name, 1);
+
+  const rename = cow.rename as (from: string, to: string) => Promise<void>;
+  cow.rename = async function (this: unknown, from: string, to: string) {
+    const inLower = await cow.readable.exists(from);
+    await rename.call(this, from, to);
+    forget(to);
+    if (inLower && from !== to) whiteOut(from);
+  };
+  const renameSync = cow.renameSync as (from: string, to: string) => void;
+  cow.renameSync = function (this: unknown, from: string, to: string) {
+    const inLower = cow.readable.existsSync(from);
+    renameSync.call(this, from, to);
+    forget(to);
+    if (inLower && from !== to) whiteOut(from);
+  };
+}
+
 /** `**` crosses `/`, `*` doesn't; leading `/` on paths is ignored. */
 export function pathGlobMatch(pattern: string, path: string): boolean {
   const p = path.replace(/^\/+/, '');
@@ -484,6 +535,7 @@ export class Hydrator {
         : ((opts?.upperConfig ?? { backend: zen.InMemory, label: `upper:${ref}` }) as never),
       ...(existing ? { journal: existing.journal as never } : {}),
     } as never);
+    clearWhiteoutsOnCreate(cow as unknown as CowInternals);
     const upperAt = `/.artipod/upper/${encodeURIComponent(ref)}`;
     await this.p.mkdir(at, { recursive: true });
     await this.p.mkdir(upperAt, { recursive: true });
@@ -506,12 +558,21 @@ export class Hydrator {
   }
 
   /** Current deletions (journal → stamped map; stamps survive re-opens). */
-  overlayDeletions(ref: string): Map<string, number> {
+  async overlayDeletions(ref: string): Promise<Map<string, number>> {
     const overlay = this.overlays.get(ref);
     if (!overlay) return new Map();
     const live = new Set<string>();
     for (const entry of overlay.journal.entries) {
-      if (overlay.journal.isDeleted(entry.path)) live.add(entry.path);
+      // The CoW journal's `delete` log is append-only: recreating a path
+      // (createFile/mkdir/rename/write over a whited-out lower file) never
+      // clears its stale `delete` entry, so `isDeleted` keeps reporting the
+      // path as gone. Trusting it alone emitted a whiteout for a path the
+      // upper had just rewritten — and the whiteout (last layer) won the OCI
+      // merge, silently dropping the file on push. Confirm the path is truly
+      // absent from the writable upper before treating it as a deletion.
+      if (overlay.journal.isDeleted(entry.path) && !(await this.upperHas(overlay.upperAt, entry.path))) {
+        live.add(entry.path);
+      }
     }
     for (const path of live) {
       if (!overlay.deletionStamps.has(path)) overlay.deletionStamps.set(path, Date.now());
@@ -520,6 +581,16 @@ export class Hydrator {
       if (!live.has(path)) overlay.deletionStamps.delete(path); // re-created
     }
     return overlay.deletionStamps;
+  }
+
+  /** Does the overlay's writable upper currently hold this pod path? */
+  private async upperHas(upperAt: string, path: string): Promise<boolean> {
+    try {
+      await this.p.stat(`${upperAt}${path}`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   closeOverlay(ref: string): void {
