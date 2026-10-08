@@ -221,28 +221,36 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
     pod.dispose();
   });
 
-  it('a rename the writable layer rejects keeps the lower source (no whiteout)', async () => {
-    const lower = await resolveMountConfig({ backend: InMemory });
-    const upper = await resolveMountConfig({ backend: InMemory });
-    await lower.mkdir('/d', { mode: 0o40755, uid: 0, gid: 0 });
-    await lower.createFile('/d/a.txt', { mode: 0o100644, uid: 0, gid: 0 });
-    const cow = new CopyOnWriteFS(lower, upper);
-    clearWhiteoutsOnCreate(cow as unknown as CowInternals);
+  it.each([false, true])(
+    'a rename the writable layer rejects keeps the lower source (no whiteout), target exists: %s',
+    async (targetExists) => {
+      const lower = await resolveMountConfig({ backend: InMemory });
+      const upper = await resolveMountConfig({ backend: InMemory });
+      await lower.mkdir('/d', { mode: 0o40755, uid: 0, gid: 0 });
+      await lower.createFile('/d/a.txt', { mode: 0o100644, uid: 0, gid: 0 });
+      const cow = new CopyOnWriteFS(lower, upper);
+      clearWhiteoutsOnCreate(cow as unknown as CowInternals);
+      if (targetExists) {
+        // An existing upper target makes `exists(to)` true even though nothing moved.
+        await cow.mkdir('/d/b.txt', { mode: 0o40755, uid: 0, gid: 0 });
+        await cow.mkdir('/d/c.txt', { mode: 0o40755, uid: 0, gid: 0 });
+      }
 
-    // ZenFS CoW swallows writable-layer rename errors for sources that
-    // aren't already deleted; the wrapper must not white out the source.
-    const failing = () => Promise.reject(Object.assign(new Error('EIO'), { code: 'EIO' }));
-    upper.rename = failing;
-    upper.renameSync = () => {
-      throw Object.assign(new Error('EIO'), { code: 'EIO' });
-    };
+      // ZenFS CoW swallows writable-layer rename errors for sources that
+      // aren't already deleted; the wrapper must not white out the source.
+      const failing = () => Promise.reject(Object.assign(new Error('EIO'), { code: 'EIO' }));
+      upper.rename = failing;
+      upper.renameSync = () => {
+        throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      };
 
-    await expect(cow.rename('/d/a.txt', '/d/b.txt')).rejects.toThrow(/ENOENT/);
-    expect(() => cow.renameSync('/d/a.txt', '/d/c.txt')).toThrow(/ENOENT/);
-    const entries = (cow as unknown as CowInternals).journal.entries;
-    expect(entries.filter((e) => e.op === 'delete')).toEqual([]);
-    expect(await cow.exists('/d/a.txt')).toBe(true);
-  });
+      await expect(cow.rename('/d/a.txt', '/d/b.txt')).rejects.toThrow(/ENOENT/);
+      expect(() => cow.renameSync('/d/a.txt', '/d/c.txt')).toThrow(/ENOENT/);
+      const entries = (cow as unknown as CowInternals).journal.entries;
+      expect(entries.filter((e) => e.op === 'delete')).toEqual([]);
+      expect(await cow.exists('/d/a.txt')).toBe(true);
+    }
+  );
 
   it('a genuine delete (not recreated) still whites the file out', async () => {
     const pod = await openPod();
