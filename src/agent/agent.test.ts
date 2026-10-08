@@ -171,6 +171,45 @@ describe('tool surface serializers', () => {
     const read2 = await tools.get('read_file')!.execute({ filePath: '/repo/from-shell.txt' });
     expect(read2.content).toContain('shell');
   });
+
+  it('apply_patch adds, updates, moves and deletes files on the ZenFS store', async () => {
+    const tools = createSandboxTools(sandbox);
+    const applyPatch = tools.get('apply_patch')!;
+    await sandbox.exec('printf "line 1\\nline 2\\n" > /repo/edit.txt; echo bye > /repo/old.txt; echo move > /repo/from.txt');
+
+    const result = await applyPatch.execute({
+      input: [
+        '*** Begin Patch',
+        '*** Add File: /repo/new/added.txt',
+        '+hello',
+        '+world',
+        '*** Update File: /repo/edit.txt',
+        '@@',
+        ' line 1',
+        '+inserted',
+        ' line 2',
+        '*** Delete File: /repo/old.txt',
+        '*** Update File: /repo/from.txt',
+        '*** Move to: /repo/to.txt',
+        '@@',
+        '-move',
+        '+moved',
+        '*** End Patch',
+      ].join('\n'),
+      explanation: 'exercise every patch action',
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect((await sandbox.exec('cat /repo/new/added.txt')).stdout).toBe('hello\nworld');
+    expect((await sandbox.exec('cat /repo/edit.txt')).stdout).toBe('line 1\ninserted\nline 2\n');
+    expect((await sandbox.exec('cat /repo/to.txt')).stdout).toBe('moved\n');
+    expect((await sandbox.exec('ls /repo')).stdout.split('\n').filter(Boolean).sort()).toEqual([
+      'edit.txt',
+      'new',
+      'to.txt',
+    ]);
+  });
 });
 
 describe('truncateOutput', () => {
