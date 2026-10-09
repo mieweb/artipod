@@ -341,8 +341,8 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
       await expect(mv('/src', '/plain.txt')).rejects.toThrow(/ENOTDIR/);
       await expect(mv('/src', '/src/inner')).rejects.toThrow(/EINVAL/);
 
-      const entries = (cow as unknown as CowInternals).journal.entries;
-      expect(entries.filter((e) => e.op === 'delete')).toEqual([]);
+      const deletes = () => (cow as unknown as CowInternals).journal.entries.filter((e) => e.op === 'delete');
+      expect(deletes()).toEqual([]);
       expect(cow.readdirSync('/full')).toEqual(['kid.txt']);
       expect(cow.existsSync('/f.txt') && cow.existsSync('/src/s.txt')).toBe(true);
 
@@ -350,9 +350,31 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
       await mv('/f.txt', '/plain.txt');
       expect(upper.existsSync('/plain.txt')).toBe(true);
       expect(cow.existsSync('/f.txt')).toBe(false);
-      expect(entries.filter((e) => e.op === 'delete')).toEqual([]);
+      // The rename replaces journal.entries, so read it again.
+      expect(deletes()).toEqual([]);
     }
   );
+
+  it.each(['async', 'sync'] as const)('%s rename stops when the destination lookup fails', async (mode) => {
+    const lower = await resolveMountConfig({ backend: InMemory });
+    const upper = await resolveMountConfig({ backend: InMemory });
+    const cow = new CopyOnWriteFS(lower, upper);
+    clearWhiteoutsOnCreate(cow as unknown as CowInternals);
+    await cow.createFile('/a.txt', { mode: 0o100644, uid: 0, gid: 0 });
+
+    const eio = () => Object.assign(new Error('EIO'), { code: 'EIO' });
+    const { stat, statSync } = cow;
+    cow.stat = (path) => (path === '/b.txt' ? Promise.reject(eio()) : stat.call(cow, path));
+    cow.statSync = (path) => {
+      if (path === '/b.txt') throw eio();
+      return statSync.call(cow, path);
+    };
+
+    const mv = async () => (mode === 'async' ? cow.rename('/a.txt', '/b.txt') : cow.renameSync('/a.txt', '/b.txt'));
+    await expect(mv()).rejects.toThrow(/EIO/);
+    expect(upper.existsSync('/a.txt')).toBe(true);
+    expect(upper.existsSync('/b.txt')).toBe(false);
+  });
 
   it('a genuine delete (not recreated) still whites the file out', async () => {
     const pod = await openPod();
