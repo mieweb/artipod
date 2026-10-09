@@ -181,6 +181,26 @@ export class ArtiMount {
   }
 
   /**
+   * Delete a file from the mount
+   * @param relativePath - Path relative to mount root
+   * @throws Error if mount is read-only or the file does not exist
+   */
+  async remove(relativePath: string): Promise<void> {
+    if (this.readonly) {
+      throw new Error(`Cannot delete from read-only mount '${this.name}'`);
+    }
+    const fullPath = this._resolve(relativePath);
+    try {
+      await this.fs.rm(fullPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`File not found: ${relativePath}`, { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Create a folder in the mount
    * @param relativePath - Path relative to mount root
    * @throws Error if mount is read-only

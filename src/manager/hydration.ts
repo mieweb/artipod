@@ -28,6 +28,203 @@ const PARTIAL_DIR = '/.artipod/oci/partial';
 
 const decoder = new TextDecoder();
 
+/** The parts of ZenFS's CopyOnWriteFS that {@link clearWhiteoutsOnCreate} patches. */
+interface CowLayer {
+  exists(path: string): Promise<boolean>;
+  existsSync(path: string): boolean;
+  stat(path: string): Promise<{ mode: number }>;
+  statSync(path: string): { mode: number };
+  readdir(path: string): Promise<string[]>;
+  readdirSync(path: string): string[];
+  mkdir(path: string, options: object): Promise<unknown>;
+  mkdirSync(path: string, options: object): unknown;
+}
+export interface CowInternals extends Pick<CowLayer, 'stat' | 'statSync' | 'readdir' | 'readdirSync'> {
+  journal: { entries: { op: string; path: string }[] };
+  readable: CowLayer;
+  writable: CowLayer;
+  createParentDirectories(path: string): Promise<void>;
+  createParentDirectoriesSync(path: string): void;
+  copyToWritable(path: string): Promise<void>;
+  copyToWritableSync(path: string): void;
+  [method: string]: unknown;
+}
+
+const isDir = (stats: { mode: number }) => (stats.mode & 0o170000) === 0o040000;
+const child = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
+
+const renameFailed = (from: string, to: string) =>
+  Object.assign(new Error(`ENOENT: rename '${from}' -> '${to}' did not land in the overlay`), { code: 'ENOENT' });
+const renameRejected = (code: string, from: string, to: string) =>
+  Object.assign(new Error(`${code}: rename '${from}' -> '${to}'`), { code });
+/** A missing destination is fine; any other lookup failure must stop the rename. */
+const absentOnly = (error: unknown): undefined => {
+  if ((error as { code?: string } | null)?.code === 'ENOENT') return undefined;
+  throw error;
+};
+
+/**
+ * The upper may lack a destination that only the lower has, so it would accept
+ * moves the merged tree must refuse (POSIX rename rules).
+ */
+function checkRenameTarget(
+  from: string,
+  to: string,
+  fromIsDir: boolean,
+  target: { mode: number } | undefined,
+  targetEntries: () => string[]
+): void {
+  if (fromIsDir && to.startsWith(`${from}/`)) throw renameRejected('EINVAL', from, to);
+  if (!target) return;
+  if (isDir(target)) {
+    if (!fromIsDir) throw renameRejected('EISDIR', from, to);
+    if (targetEntries().length) throw renameRejected('ENOTEMPTY', from, to);
+  } else if (fromIsDir) {
+    throw renameRejected('ENOTDIR', from, to);
+  }
+}
+
+/**
+ * ZenFS's CopyOnWrite journal is append-only: once a lower path is deleted,
+ * `isDeleted` stays true even after the path is created again in the upper.
+ * `readdir` then hides the new file while `stat`/`read` still find it, and
+ * the push emits a whiteout over it. Clear a path's delete entries whenever
+ * the overlay creates it. `rename` also never whites out a lower source, so
+ * the moved file would reappear at its old path; record those deletions for
+ * the whole source tree, as `rm -rf` would.
+ * ZenFS swallows a failed upper-layer rename (e.g. into a directory that only
+ * exists in the lower layer), so copy the target's parents up first and only
+ * touch the journal once the source has left the upper and the target is in it.
+ */
+/** @internal Exported for tests. */
+export function clearWhiteoutsOnCreate(cow: CowInternals): void {
+  const forget = (path: string) => {
+    cow.journal.entries = cow.journal.entries.filter((e) => !(e.op === 'delete' && e.path === path));
+  };
+  const whiteOut = (path: string) => {
+    cow.journal.entries.push({ op: 'delete', path });
+  };
+  const wrap = (name: string, createdArg: number) => {
+    const original = cow[name] as ((...args: unknown[]) => unknown) | undefined;
+    if (typeof original !== 'function') return;
+    cow[name] = function (this: unknown, ...args: unknown[]) {
+      const result = original.apply(this, args);
+      if (result instanceof Promise) return result.then((value) => (forget(args[createdArg] as string), value));
+      forget(args[createdArg] as string);
+      return result;
+    };
+  };
+  for (const name of ['createFile', 'createFileSync', 'mkdir', 'mkdirSync']) wrap(name, 0);
+  for (const name of ['link', 'linkSync']) wrap(name, 1);
+
+  const rename = cow.rename as (from: string, to: string) => Promise<void>;
+  const renameSync = cow.renameSync as (from: string, to: string) => void;
+  const { readable, writable } = cow;
+  const isDeleted = (path: string) => cow.journal.entries.some((e) => e.op === 'delete' && e.path === path);
+  const forgetTree = (root: string) => {
+    cow.journal.entries = cow.journal.entries.filter(
+      (e) => !(e.op === 'delete' && (e.path === root || e.path.startsWith(`${root}/`)))
+    );
+  };
+
+  // `rename` of a directory only moves what is already in the upper, so copy
+  // up the merged subtree first (ZenFS's own copy-up ignores the journal).
+  const materialize = async (dir: string): Promise<void> => {
+    for (const name of await cow.readdir(dir)) {
+      const path = child(dir, name);
+      if (await writable.exists(path)) {
+        if (isDir(await writable.stat(path))) await materialize(path);
+        continue;
+      }
+      const stats = await readable.stat(path);
+      if (!isDir(stats)) {
+        await cow.copyToWritable(path);
+        continue;
+      }
+      await writable.mkdir(path, stats);
+      await materialize(path);
+    }
+  };
+  const materializeSync = (dir: string): void => {
+    for (const name of cow.readdirSync(dir)) {
+      const path = child(dir, name);
+      if (writable.existsSync(path)) {
+        if (isDir(writable.statSync(path))) materializeSync(path);
+        continue;
+      }
+      const stats = readable.statSync(path);
+      if (!isDir(stats)) {
+        cow.copyToWritableSync(path);
+        continue;
+      }
+      writable.mkdirSync(path, stats);
+      materializeSync(path);
+    }
+  };
+  const lowerTree = async (root: string): Promise<string[]> => {
+    if (!(await readable.exists(root))) return [];
+    const paths = [root];
+    if (isDir(await readable.stat(root))) {
+      for (const name of await readable.readdir(root)) paths.push(...(await lowerTree(child(root, name))));
+    }
+    return paths;
+  };
+  const lowerTreeSync = (root: string): string[] => {
+    if (!readable.existsSync(root)) return [];
+    const paths = [root];
+    if (isDir(readable.statSync(root))) {
+      for (const name of readable.readdirSync(root)) paths.push(...lowerTreeSync(child(root, name)));
+    }
+    return paths;
+  };
+
+  cow.rename = async function (this: unknown, from: string, to: string) {
+    if (from === to) return rename.call(this, from, to);
+    const fromIsDir = isDir(await cow.stat(from));
+    const target = await cow.stat(to).catch(absentOnly);
+    const targetEntries = target && isDir(target) ? await cow.readdir(to) : [];
+    checkRenameTarget(from, to, fromIsDir, target, () => targetEntries);
+    const source = await lowerTree(from);
+    if (fromIsDir) {
+      await cow.createParentDirectories(from);
+      if (!(await writable.exists(from))) await writable.mkdir(from, await readable.stat(from));
+      await materialize(from);
+    }
+    await cow.createParentDirectories(to);
+    await rename.call(this, from, to);
+    // A pre-existing target also passes `exists(to)`, so require the source to be gone too.
+    if ((await writable.exists(from)) || !(await writable.exists(to))) throw renameFailed(from, to);
+    // The upper now holds the whole target tree: drop stale deletes under it
+    // and hide whatever the lower still has there.
+    forgetTree(to);
+    for (const path of await lowerTree(to)) if (!(await writable.exists(path))) whiteOut(path);
+    for (const path of source) if (!isDeleted(path)) whiteOut(path);
+  };
+  cow.renameSync = function (this: unknown, from: string, to: string) {
+    if (from === to) return renameSync.call(this, from, to);
+    const fromIsDir = isDir(cow.statSync(from));
+    let target: { mode: number } | undefined;
+    try {
+      target = cow.statSync(to);
+    } catch (error) {
+      target = absentOnly(error);
+    }
+    checkRenameTarget(from, to, fromIsDir, target, () => cow.readdirSync(to));
+    const source = lowerTreeSync(from);
+    if (fromIsDir) {
+      cow.createParentDirectoriesSync(from);
+      if (!writable.existsSync(from)) writable.mkdirSync(from, readable.statSync(from));
+      materializeSync(from);
+    }
+    cow.createParentDirectoriesSync(to);
+    renameSync.call(this, from, to);
+    if (writable.existsSync(from) || !writable.existsSync(to)) throw renameFailed(from, to);
+    forgetTree(to);
+    for (const path of lowerTreeSync(to)) if (!writable.existsSync(path)) whiteOut(path);
+    for (const path of source) if (!isDeleted(path)) whiteOut(path);
+  };
+}
+
 /** `**` crosses `/`, `*` doesn't; leading `/` on paths is ignored. */
 export function pathGlobMatch(pattern: string, path: string): boolean {
   const p = path.replace(/^\/+/, '');
@@ -484,6 +681,7 @@ export class Hydrator {
         : ((opts?.upperConfig ?? { backend: zen.InMemory, label: `upper:${ref}` }) as never),
       ...(existing ? { journal: existing.journal as never } : {}),
     } as never);
+    clearWhiteoutsOnCreate(cow as unknown as CowInternals);
     const upperAt = `/.artipod/upper/${encodeURIComponent(ref)}`;
     await this.p.mkdir(at, { recursive: true });
     await this.p.mkdir(upperAt, { recursive: true });
@@ -505,7 +703,11 @@ export class Hydrator {
     });
   }
 
-  /** Current deletions (journal → stamped map; stamps survive re-opens). */
+  /**
+   * Current deletions (journal → stamped map; stamps survive re-opens).
+   * Accurate for re-created paths because {@link clearWhiteoutsOnCreate}
+   * drops a path's delete entries when the overlay creates it again.
+   */
   overlayDeletions(ref: string): Map<string, number> {
     const overlay = this.overlays.get(ref);
     if (!overlay) return new Map();

@@ -842,24 +842,29 @@ export async function processPatch(
 }
 
 /**
- * Apply a commit to the filesystem
+ * Apply a commit to the filesystem.
+ * Changes are applied sequentially; each callback is awaited before the next
+ * so async filesystem backends never see overlapping writes. `samePath`
+ * decides whether a move's source and destination name the same file, in
+ * which case the source is not removed.
  */
-export function applyCommit(
+export async function applyCommit(
   commit: Commit,
-  writeFn: (path: string, content: string) => void,
-  removeFn: (path: string) => void
-): void {
+  writeFn: (path: string, content: string) => void | Promise<void>,
+  removeFn: (path: string) => void | Promise<void>,
+  samePath: (a: string, b: string) => boolean = (a, b) => a === b
+): Promise<void> {
   for (const [p, change] of Object.entries(commit.changes)) {
     if (change.type === ActionType.DELETE) {
-      removeFn(p);
+      await removeFn(p);
     } else if (change.type === ActionType.ADD) {
-      writeFn(p, change.newContent ?? '');
+      await writeFn(p, change.newContent ?? '');
     } else if (change.type === ActionType.UPDATE) {
-      if (change.movePath) {
-        writeFn(change.movePath, change.newContent ?? '');
-        removeFn(p);
+      if (change.movePath && !samePath(change.movePath, p)) {
+        await writeFn(change.movePath, change.newContent ?? '');
+        await removeFn(p);
       } else {
-        writeFn(p, change.newContent ?? '');
+        await writeFn(p, change.newContent ?? '');
       }
     }
   }
