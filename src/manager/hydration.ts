@@ -57,6 +57,11 @@ const renameFailed = (from: string, to: string) =>
   Object.assign(new Error(`ENOENT: rename '${from}' -> '${to}' did not land in the overlay`), { code: 'ENOENT' });
 const renameRejected = (code: string, from: string, to: string) =>
   Object.assign(new Error(`${code}: rename '${from}' -> '${to}'`), { code });
+/** A missing destination is fine; any other lookup failure must stop the rename. */
+const absentOnly = (error: unknown): undefined => {
+  if ((error as { code?: string } | null)?.code === 'ENOENT') return undefined;
+  throw error;
+};
 
 /**
  * The upper may lack a destination that only the lower has, so it would accept
@@ -176,7 +181,7 @@ export function clearWhiteoutsOnCreate(cow: CowInternals): void {
   cow.rename = async function (this: unknown, from: string, to: string) {
     if (from === to) return rename.call(this, from, to);
     const fromIsDir = isDir(await cow.stat(from));
-    const target = await cow.stat(to).catch(() => undefined);
+    const target = await cow.stat(to).catch(absentOnly);
     const targetEntries = target && isDir(target) ? await cow.readdir(to) : [];
     checkRenameTarget(from, to, fromIsDir, target, () => targetEntries);
     const source = await lowerTree(from);
@@ -201,8 +206,8 @@ export function clearWhiteoutsOnCreate(cow: CowInternals): void {
     let target: { mode: number } | undefined;
     try {
       target = cow.statSync(to);
-    } catch {
-      target = undefined;
+    } catch (error) {
+      target = absentOnly(error);
     }
     checkRenameTarget(from, to, fromIsDir, target, () => cow.readdirSync(to));
     const source = lowerTreeSync(from);
