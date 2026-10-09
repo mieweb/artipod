@@ -153,7 +153,7 @@
     }
   },
   "dependencies": {
-    "core-js": "3.49.0",
+    "core-js": "3.50.0",
     "jose": "6.2.12"
   },
   "overrides": {
