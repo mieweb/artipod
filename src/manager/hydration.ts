@@ -38,6 +38,10 @@ interface CowLayer {
   readdirSync(path: string): string[];
   mkdir(path: string, options: object): Promise<unknown>;
   mkdirSync(path: string, options: object): unknown;
+  rmdir(path: string): Promise<void>;
+  rmdirSync(path: string): void;
+  touch(path: string, metadata: object): Promise<void>;
+  touchSync(path: string, metadata: object): void;
 }
 export interface CowInternals extends Pick<CowLayer, 'stat' | 'statSync' | 'readdir' | 'readdirSync'> {
   journal: { entries: { op: string; path: string }[] };
@@ -95,6 +99,9 @@ function checkRenameTarget(
  * ZenFS swallows a failed upper-layer rename (e.g. into a directory that only
  * exists in the lower layer), so copy the target's parents up first and only
  * touch the journal once the source has left the upper and the target is in it.
+ * The upper also refuses any existing directory as a target (`EISDIR`), even
+ * the empty one POSIX lets a directory replace, so remove that one from the
+ * upper first and put it back if the move fails.
  */
 /** @internal Exported for tests. */
 export function clearWhiteoutsOnCreate(cow: CowInternals): void {
@@ -191,9 +198,20 @@ export function clearWhiteoutsOnCreate(cow: CowInternals): void {
       await materialize(from);
     }
     await cow.createParentDirectories(to);
-    await rename.call(this, from, to);
-    // A pre-existing target also passes `exists(to)`, so require the source to be gone too.
-    if ((await writable.exists(from)) || !(await writable.exists(to))) throw renameFailed(from, to);
+    // checkRenameTarget has verified a directory target is empty.
+    const replaced = fromIsDir && target && (await writable.exists(to)) ? await writable.stat(to) : undefined;
+    if (replaced) await writable.rmdir(to);
+    try {
+      await rename.call(this, from, to);
+      // A pre-existing target also passes `exists(to)`, so require the source to be gone too.
+      if ((await writable.exists(from)) || !(await writable.exists(to))) throw renameFailed(from, to);
+    } catch (error) {
+      if (replaced && !(await writable.exists(to))) {
+        await writable.mkdir(to, replaced);
+        await writable.touch(to, replaced);
+      }
+      throw error;
+    }
     // The upper now holds the whole target tree: drop stale deletes under it
     // and hide whatever the lower still has there.
     forgetTree(to);
@@ -217,8 +235,18 @@ export function clearWhiteoutsOnCreate(cow: CowInternals): void {
       materializeSync(from);
     }
     cow.createParentDirectoriesSync(to);
-    renameSync.call(this, from, to);
-    if (writable.existsSync(from) || !writable.existsSync(to)) throw renameFailed(from, to);
+    const replaced = fromIsDir && target && writable.existsSync(to) ? writable.statSync(to) : undefined;
+    if (replaced) writable.rmdirSync(to);
+    try {
+      renameSync.call(this, from, to);
+      if (writable.existsSync(from) || !writable.existsSync(to)) throw renameFailed(from, to);
+    } catch (error) {
+      if (replaced && !writable.existsSync(to)) {
+        writable.mkdirSync(to, replaced);
+        writable.touchSync(to, replaced);
+      }
+      throw error;
+    }
     forgetTree(to);
     for (const path of lowerTreeSync(to)) if (!writable.existsSync(path)) whiteOut(path);
     for (const path of source) if (!isDeleted(path)) whiteOut(path);

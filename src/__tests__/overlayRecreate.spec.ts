@@ -376,6 +376,128 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
     expect(upper.existsSync('/b.txt')).toBe(false);
   });
 
+  const dirStats = { mode: 0o40755, uid: 0, gid: 0 };
+  const fileStats = { mode: 0o100644, uid: 0, gid: 0 };
+
+  /** Upper-only `/a/x` and an empty upper `/b`. */
+  async function upperDirs(lowerSetup?: (lower: Awaited<ReturnType<typeof resolveMountConfig>>) => Promise<void>) {
+    const lower = await resolveMountConfig({ backend: InMemory });
+    const upper = await resolveMountConfig({ backend: InMemory });
+    await lowerSetup?.(lower);
+    const cow = new CopyOnWriteFS(lower, upper);
+    return { lower, upper, cow };
+  }
+  async function seedUpper(cow: CopyOnWriteFS) {
+    await cow.mkdir('/a', dirStats);
+    await cow.createFile('/a/x', fileStats);
+    await cow.mkdir('/b', { mode: 0o40700, uid: 7, gid: 7 });
+  }
+  const deletesOf = (cow: CopyOnWriteFS) =>
+    (cow as unknown as CowInternals).journal.entries.filter((e) => e.op === 'delete').map((e) => e.path);
+
+  it.each(['async', 'sync'] as const)('%s rename of a dir onto an empty upper dir replaces it', async (mode) => {
+    const { upper, cow } = await upperDirs();
+    clearWhiteoutsOnCreate(cow as unknown as CowInternals);
+    await seedUpper(cow);
+    const moved = upper.statSync('/a/x').ino;
+
+    if (mode === 'async') await cow.rename('/a', '/b');
+    else cow.renameSync('/a', '/b');
+
+    expect(cow.readdirSync('/b')).toEqual(['x']);
+    expect(upper.statSync('/b/x').ino).toBe(moved);
+    expect(cow.existsSync('/a')).toBe(false);
+    expect(upper.existsSync('/a')).toBe(false);
+    expect(deletesOf(cow)).toEqual([]);
+  });
+
+  it.each([
+    ['async', 'swallowed'],
+    ['async', 'thrown'],
+    ['sync', 'swallowed'],
+    ['sync', 'thrown'],
+  ] as const)('%s rename onto an empty upper dir restores it when the move fails (%s)', async (mode, failure) => {
+    const { upper, cow } = await upperDirs();
+    const eio = () => Object.assign(new Error('EIO'), { code: 'EIO' });
+    if (failure === 'thrown') {
+      // The overlay's own rename throws (CoW rethrows for deleted sources).
+      cow.rename = () => Promise.reject(eio());
+      cow.renameSync = () => {
+        throw eio();
+      };
+    }
+    clearWhiteoutsOnCreate(cow as unknown as CowInternals);
+    await seedUpper(cow);
+    const before = upper.statSync('/b');
+    if (failure === 'swallowed') {
+      // ZenFS CoW swallows writable-layer rename errors.
+      upper.rename = () => Promise.reject(eio());
+      upper.renameSync = () => {
+        throw eio();
+      };
+    }
+
+    const mv = async () => (mode === 'async' ? cow.rename('/a', '/b') : cow.renameSync('/a', '/b'));
+    await expect(mv()).rejects.toThrow(failure === 'thrown' ? /EIO/ : /ENOENT/);
+
+    const after = upper.statSync('/b');
+    expect([after.mode, after.uid, after.gid, after.mtimeMs]).toEqual([before.mode, before.uid, before.gid, before.mtimeMs]);
+    expect(cow.readdirSync('/b')).toEqual([]);
+    expect(cow.readdirSync('/a')).toEqual(['x']);
+    expect(deletesOf(cow)).toEqual([]);
+  });
+
+  it.each(['async', 'sync'] as const)(
+    '%s rename onto an empty upper dir that also exists in the lower keeps lower children hidden',
+    async (mode) => {
+      const { cow } = await upperDirs(async (lower) => {
+        await lower.mkdir('/b', dirStats);
+        await lower.createFile('/b/old.txt', fileStats);
+        await lower.mkdir('/c', dirStats);
+      });
+      clearWhiteoutsOnCreate(cow as unknown as CowInternals);
+      // rm -rf /b; mkdir /b — /b is empty in the merged view, /b/old.txt is whited out.
+      await cow.unlink('/b/old.txt');
+      await cow.rmdir('/b');
+      await seedUpper(cow);
+      // A lower-only empty dir is a valid target too.
+      await cow.mkdir('/e', dirStats);
+      await cow.createFile('/e/y', fileStats);
+
+      const mv = async (from: string, to: string) => (mode === 'async' ? cow.rename(from, to) : cow.renameSync(from, to));
+      await mv('/a', '/b');
+      await mv('/e', '/c');
+
+      expect(cow.readdirSync('/b')).toEqual(['x']);
+      expect(cow.existsSync('/b/old.txt')).toBe(false);
+      expect(cow.readdirSync('/c')).toEqual(['y']);
+      expect(cow.existsSync('/a') || cow.existsSync('/e')).toBe(false);
+      expect(deletesOf(cow)).toEqual(['/b/old.txt']);
+    }
+  );
+
+  it('rename of a dir over a recreated empty lower dir survives the push', async () => {
+    const pod = await openPod();
+    const shell = pod.createSandbox({ confineTo: '/project' });
+
+    await shell.exec('rm -rf /d');
+    await shell.exec('mkdir /d');
+    await shell.exec('mkdir /x');
+    await shell.exec('printf new > /x/a.txt');
+    // `mv /x /d` would move into /d, so rename directly (rename(2) semantics).
+    await zfs.promises.rename('/project/x', '/project/d');
+    expect((await shell.exec('ls /d')).stdout).toBe('a.txt\n');
+
+    const push = await pod.pushBasis();
+    expect(push?.pushed).toBe(true);
+
+    await materializeRef(remote, REF, dir);
+    expect(await nodeReadFile(join(dir, 'd', 'a.txt'), 'utf8')).toBe('new');
+    expect(existsSync(join(dir, 'd', 'keep.txt'))).toBe(false);
+    expect(existsSync(join(dir, 'x'))).toBe(false);
+    pod.dispose();
+  });
+
   it('a genuine delete (not recreated) still whites the file out', async () => {
     const pod = await openPod();
     const shell = pod.createSandbox({ confineTo: '/project' });
