@@ -81,7 +81,11 @@ beforeEach(async () => {
   for (const f of ['d/a.txt', 'd/keep.txt']) await utimes(join(dir, f), t, t);
   remote = memStore();
   await publishDirectory(remote, dir, REF, { actor: 'server:test' });
+  await resetZen();
+});
 
+/** A fresh ZenFS root, as a new process would see it. */
+async function resetZen() {
   for (const path of [...zenMounts.keys()]) if (path !== '/') umount(path);
   try {
     umount('/');
@@ -89,7 +93,7 @@ beforeEach(async () => {
     // fresh process
   }
   await configure({ mounts: { '/': InMemory } });
-});
+}
 
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -497,6 +501,48 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
     expect(existsSync(join(dir, 'x'))).toBe(false);
     pod.dispose();
   });
+
+  it.each(['mkdir', 'empty mkdir', 'rename', 'renameSync'] as const)(
+    'a directory replacing a deleted lower file survives push and reopen (%s)',
+    async (how) => {
+      const pod = await openPod();
+      const shell = pod.createSandbox({ confineTo: '/project' });
+
+      await shell.exec('rm -f /d/a.txt');
+      if (how === 'mkdir' || how === 'empty mkdir') {
+        await shell.exec('mkdir /d/a.txt');
+        if (how === 'mkdir') await shell.exec('printf new > /d/a.txt/new.txt');
+      } else {
+        await shell.exec('mkdir /x');
+        await shell.exec('printf new > /x/new.txt');
+        if (how === 'rename') await zfs.promises.rename('/project/x', '/project/d/a.txt');
+        else zfs.renameSync('/project/x', '/project/d/a.txt');
+      }
+      const children = how === 'empty mkdir' ? '' : 'new.txt\n';
+      expect((await shell.exec('ls /d/a.txt')).stdout).toBe(children);
+
+      expect((await pod.pushBasis())?.pushed).toBe(true);
+      pod.dispose();
+
+      // A fresh reader: the old file must not shadow the directory.
+      const fresh = await mkdtemp(join(tmpdir(), 'replace-'));
+      try {
+        await materializeRef(remote, REF, fresh);
+        expect(await nodeReadFile(join(fresh, 'd', 'keep.txt'), 'utf8')).toBe('keep');
+        if (children) expect(await nodeReadFile(join(fresh, 'd', 'a.txt', 'new.txt'), 'utf8')).toBe('new');
+      } finally {
+        await rm(fresh, { recursive: true, force: true });
+      }
+
+      await resetZen();
+      const reopened = await openPod();
+      const again = reopened.createSandbox({ confineTo: '/project' });
+      expect((await again.exec('test -d /d/a.txt && ls /d/a.txt')).stdout).toBe(children);
+      expect((await again.exec('ls /d')).stdout).toBe('a.txt\nkeep.txt\n');
+      if (children) expect((await again.exec('cat /d/a.txt/new.txt')).stdout).toBe('new');
+      reopened.dispose();
+    }
+  );
 
   it('a genuine delete (not recreated) still whites the file out', async () => {
     const pod = await openPod();

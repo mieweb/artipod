@@ -101,7 +101,8 @@ function checkRenameTarget(
  * touch the journal once the source has left the upper and the target is in it.
  * The upper also refuses any existing directory as a target (`EISDIR`), even
  * the empty one POSIX lets a directory replace, so remove that one from the
- * upper first and put it back if the move fails.
+ * upper first and put it back if the move fails. A directory re-created where
+ * the lower has a file lists from the upper alone.
  */
 /** @internal Exported for tests. */
 export function clearWhiteoutsOnCreate(cow: CowInternals): void {
@@ -132,6 +133,23 @@ export function clearWhiteoutsOnCreate(cow: CowInternals): void {
     cow.journal.entries = cow.journal.entries.filter(
       (e) => !(e.op === 'delete' && (e.path === root || e.path.startsWith(`${root}/`)))
     );
+  };
+
+  // A directory that replaced a lower file can't list through the lower
+  // (ENOTDIR), and nothing under it comes from there.
+  const { readdir, readdirSync } = cow;
+  const upperOnly = (path: string, names: string[]) => names.filter((name) => !isDeleted(child(path, name)));
+  cow.readdir = async function (this: unknown, path: string) {
+    if ((await writable.exists(path)) && (await readable.exists(path)) && !isDir(await readable.stat(path))) {
+      return upperOnly(path, await writable.readdir(path));
+    }
+    return readdir.call(this, path);
+  };
+  cow.readdirSync = function (this: unknown, path: string) {
+    if (writable.existsSync(path) && readable.existsSync(path) && !isDir(readable.statSync(path))) {
+      return upperOnly(path, writable.readdirSync(path));
+    }
+    return readdirSync.call(this, path);
   };
 
   // `rename` of a directory only moves what is already in the upper, so copy
