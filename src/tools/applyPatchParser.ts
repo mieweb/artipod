@@ -841,31 +841,72 @@ export async function processPatch(
   return patchToCommit(patch, orig);
 }
 
+type CommitOperation =
+  | { kind: 'write'; path: string; content: string }
+  | { kind: 'remove'; path: string };
+
+type SamePathFn = (a: string, b: string) => boolean;
+
+const identicalPaths: SamePathFn = (a, b) => a === b;
+
 /**
- * Apply a commit to the filesystem.
- * Changes are applied sequentially; each callback is awaited before the next
- * so async filesystem backends never see overlapping writes. `samePath`
- * decides whether a move's source and destination name the same file, in
- * which case the source is not removed.
+ * The filesystem operations a commit needs, in order. `samePath` decides
+ * whether a move's source and destination name the same file, in which case
+ * the source is not removed.
  */
-export async function applyCommit(
+function* commitOperations(commit: Commit, samePath: SamePathFn): Generator<CommitOperation> {
+  for (const [p, change] of Object.entries(commit.changes)) {
+    const content = change.newContent ?? '';
+    if (change.type === ActionType.DELETE) {
+      yield { kind: 'remove', path: p };
+    } else if (change.type === ActionType.ADD) {
+      yield { kind: 'write', path: p, content };
+    } else if (change.type === ActionType.UPDATE) {
+      if (change.movePath && !samePath(change.movePath, p)) {
+        yield { kind: 'write', path: change.movePath, content };
+        yield { kind: 'remove', path: p };
+      } else {
+        yield { kind: 'write', path: p, content };
+      }
+    }
+  }
+}
+
+/**
+ * Apply a commit to the filesystem with synchronous callbacks.
+ * Use `applyCommitAsync` when the callbacks return promises.
+ */
+export function applyCommit(
+  commit: Commit,
+  writeFn: (path: string, content: string) => void,
+  removeFn: (path: string) => void,
+  samePath: SamePathFn = identicalPaths
+): void {
+  for (const op of commitOperations(commit, samePath)) {
+    if (op.kind === 'write') {
+      writeFn(op.path, op.content);
+    } else {
+      removeFn(op.path);
+    }
+  }
+}
+
+/**
+ * Apply a commit to the filesystem with async callbacks.
+ * Each callback is awaited before the next so async filesystem backends
+ * never see overlapping writes.
+ */
+export async function applyCommitAsync(
   commit: Commit,
   writeFn: (path: string, content: string) => void | Promise<void>,
   removeFn: (path: string) => void | Promise<void>,
-  samePath: (a: string, b: string) => boolean = (a, b) => a === b
+  samePath: SamePathFn = identicalPaths
 ): Promise<void> {
-  for (const [p, change] of Object.entries(commit.changes)) {
-    if (change.type === ActionType.DELETE) {
-      await removeFn(p);
-    } else if (change.type === ActionType.ADD) {
-      await writeFn(p, change.newContent ?? '');
-    } else if (change.type === ActionType.UPDATE) {
-      if (change.movePath && !samePath(change.movePath, p)) {
-        await writeFn(change.movePath, change.newContent ?? '');
-        await removeFn(p);
-      } else {
-        await writeFn(p, change.newContent ?? '');
-      }
+  for (const op of commitOperations(commit, samePath)) {
+    if (op.kind === 'write') {
+      await writeFn(op.path, op.content);
+    } else {
+      await removeFn(op.path);
     }
   }
 }

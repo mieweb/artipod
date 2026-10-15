@@ -14,7 +14,7 @@ import { applyPatchDefinition } from './definitions.js';
 import { resolvePosix } from '../pathUtils.js';
 import {
   processPatch,
-  applyCommit,
+  applyCommitAsync,
   SimpleTextDocument,
   DiffError,
   InvalidPatchFormatError,
@@ -56,8 +56,7 @@ export class ApplyPatchTool implements ToolHandler<IApplyPatchParams, EditResult
       const changedFiles: string[] = [];
       let totalLinesChanged = 0;
 
-      // Apply the commit (sequentially awaited — see applyCommit)
-      await applyCommit(
+      await applyCommitAsync(
         commit,
         async (filePath: string, content: string) => {
           await this.mount.write(this.resolveRelativePath(filePath), content);
