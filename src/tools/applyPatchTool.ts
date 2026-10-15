@@ -11,14 +11,14 @@ import {
   IApplyPatchParams,
 } from './types.js';
 import { applyPatchDefinition } from './definitions.js';
+import { resolvePosix } from '../pathUtils.js';
 import {
   processPatch,
-  applyCommit,
+  applyCommitAsync,
   SimpleTextDocument,
   DiffError,
   InvalidPatchFormatError,
   InvalidContextError,
-  ActionType,
 } from './applyPatchParser.js';
 
 /**
@@ -56,36 +56,19 @@ export class ApplyPatchTool implements ToolHandler<IApplyPatchParams, EditResult
       const changedFiles: string[] = [];
       let totalLinesChanged = 0;
 
-      // Apply the commit
-      applyCommit(
+      await applyCommitAsync(
         commit,
-        // Write function
         async (filePath: string, content: string) => {
-          const relativePath = this.resolveRelativePath(filePath);
-          await this.mount.write(relativePath, content);
+          await this.mount.write(this.resolveRelativePath(filePath), content);
           changedFiles.push(filePath);
           totalLinesChanged += content.split('\n').length;
         },
-        // Remove function (for delete operations)
         async (filePath: string) => {
-          // For now, we don't support file deletion in ArtiMount
-          // This would require adding a delete method
+          await this.mount.remove(this.resolveRelativePath(filePath));
           changedFiles.push(filePath + ' (deleted)');
-        }
+        },
+        (a: string, b: string) => this.resolveMountPath(a) === this.resolveMountPath(b)
       );
-
-      // Write files from commit
-      for (const [filePath, change] of Object.entries(commit.changes)) {
-        const relativePath = this.resolveRelativePath(filePath);
-        
-        if (change.type === ActionType.ADD || change.type === ActionType.UPDATE) {
-          const content = change.newContent ?? '';
-          await this.mount.write(relativePath, content);
-          changedFiles.push(filePath);
-          totalLinesChanged += content.split('\n').length;
-        }
-        // Note: DELETE operations would require a delete method on ArtiMount
-      }
 
       return {
         success: true,
@@ -133,6 +116,11 @@ export class ApplyPatchTool implements ToolHandler<IApplyPatchParams, EditResult
       return filePath.substring(rootPath.length).replace(/^\//, '');
     }
     return filePath.replace(/^\//, '');
+  }
+
+  /** The absolute path the mount reads and writes for `filePath`, as ArtiMount resolves it. */
+  private resolveMountPath(filePath: string): string {
+    return resolvePosix(this.mount.getRootPath(), this.resolveRelativePath(filePath));
   }
 
   private getLanguageId(filePath: string): string {
