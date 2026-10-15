@@ -67,8 +67,7 @@ export class ApplyPatchTool implements ToolHandler<IApplyPatchParams, EditResult
           await this.mount.remove(this.resolveRelativePath(filePath));
           changedFiles.push(filePath + ' (deleted)');
         },
-        (a: string, b: string) =>
-          resolvePosix('/', this.resolveRelativePath(a)) === resolvePosix('/', this.resolveRelativePath(b))
+        (a: string, b: string) => this.resolveMountPath(a) === this.resolveMountPath(b)
       );
 
       return {
@@ -117,6 +116,11 @@ export class ApplyPatchTool implements ToolHandler<IApplyPatchParams, EditResult
       return filePath.substring(rootPath.length).replace(/^\//, '');
     }
     return filePath.replace(/^\//, '');
+  }
+
+  /** The absolute path the mount reads and writes for `filePath`, as ArtiMount resolves it. */
+  private resolveMountPath(filePath: string): string {
+    return resolvePosix(this.mount.getRootPath(), this.resolveRelativePath(filePath));
   }
 
   private getLanguageId(filePath: string): string {
