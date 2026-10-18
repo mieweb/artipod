@@ -523,6 +523,27 @@ describe('Tools', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('required');
     });
+
+    it('keeps the file when Move to reaches it back through the mount root', async () => {
+      await mount.write('same.txt', 'same\n');
+      const viaParent = `${testDir}/../${path.basename(testDir)}/same.txt`;
+
+      const result = await tool.execute({
+        input: [
+          '*** Begin Patch',
+          `*** Update File: ${testDir}/same.txt`,
+          `*** Move to: ${viaParent}`,
+          '@@',
+          '-same',
+          '+still here',
+          '*** End Patch',
+        ].join('\n'),
+        explanation: 'no-op move on a non-root mount',
+      });
+
+      expect(result.success).toBe(true);
+      expect(await mount.read('same.txt')).toBe('still here\n');
+    });
   });
 
   describe('MountToolRegistry', () => {
