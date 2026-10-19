@@ -15,7 +15,7 @@
  * pod-fs writeFile, `mv` over the deleted path, and `rm -rf <dir>` followed by
  * `mkdir`+write inside it. `mv` of a lower file must also remove the source.
  */
-import { mkdtemp, mkdir, readFile as nodeReadFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readdir, readFile as nodeReadFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -544,6 +544,30 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
     }
   );
 
+  it.each(['empty mkdir', 'mkdir'] as const)(
+    'a directory replacing a host file materializes into the original folder (%s)',
+    async (how) => {
+      const pod = await openPod();
+      const shell = pod.createSandbox({ confineTo: '/project' });
+
+      await shell.exec('rm -f /d/a.txt');
+      await shell.exec('mkdir /d/a.txt');
+      if (how === 'mkdir') await shell.exec('printf new > /d/a.txt/new.txt');
+      expect((await pod.pushBasis())?.pushed).toBe(true);
+      pod.dispose();
+
+      // The original folder still holds a.txt as a file.
+      expect((await lstat(join(dir, 'd', 'a.txt'))).isFile()).toBe(true);
+      const result = await materializeRef(remote, REF, dir);
+      expect(result.warnings).toEqual([]);
+      expect((await lstat(join(dir, 'd', 'a.txt'))).isDirectory()).toBe(true);
+      const children = how === 'mkdir' ? ['new.txt'] : [];
+      expect(await readdir(join(dir, 'd', 'a.txt'))).toEqual(children);
+      if (how === 'mkdir') expect(await nodeReadFile(join(dir, 'd', 'a.txt', 'new.txt'), 'utf8')).toBe('new');
+      expect(await nodeReadFile(join(dir, 'd', 'keep.txt'), 'utf8')).toBe('keep');
+    }
+  );
+
   it.each(['mkdir', 'rename'] as const)(
     'an empty directory re-created after its deletion was pushed survives the next push (%s)',
     async (how) => {
@@ -560,6 +584,9 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
       }
       expect((await pod.pushBasis())?.pushed).toBe(true);
       pod.dispose();
+
+      await materializeRef(remote, REF, dir);
+      expect(await readdir(join(dir, 'd', 'a.txt'))).toEqual([]);
 
       await resetZen();
       const reopened = await openPod();
