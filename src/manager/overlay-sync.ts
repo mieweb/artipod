@@ -24,6 +24,7 @@ import {
   ANNOTATION_LAYER_INDEX,
   parseLayerIndexArtifact,
   whiteoutPathFor,
+  whiteoutTarget,
   type LayerEntry,
   type TarWriteEntry,
 } from '../oci/tar.js';
@@ -162,14 +163,29 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
   // A directory that replaced a file or link (rm then mkdir, or a rename onto
   // the deleted path) must be published itself: its children alone leave the
   // old file in the merged view, and the path's whiteout would hide them too.
+  // Likewise a directory re-created after its deletion was already pushed:
+  // the kept whiteout layer hides it unless a later layer brings it back.
   const baseIndexes: LayerEntry[][] = [];
   for (const [i, layer] of baseLayers.entries()) {
     baseIndexes.push((await layerEntries(store, layer, baseDiffIds[i] as Digest)) ?? []);
   }
   const baseView = mergeLayerEntries(baseIndexes).entries;
+  const whitedOutPaths = new Set<string>();
+  const whitedOutPrefixes: string[] = [];
+  for (const entry of baseIndexes.flat()) {
+    const wh = whiteoutTarget(entry.path);
+    if (wh?.kind === 'delete') {
+      whitedOutPaths.add(wh.target);
+      whitedOutPrefixes.push(`${wh.target}/`);
+    } else if (wh?.kind === 'opaque') {
+      whitedOutPrefixes.push(wh.dir === '/' ? '/' : `${wh.dir}/`);
+    }
+  }
+  const underWhiteout = (path: string) =>
+    whitedOutPaths.has(path) || whitedOutPrefixes.some((prefix) => path.startsWith(prefix));
   const replacingDirs = upperDirs.filter((dir) => {
     const entry = baseView.get(dir.podPath);
-    return entry !== undefined && entry.type !== 'dir';
+    return entry === undefined ? underWhiteout(dir.podPath) : entry.type !== 'dir';
   });
 
   const layers = [...baseLayers];

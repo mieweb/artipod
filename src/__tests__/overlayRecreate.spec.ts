@@ -544,6 +544,32 @@ describe('overlay recreate-over-delete (data-loss regression)', () => {
     }
   );
 
+  it.each(['mkdir', 'rename'] as const)(
+    'an empty directory re-created after its deletion was pushed survives the next push (%s)',
+    async (how) => {
+      const pod = await openPod();
+      const shell = pod.createSandbox({ confineTo: '/project' });
+
+      await shell.exec('rm -f /d/a.txt');
+      expect((await pod.pushBasis())?.pushed).toBe(true);
+
+      if (how === 'mkdir') await shell.exec('mkdir /d/a.txt');
+      else {
+        await shell.exec('mkdir /x');
+        await zfs.promises.rename('/project/x', '/project/d/a.txt');
+      }
+      expect((await pod.pushBasis())?.pushed).toBe(true);
+      pod.dispose();
+
+      await resetZen();
+      const reopened = await openPod();
+      const again = reopened.createSandbox({ confineTo: '/project' });
+      expect((await again.exec('test -d /d/a.txt && ls /d/a.txt')).exitCode).toBe(0);
+      expect((await again.exec('ls /d')).stdout).toBe('a.txt\nkeep.txt\n');
+      reopened.dispose();
+    }
+  );
+
   it('a genuine delete (not recreated) still whites the file out', async () => {
     const pod = await openPod();
     const shell = pod.createSandbox({ confineTo: '/project' });
