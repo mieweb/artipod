@@ -149,7 +149,7 @@ class ArtipodFileSystemProvider {
     if (source === this.root || destination === this.root) { throw this.vscode.FileSystemError.NoPermissions(oldUri); }
     if (source === destination) { return; }
     if (isWithin(source, destination) || isWithin(destination, source)) { throw this.vscode.FileSystemError.NoPermissions(newUri); }
-    // Resolve parent aliases before removing a destination. Leave the final
+    // Resolve parent aliases before replacing a destination. Leave the final
     // component unresolved: rename replaces a symlink, not its target.
     const sourceEntry = path.join(await fs.realpath(path.dirname(source)), path.basename(source));
     const destinationEntry = path.join(await fs.realpath(path.dirname(destination)), path.basename(destination));
@@ -169,21 +169,51 @@ class ArtipodFileSystemProvider {
       throw this.vscode.FileSystemError.NoPermissions(newUri);
     }
     if (destinationInfo && !options.overwrite) { throw this.vscode.FileSystemError.FileExists(newUri); }
+    let cleanupError;
     try { await fs.rename(source, destination); }
     catch (error) {
       // Preserve native replacement and its failure guarantees whenever it
-      // works. Removal is only needed for incompatible destination types or
+      // works. Staging is only needed for incompatible destination types or
       // nonempty directories, never permission errors or the same inode.
       const sameEntry = destinationInfo && sourceInfo.dev === destinationInfo.dev && sourceInfo.ino === destinationInfo.ino;
       if (!options.overwrite || !destinationInfo || sameEntry || !['EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) {
         throw this.convertError(error, newUri);
       }
-      try {
-        await fs.rm(destination, { recursive: destinationInfo.isDirectory() });
-        await fs.rename(source, destination);
-      } catch (error) { throw this.convertError(error, newUri); }
+      // Reserve a sibling directory so staging cannot replace an unrelated
+      // entry, and the destination move remains on the same filesystem.
+      let staging;
+      try { staging = await fs.mkdtemp(path.join(path.dirname(destination), '.artipod-rename-')); }
+      catch (error) { throw this.convertError(error, newUri); }
+      const stagedDestination = path.join(staging, 'destination');
+      const recoveryError = (error, message) => {
+        const converted = this.convertError(error, newUri);
+        converted.message += ` ${message} Recover remaining destination data from "${staging}".`;
+        converted.recoveryPath = staging;
+        return converted;
+      };
+      try { await fs.rename(destination, stagedDestination); }
+      catch (error) {
+        // rmdir cannot delete a staged entry, even if an unexpected failure
+        // occurred after the native move. Never recursively clean up here.
+        await fs.rmdir(staging).catch(() => {});
+        throw this.convertError(error, newUri);
+      }
+      try { await fs.rename(source, destination); }
+      catch (error) {
+        try { await fs.rename(stagedDestination, destination); }
+        catch (rollbackError) {
+          this.emitter.fire([{ uri: newUri, type: this.vscode.FileChangeType.Deleted }]);
+          throw recoveryError(error, `Source move failed and the destination could not be restored (${rollbackError.message}).`);
+        }
+        // A failed empty-directory cleanup must not risk the restored data.
+        await fs.rmdir(staging).catch(() => {});
+        throw this.convertError(error, newUri);
+      }
+      try { await fs.rm(staging, { recursive: true }); }
+      catch (error) { cleanupError = recoveryError(error, 'Rename completed, but replaced destination cleanup failed.'); }
     }
     this.emitter.fire([{ uri: oldUri, type: this.vscode.FileChangeType.Deleted }, { uri: newUri, type: this.vscode.FileChangeType.Created }]);
+    if (cleanupError) { throw cleanupError; }
   }
 
   emitNative(uri, type) {

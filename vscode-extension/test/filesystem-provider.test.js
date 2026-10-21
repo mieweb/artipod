@@ -247,6 +247,128 @@ test('rename overwrite replaces files, directories and internal symlinks', async
   }
 });
 
+test('overwrite rename preserves remaining staged data and reports its path after partial recursive cleanup failure', async t => {
+  const { provider, workspacePath, vscode } = await fixture(t);
+  const source = path.join(workspacePath, 'source');
+  const destination = path.join(workspacePath, 'destination');
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, 'new.txt'), 'new source');
+  await fs.mkdir(path.join(destination, 'locked'), { recursive: true });
+  await fs.writeFile(path.join(destination, 'removed.txt'), 'old writable entry');
+  await fs.writeFile(path.join(destination, 'locked', 'keep.txt'), 'recover this entry');
+  const nativeRename = fs.rename;
+  let sourceMoves = 0;
+  t.mock.method(fs, 'rename', async (from, to) => {
+    if (from === source && to === destination && ++sourceMoves === 1) {
+      throw Object.assign(new Error('destination is not empty'), { code: 'ENOTEMPTY' });
+    }
+    return nativeRename(from, to);
+  });
+  const nativeRemove = fs.rm;
+  const cleanupCalls = [];
+  t.mock.method(fs, 'rm', async (filename, options) => {
+    if (filename === destination || path.basename(filename).startsWith('.artipod-rename-')) {
+      cleanupCalls.push(filename);
+      assert.equal(options.recursive, true);
+      const oldDestination = filename === destination ? destination : path.join(filename, 'destination');
+      // Model rm deleting one writable entry before reaching a protected one,
+      // without relying on chmod enforcement or the test user's privileges.
+      await fs.unlink(path.join(oldDestination, 'removed.txt'));
+      throw Object.assign(new Error('partial recursive removal failed'), { code: 'EACCES' });
+    }
+    return nativeRemove(filename, options);
+  });
+  const events = [];
+  provider.onDidChangeFile(batch => events.push(...batch));
+  let recoveryPath;
+  await assert.rejects(provider.rename(provider.uri('source'), provider.uri('destination'), { overwrite: true }), error => {
+    assert.equal(error.code, 'NoPermissions');
+    recoveryPath = error.recoveryPath;
+    assert.equal(typeof recoveryPath, 'string');
+    assert.ok(error.message.includes(recoveryPath));
+    assert.match(error.message, /Rename completed/);
+    return true;
+  });
+  assert.equal(path.dirname(recoveryPath), workspacePath);
+  assert.deepEqual(cleanupCalls, [recoveryPath], 'failed cleanup is never retried or followed by destructive cleanup');
+  await assert.rejects(fs.lstat(source), { code: 'ENOENT' });
+  assert.deepEqual(await fs.readdir(destination), ['new.txt']);
+  assert.equal(await fs.readFile(path.join(destination, 'new.txt'), 'utf8'), 'new source');
+  assert.equal(await fs.readFile(path.join(recoveryPath, 'destination', 'locked', 'keep.txt'), 'utf8'), 'recover this entry');
+  await assert.rejects(fs.lstat(path.join(recoveryPath, 'destination', 'removed.txt')), { code: 'ENOENT' });
+  assert.deepEqual(events.map(event => [event.uri.path, event.type]), [
+    ['/source', vscode.FileChangeType.Deleted], ['/destination', vscode.FileChangeType.Created]
+  ]);
+});
+
+test('overwrite rename rolls back every destination entry when the staged source move fails', async t => {
+  const { provider, workspacePath } = await fixture(t);
+  const source = path.join(workspacePath, 'source');
+  const destination = path.join(workspacePath, 'destination');
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, 'new.txt'), 'keep source');
+  await fs.mkdir(path.join(destination, 'nested'), { recursive: true });
+  await fs.writeFile(path.join(destination, 'old.txt'), 'keep old entry');
+  await fs.writeFile(path.join(destination, 'nested', 'keep.txt'), 'keep nested entry');
+  const nativeRename = fs.rename;
+  let sourceMoves = 0;
+  t.mock.method(fs, 'rename', async (from, to) => {
+    if (from === source && to === destination) {
+      const code = ++sourceMoves === 1 ? 'ENOTEMPTY' : 'EACCES';
+      throw Object.assign(new Error('source move failed'), { code });
+    }
+    return nativeRename(from, to);
+  });
+  const remove = t.mock.method(fs, 'rm');
+  const events = [];
+  provider.onDidChangeFile(batch => events.push(...batch));
+  await assert.rejects(provider.rename(provider.uri('source'), provider.uri('destination'), { overwrite: true }), { code: 'NoPermissions' });
+  assert.equal(sourceMoves, 2);
+  assert.equal(remove.mock.callCount(), 0, 'the original destination is never recursively removed before the source move succeeds');
+  assert.equal(await fs.readFile(path.join(source, 'new.txt'), 'utf8'), 'keep source');
+  assert.deepEqual(await fs.readdir(destination), ['nested', 'old.txt']);
+  assert.equal(await fs.readFile(path.join(destination, 'old.txt'), 'utf8'), 'keep old entry');
+  assert.equal(await fs.readFile(path.join(destination, 'nested', 'keep.txt'), 'utf8'), 'keep nested entry');
+  assert.deepEqual((await fs.readdir(workspacePath)).filter(name => name.startsWith('.artipod-rename-')), []);
+  assert.deepEqual(events, []);
+});
+
+test('overwrite rename reports staged destination recovery when both source move and rollback fail', async t => {
+  const { provider, workspacePath, vscode } = await fixture(t);
+  const source = path.join(workspacePath, 'source');
+  const destination = path.join(workspacePath, 'destination');
+  await fs.writeFile(source, 'keep source');
+  await fs.mkdir(destination);
+  await fs.writeFile(path.join(destination, 'old.txt'), 'keep destination');
+  const nativeRename = fs.rename;
+  let sourceMoves = 0;
+  t.mock.method(fs, 'rename', async (from, to) => {
+    if (from === source && to === destination) {
+      const code = ++sourceMoves === 1 ? 'EISDIR' : 'EACCES';
+      throw Object.assign(new Error('source move failed'), { code });
+    }
+    if (to === destination) { throw Object.assign(new Error('rollback blocked'), { code: 'EPERM' }); }
+    return nativeRename(from, to);
+  });
+  const remove = t.mock.method(fs, 'rm');
+  const events = [];
+  provider.onDidChangeFile(batch => events.push(...batch));
+  let recoveryPath;
+  await assert.rejects(provider.rename(provider.uri('source'), provider.uri('destination'), { overwrite: true }), error => {
+    assert.equal(error.code, 'NoPermissions');
+    recoveryPath = error.recoveryPath;
+    assert.equal(typeof recoveryPath, 'string');
+    assert.ok(error.message.includes(recoveryPath));
+    assert.match(error.message, /rollback blocked/);
+    return true;
+  });
+  assert.equal(remove.mock.callCount(), 0, 'failed rollback leaves all staged data intact');
+  assert.equal(await fs.readFile(source, 'utf8'), 'keep source');
+  await assert.rejects(fs.lstat(destination), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(path.join(recoveryPath, 'destination', 'old.txt'), 'utf8'), 'keep destination');
+  assert.deepEqual(events.map(event => [event.uri.path, event.type]), [['/destination', vscode.FileChangeType.Deleted]]);
+});
+
 test('rename preserves native behavior for two hard links to the same inode', async t => {
   const { provider, workspacePath, temporary } = await fixture(t);
   const source = path.join(workspacePath, 'source.txt');

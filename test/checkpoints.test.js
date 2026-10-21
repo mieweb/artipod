@@ -190,6 +190,56 @@ test('malicious snapshot topology, traversal and cyclic history fail before muta
   await assert.rejects(workspace.restore('../../escape'), /checkpoint ID/);
 });
 
+test('restore and fork reject case-equivalent snapshot aliases without following a retained external symlink', async t => {
+  const { base, workspacePath, workspace } = await fixture(t);
+  const outside = path.join(base, 'outside');
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, 'keep'), 'outside work');
+  await fs.symlink(outside, path.join(workspacePath, 'link'));
+  const original = await fs.lstat(path.join(workspacePath, 'link'));
+  const alternate = await fs.lstat(path.join(workspacePath, 'LINK')).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return undefined;
+  });
+  if (!alternate || alternate.dev !== original.dev || alternate.ino !== original.ino) {
+    t.skip('The test filesystem is case-sensitive.');
+    return;
+  }
+  await fs.writeFile(path.join(workspacePath, 'valuable'), 'current work');
+  const checkpoint = await workspace.create();
+  const before = await snapshotTree(workspacePath);
+  const metadata = path.join(workspacePath, '.artipod/oci/snapshots');
+  const manifestFile = path.join(metadata, `${checkpoint.checkpointId}.json`);
+  const manifest = JSON.parse(await fs.readFile(manifestFile));
+  const entries = [
+    { path: '/link', type: 'symlink', mode: 0o777, linkTarget: outside },
+    { path: '/LINK', type: 'dir', mode: 0o755 },
+    { path: '/LINK/escaped', type: 'file', mode: 0o644, content: Buffer.from('escaped write') },
+  ];
+  const tar = writeTar(entries);
+  const diffId = `sha256:${hash(tar)}`;
+  const files = Object.fromEntries(entries.map(entry => [entry.path, {
+    type: entry.type, mode: entry.mode, size: entry.content?.length ?? 0,
+    ...(entry.content ? { contentDigest: `sha256:${hash(entry.content)}` } : {}),
+    ...(entry.linkTarget ? { linkTarget: entry.linkTarget } : {}),
+  }]));
+  await fs.writeFile(path.join(workspacePath, '.artipod/oci/uncompressed/sha256', diffId.slice(7)), tar);
+  await fs.writeFile(manifestFile, JSON.stringify({ ...manifest, diff: { diffId, size: tar.length, entryCount: entries.length } }));
+  await fs.writeFile(path.join(metadata, `${checkpoint.checkpointId}.index.json`), JSON.stringify({ formatVersion: 1, files }));
+  const head = await fs.readFile(path.join(metadata, 'HEAD'), 'utf8');
+  await assert.rejects(workspace.restore(checkpoint.checkpointId), /filesystem-equivalent/);
+  const destination = path.join(base, 'fork');
+  await fs.mkdir(destination);
+  await assert.rejects(workspace.fork(checkpoint.checkpointId, { workspacePath: destination }), /filesystem-equivalent/);
+  assert.deepEqual(await snapshotTree(workspacePath), before);
+  assert.deepEqual(await fs.readdir(destination), ['.artipod']);
+  await assert.rejects(fs.lstat(path.join(destination, 'LINK')), { code: 'ENOENT' });
+  await assert.rejects(fs.lstat(path.join(destination, '.artipod/oci/snapshots/HEAD')), { code: 'ENOENT' });
+  assert.deepEqual(await fs.readdir(outside), ['keep']);
+  assert.equal(await fs.readFile(path.join(outside, 'keep'), 'utf8'), 'outside work');
+  assert.equal(await fs.readFile(path.join(metadata, 'HEAD'), 'utf8'), head);
+});
+
 test('rejects overlapping storage, roots replaced after open, non-empty forks and special files', async t => {
   const { base, workspacePath, storePath, workspace } = await fixture(t);
   await assert.rejects(ArtipodWorkspace.open({ workspacePath, storePath: path.join(workspacePath, 'store') }), /overlap/);

@@ -402,6 +402,95 @@ describe('in-place snapshot restore', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('native snapshot root modes', () => {
+  it('rejects native aliases of reserved roots without changing metadata or workspace files', async context => {
+    const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-reserved-alias-'));
+    try {
+      const filesystem = createNativeWorkspaceFs(directory);
+      const store = new OciStore(filesystem);
+      await store.init();
+      const control = await nativeFs.lstat(path.join(directory, '.artipod'));
+      const alternate = await nativeFs.lstat(path.join(directory, '.ARTIPOD')).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+        return undefined;
+      });
+      if (!alternate || alternate.dev !== control.dev || alternate.ino !== control.ino) {
+        context.skip('The test filesystem is case-sensitive.');
+        return;
+      }
+      await nativeFs.writeFile(path.join(directory, 'valuable'), 'current work');
+      const superblock = await nativeFs.readFile(path.join(directory, '.artipod/superblock.json'), 'utf8');
+      await expect(filesystem.validateSnapshotPaths!(['/', '/.artipod', '/proc'])).resolves.toBeUndefined();
+      await expect(filesystem.validateSnapshotPaths!(['/', '/.ARTIPOD', '/.ARTIPOD/file'])).rejects.toThrow(/filesystem-equivalent/);
+      await expect(filesystem.validateSnapshotPaths!(['/', '/PrOc', '/PrOc/file'])).rejects.toThrow(/filesystem-equivalent/);
+      expect(await nativeFs.readFile(path.join(directory, 'valuable'), 'utf8')).toBe('current work');
+      expect(await nativeFs.readFile(path.join(directory, '.artipod/superblock.json'), 'utf8')).toBe(superblock);
+      expect((await nativeFs.readdir(path.join(directory, '.artipod'))).filter(name => name.startsWith('path-preflight-'))).toEqual([]);
+    } finally {
+      await nativeFs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { link: 'link', alias: 'LINK' },
+    { link: 'café', alias: 'cafe\u0301' },
+  ])('rejects filesystem-equivalent snapshot paths $link and $alias before restore or checkout', async ({ link, alias }, context) => {
+    const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-snapshot-alias-'));
+    try {
+      const workspace = path.join(directory, 'workspace');
+      const outside = path.join(directory, 'outside');
+      await nativeFs.mkdir(workspace);
+      await nativeFs.mkdir(outside);
+      await nativeFs.writeFile(path.join(outside, 'keep'), 'outside work');
+      await nativeFs.symlink(outside, path.join(workspace, link));
+      const original = await nativeFs.lstat(path.join(workspace, link));
+      const equivalent = await nativeFs.lstat(path.join(workspace, alias)).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+        return undefined;
+      });
+      if (!equivalent || equivalent.ino !== original.ino || equivalent.dev !== original.dev) {
+        context.skip('The test filesystem distinguishes these path spellings.');
+        return;
+      }
+      await nativeFs.writeFile(path.join(workspace, 'valuable'), 'current work');
+      const filesystem = createNativeWorkspaceFs(workspace);
+      const store = new OciStore(filesystem);
+      await store.init();
+      const snapshots = new SnapshotManager({ zfs: filesystem, store, roots: ['/'] });
+      const snapshot = (await snapshots.create())!;
+      const content = new TextEncoder().encode('escaped write');
+      const entries: TarWriteEntry[] = [
+        { path: `/${link}`, type: 'symlink', mode: 0o777, linkTarget: outside },
+        { path: `/${alias}`, type: 'dir', mode: 0o755 },
+        { path: `/${alias}/escaped`, type: 'file', mode: 0o644, content },
+      ];
+      const tar = writeTar(entries);
+      const diffId = await sha256(tar);
+      await store.putUncompressed(diffId, tar);
+      await store.putLayerIndex(diffId, indexTar(tar));
+      snapshot.diff = { diffId, size: tar.length, entryCount: entries.length };
+      const files = Object.fromEntries(await Promise.all(entries.map(async entry => [entry.path, {
+        type: entry.type, mode: entry.mode, size: entry.content?.length ?? 0,
+        ...(entry.content ? { contentDigest: await sha256(entry.content) } : {}),
+        ...(entry.linkTarget ? { linkTarget: entry.linkTarget } : {}),
+      }])));
+      const metadata = path.join(workspace, '.artipod/oci/snapshots');
+      await nativeFs.writeFile(path.join(metadata, `${snapshot.id}.json`), JSON.stringify(snapshot));
+      await nativeFs.writeFile(path.join(metadata, `${snapshot.id}.index.json`), JSON.stringify({ formatVersion: 1, files }));
+      const head = await nativeFs.readFile(path.join(metadata, 'HEAD'), 'utf8');
+      await expect(snapshots.restore(snapshot.id)).rejects.toThrow(/filesystem-equivalent/);
+      await expect(snapshots.checkout(snapshot.id, '/branches/case-collision')).rejects.toThrow(/filesystem-equivalent/);
+      await expect(nativeFs.lstat(path.join(workspace, 'branches'))).rejects.toThrow();
+      expect(await nativeFs.readFile(path.join(workspace, 'valuable'), 'utf8')).toBe('current work');
+      expect(await nativeFs.readlink(path.join(workspace, link))).toBe(outside);
+      expect(await nativeFs.readdir(outside)).toEqual(['keep']);
+      expect(await nativeFs.readFile(path.join(outside, 'keep'), 'utf8')).toBe('outside work');
+      expect(await nativeFs.readFile(path.join(metadata, 'HEAD'), 'utf8')).toBe(head);
+      expect((await nativeFs.readdir(path.join(workspace, '.artipod'))).filter(name => name.startsWith('path-preflight-'))).toEqual([]);
+    } finally {
+      await nativeFs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('checks out nested roots before applying restrictive parent root modes', async () => {
     const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-checkout-modes-'));
     const destination = path.join(directory, 'branches', 'nested');

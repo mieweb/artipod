@@ -71,7 +71,13 @@ export interface SnapshotManagerOptions {
   /** Override broad CLI exclusions for full local workspace checkpoints. */
   defaultExcludes?: boolean;
   /** Native host fs adapter when ZenFS emulates links or caches host metadata. */
-  workspaceFs?: Pick<ZenFsLike, 'promises'>;
+  workspaceFs?: SnapshotFilesystem;
+}
+
+export interface SnapshotFilesystem {
+  promises: ZenFsLike['promises'];
+  /** Reject distinct snapshot paths that alias on the materialization volume. */
+  validateSnapshotPaths?: (paths: readonly string[]) => Promise<void>;
 }
 
 export interface SnapshotRestoreChange {
@@ -103,7 +109,7 @@ export class SnapshotManager {
   private readonly store: OciStore;
   private readonly roots: string[];
   private readonly exclude: string[];
-  private readonly workspaceFs: Pick<ZenFsLike, 'promises'>;
+  private readonly workspaceFs: SnapshotFilesystem;
 
   constructor(options: SnapshotManagerOptions) {
     this.zfs = options.zfs;
@@ -115,6 +121,22 @@ export class SnapshotManager {
 
   private get p() {
     return this.zfs.promises;
+  }
+
+  /** Create directory components without following an existing symlink alias. */
+  private async ensureDirectory(directory: string): Promise<void> {
+    const p = this.workspaceFs.promises;
+    let prefix = '';
+    for (const component of directory.split('/').slice(1)) {
+      if (!component) continue;
+      prefix += `/${component}`;
+      try { await p.mkdir(prefix); }
+      catch (error) {
+        if ((error as { code?: string }).code !== 'EEXIST') throw error;
+      }
+      const info = await p.lstat(prefix);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Snapshot materialization requires real directories: ${prefix}`);
+    }
   }
 
   private excluded(path: string): boolean {
@@ -398,24 +420,24 @@ export class SnapshotManager {
     } catch (error) {
       if ((error as { code?: string }).code !== 'ENOENT') throw error;
     }
-    await p.mkdir(destination, { recursive: true });
+    await this.ensureDirectory(destination);
     await p.chmod(destination, ((await p.lstat(destination)).mode & 0o777) | 0o700);
     const entries = [...target].sort(([a], [b]) => a.split('/').length - b.split('/').length || a.localeCompare(b));
     for (const [path, entry] of entries) {
       const dest = `${destination}${path}`;
-      if (entry.type === 'dir') await p.mkdir(dest, { recursive: true });
+      if (entry.type === 'dir') await this.ensureDirectory(dest);
       else {
-        await p.mkdir(dest.slice(0, dest.lastIndexOf('/')) || '/', { recursive: true });
+        await this.ensureDirectory(dest.slice(0, dest.lastIndexOf('/')) || '/');
         if (entry.type === 'symlink') await p.symlink(entry.linkTarget!, dest);
         else {
-          await p.writeFile(dest, entry.bytes!);
+          await p.writeFile(dest, entry.bytes!, { flag: 'wx' });
           await p.chmod(dest, entry.mode);
         }
       }
     }
     const directoryModes = new Map(entries.filter(([, entry]) => entry.type === 'dir').map(([path, entry]) => [path, entry.mode]));
     for (const [root, mode] of Object.entries(head.rootModes ?? {})) {
-      await p.mkdir(root === '/' ? destination : `${destination}${root}`, { recursive: true });
+      await this.ensureDirectory(root === '/' ? destination : `${destination}${root}`);
       directoryModes.set(root, mode);
     }
     // Finalize all directory modes together, deepest first: a captured root
@@ -478,6 +500,7 @@ export class SnapshotManager {
     for (const [root, mode] of Object.entries(head.rootModes ?? {})) {
       if (!this.roots.includes(root) || !Number.isInteger(mode) || mode < 0 || mode > 0o777) throw new Error('Invalid Artipod snapshot root mode');
     }
+    await this.workspaceFs.validateSnapshotPaths?.([...new Set([...implicitDirectories, ...target.keys()])]);
     return { head, target };
   }
 
@@ -525,11 +548,12 @@ export class SnapshotManager {
     for (const [path, next] of [...target].sort(([a], [b]) => byDepth(a, b))) {
       const old = current.get(path);
       if (next.type === 'dir') {
-        if (old?.type !== 'dir') await p.mkdir(path, { recursive: true });
+        await this.ensureDirectory(path);
       } else if (!old || !same(old, next)) {
+        await this.ensureDirectory(path.slice(0, path.lastIndexOf('/')) || '/');
         if (next.type === 'symlink') await p.symlink(next.linkTarget!, path);
         else {
-          await p.writeFile(path, next.bytes!);
+          await p.writeFile(path, next.bytes!, { flag: 'wx' });
           await p.chmod(path, next.mode);
         }
       }
