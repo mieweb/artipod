@@ -154,7 +154,19 @@ function observePersistence({ markers, canary }) {
     while (pending.size) await Promise.all([...pending]);
   };
   window.__inspectRawPersistence = async () => {
-    const summary = { opfsFiles: 0, opfsBytes: 0, idbRecords: 0, vanishedEntries: 0 };
+    const summary = { opfsFiles: 0, opfsBytes: 0, idbRecords: 0, vanishedEntries: 0, retriedReads: 0 };
+    async function readCurrentFile(handle) {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          // A File is a snapshot. Chromium can invalidate it if an atomic
+          // replacement commits between getFile() and arrayBuffer().
+          return await (await handle.getFile()).arrayBuffer();
+        } catch (error) {
+          if (error?.name !== 'NotReadableError' || attempt >= 4) throw error;
+          summary.retriedReads++;
+        }
+      }
+    }
     async function walk(dir, parent = '') {
       for await (const [name, handle] of dir.entries()) {
         const location = `${parent}/${name}`;
@@ -162,10 +174,10 @@ function observePersistence({ markers, canary }) {
         try {
           if (handle.kind === 'directory') await walk(handle, location);
           else {
-            const file = await handle.getFile();
-            inspect(await file.arrayBuffer(), 'raw-opfs-bytes', location);
+            const bytes = await readCurrentFile(handle);
+            inspect(bytes, 'raw-opfs-bytes', location);
             summary.opfsFiles++;
-            summary.opfsBytes += file.size;
+            summary.opfsBytes += bytes.byteLength;
           }
         } catch (error) {
           // Atomic replacement can retire a block after directory iteration.
@@ -280,7 +292,31 @@ try {
       const stream = await file.createWritable();
       await stream.write(canary);
       await stream.close();
-      await root.removeEntry('observer-canary');
+      // Exercise the scan's stale-File retry deterministically, and prove it
+      // still fails when a file remains unreadable instead of skipping bytes.
+      const getFile = FileSystemFileHandle.prototype.getFile;
+      let failures = 2;
+      let reads = 0;
+      FileSystemFileHandle.prototype.getFile = async function (...args) {
+        if (this.name === 'observer-canary') {
+          reads++;
+          if (failures-- > 0) return { arrayBuffer: async () => { throw new DOMException('Synthetic stale File', 'NotReadableError'); } };
+        }
+        return getFile.apply(this, args);
+      };
+      try {
+        const scan = await window.__inspectRawPersistence();
+        if (reads !== 3 || scan.retriedReads < 2) throw new Error('Raw scan did not reacquire stale File snapshots');
+        failures = Infinity;
+        reads = 0;
+        let rejected = false;
+        try { await window.__inspectRawPersistence(); }
+        catch (error) { if (error?.name !== 'NotReadableError') throw error; rejected = true; }
+        if (!rejected || reads !== 5) throw new Error('Raw scan skipped a persistently unreadable file');
+      } finally {
+        FileSystemFileHandle.prototype.getFile = getFile;
+        await root.removeEntry('observer-canary');
+      }
       const db = await new Promise((resolve, reject) => {
         const request = indexedDB.open('artipod-observer-canary', 1);
         request.onupgradeneeded = () => request.result.createObjectStore('records');
