@@ -549,14 +549,46 @@ describe.skipIf(process.platform === 'win32')('native snapshot root modes', () =
     }
   });
 
-  it('can defer root modes until a caller has released locks beneath the root', async () => {
-    await zfs.promises.chmod('/', 0o400);
-    const before = (await pod.snapshots.create())!;
-    await zfs.promises.chmod('/', 0o700);
-    const result = await pod.snapshots.restore(before.id, { deferRootModes: true });
-    expect(result.rootModes).toEqual({ '/': 0o400 });
-    expect((await zfs.promises.stat('/')).mode & 0o700).toBe(0o700);
-    expect(await zfs.promises.readFile('/.artipod/oci/snapshots/HEAD', 'utf8')).toBe(before.id);
+  it('defers overlapping captured root modes until caller lock cleanup while restoring ordinary directory modes', async () => {
+    const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-deferred-roots-'));
+    const repo = path.join(directory, 'repo');
+    const ordinary = path.join(repo, 'ordinary');
+    const lock = path.join(repo, 'checkpoint-lock');
+    try {
+      const filesystem = createNativeWorkspaceFs(directory);
+      const store = new OciStore(filesystem);
+      await store.init();
+      await nativeFs.mkdir(ordinary, { recursive: true });
+      await nativeFs.writeFile(path.join(repo, 'file'), 'before');
+      for (const path of [ordinary, repo, directory]) await nativeFs.chmod(path, 0o500);
+      const snapshots = new SnapshotManager({ zfs: filesystem, store, roots: ['/', '/repo'], exclude: ['/repo/checkpoint-lock'] });
+      const before = (await snapshots.create())!;
+      for (const path of [directory, repo, ordinary]) await nativeFs.chmod(path, 0o700);
+      await nativeFs.mkdir(lock);
+      await nativeFs.writeFile(path.join(repo, 'file'), 'after');
+      await snapshots.create();
+
+      const result = await snapshots.restore(before.id, { deferRootModes: true });
+      expect(result.rootModes).toEqual({ '/': 0o500, '/repo': 0o500 });
+      expect((await nativeFs.stat(directory)).mode & 0o777).toBe(0o700);
+      expect((await nativeFs.stat(repo)).mode & 0o777).toBe(0o700);
+      expect((await nativeFs.stat(ordinary)).mode & 0o777).toBe(0o500);
+      expect(await nativeFs.readFile(path.join(repo, 'file'), 'utf8')).toBe('before');
+      expect(await nativeFs.readFile(path.join(directory, '.artipod/oci/snapshots/HEAD'), 'utf8')).toBe(before.id);
+      await nativeFs.rmdir(lock);
+      // The caller can finish its bookkeeping before finalizing captured roots.
+      await nativeFs.chmod(repo, result.rootModes['/repo']);
+      await nativeFs.chmod(directory, result.rootModes['/']);
+      expect((await nativeFs.stat(repo)).mode & 0o777).toBe(0o500);
+      expect((await nativeFs.stat(directory)).mode & 0o777).toBe(0o500);
+    } finally {
+      for (const path of [directory, repo, ordinary]) {
+        await nativeFs.chmod(path, 0o700).catch(error => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      }
+      await nativeFs.rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

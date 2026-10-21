@@ -559,7 +559,9 @@ export class SnapshotManager {
       }
     }
     for (const [path, record] of [...target].sort(([a], [b]) => byDepth(b, a))) {
-      if (record.type === 'dir') await p.chmod(path, record.mode);
+      // Overlapping roots also appear in target, but only the root-mode phase
+      // (or its caller) may finalize them after HEAD and lock bookkeeping.
+      if (record.type === 'dir' && !rootModes.has(path)) await p.chmod(path, record.mode);
     }
     // HEAD can live below a root whose captured mode prevents traversal.
     await this.writeHead(id);
