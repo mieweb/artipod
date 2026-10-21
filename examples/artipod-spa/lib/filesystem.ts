@@ -57,12 +57,25 @@ export function initFileSystem(pref?: StorageBackend): Promise<InitResult | null
   if (resetting) return Promise.reject(new Error('Browser storage reset is in progress; reload before opening storage'));
   if (recoveryPromise) return Promise.reject(new Error('Browser storage recovery is in progress'));
   if (!initPromise) initPromise = openingRoot(pref);
-  return initPromise.then(async result => {
-    await adoptRootKey?.();
-    try { await flushRoot?.(); }
-    catch (error) { if (result.encrypted) rootFailure = error; throw error; }
-    const { keys } = await import('./boot');
-    await keys().flushOfflinePreference();
+  const opening = initPromise;
+  return opening.then(async result => {
+    const generation = rootGeneration;
+    const adopt = adoptRootKey;
+    const flush = flushRoot;
+    const ownsRoot = () => !resetting && !recoveryPromise && generation === rootGeneration && opening === initPromise && result === fsInfo;
+    const assertCurrent = () => {
+      if (!ownsRoot()) throw new Error('Browser storage changed while initialization was completing; retry opening storage');
+    };
+    const current = async <T>(operation: () => T | Promise<T>): Promise<T> => {
+      assertCurrent();
+      try { return await operation(); }
+      finally { assertCurrent(); }
+    };
+    await current(() => adopt?.());
+    try { await current(() => flush?.()); }
+    catch (error) { if (ownsRoot() && result.encrypted) rootFailure = error; throw error; }
+    const { keys } = await current(() => import('./boot'));
+    await current(() => keys().flushOfflinePreference());
     return result;
   });
 }
