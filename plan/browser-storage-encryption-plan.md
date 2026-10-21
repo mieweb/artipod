@@ -29,6 +29,10 @@ Persistent browser workspace contents and names must be encrypted before their f
   drains key-service and filesystem writes while retaining writer ownership
   through terminal deletion events, including blocked IndexedDB deletions.
   Damaged legacy uppers without a valid root block remain untouched for recovery.
+- Hashed legacy IndexedDB uppers preserve numeric records even if an untouched
+  mount contains only plaintext bootstrap blocks. Authenticated recovery can
+  drain and reopen a failed generation without a page reload; drafts stay in
+  tab memory and the UI reports potentially unsaved writes.
 - Existing durable OCI whiteouts/history migrate as bytes. Legacy unsynced CoW
   deletions were held only in memory; no migration can recover them after an
   old tab exits. Making that journal restart-persistent is separate work.
@@ -46,15 +50,16 @@ Persistent browser workspace contents and names must be encrypted before their f
 
 Final checks on the rebased implementation:
 
-- Root lint/build and 755 Vitest tests plus 29 checkpoint tests passed before
-  incorporating the parent pull request's additional native snapshot regressions.
-- SPA lint/typecheck and 69 tests passed; `npm run build:ui` completed with
+- Root lint/build and 765 Vitest tests plus 30 checkpoint tests passed.
+- SPA lint/typecheck and 75 tests passed; `npm run build:ui` completed with
   version and struct-minifier assertions intact.
-- Chromium 149.0.7827.55: the actual-app harness passed all 15 raw-storage
+- Chromium 149.0.7827.55: the actual-app harness passed all 17 raw-storage
   checkpoints with zero plaintext marker leaks and zero unhandled page errors.
 - The independent adapter harness passed OPFS and IndexedDB migrations,
   identical retained backend copies, interrupted cleanup, writer exclusion,
   raw write-history scans, backend anchoring and fail-closed OPFS probing.
+  Its 12 cases also cover untouched plaintext-bootstrap broker uppers, first
+  writes after migration/reopen and preservation of damaged upper records.
 - The locked gate was visually checked in dark mode; text contrast was 17.18:1.
 - Pull requests targeting the parent `artipod` branch run the regular CI jobs.
   A dedicated Chromium CI job runs both raw-adapter and actual-app storage

@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve unsaved editor drafts in tab memory through lease locking, retain
   reset ownership until deletion completes, and preserve damaged legacy workspace
   blocks rather than migrating them as an empty tree.
+- Recover failed encrypted mounts without reloading or losing tab drafts, and
+  migrate untouched legacy IndexedDB uppers that contain only bootstrap records.
 
 ## [0.12.0] - 2026-09-14
 

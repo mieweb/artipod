@@ -572,8 +572,12 @@ async function legacyDatabaseSource(name: string): Promise<BrowserVaultLegacySou
   const zen = await import('@zenfs/core');
   let filesystem: FileSystem;
   const upper = name.startsWith('artipod-upper::');
-  if (!blocks.size || (upper && [...blocks.values()].some(isEncryptedBlob))) {
-    // Preserve already encrypted upper blocks verbatim, inside the new vault.
+  const hashedUpper = upper && /^[a-f0-9]{16}$/.test(name.slice('artipod-upper::'.length));
+  if (!blocks.size || (upper && (hashedUpper || [...blocks.values()].some(isEncryptedBlob)))) {
+    // Hashed broker uppers are block stores, including untouched IndexedDB
+    // mounts whose only records are StoreFS's pre-encryption bootstrap.
+    // Preserve their records verbatim for the workspace migration reader;
+    // named plaintext uppers below still migrate as logical trees.
     filesystem = zen.InMemory.create({});
     await filesystem.ready();
     for (const [id, bytes] of blocks) {

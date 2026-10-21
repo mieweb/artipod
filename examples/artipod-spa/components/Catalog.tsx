@@ -20,6 +20,7 @@ import { OPEN_DRAFT_TIP, isOpenRef, nextDraftRef, setOpenTag, workspaceUrl, type
 import { navClick, navigateTo } from '@/lib/stores/route';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import OfflineToggle from '@/components/OfflineToggle';
+import { registerFileSystemTeardown } from '@/lib/filesystem';
 
 const Terminal = dynamicImport(() => import('@/components/Terminal'), { ssr: false });
 
@@ -39,11 +40,16 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
   useEffect(() => {
     void refreshServer();
     let disposeEvents: (() => void) | null = null;
-    let disposeConsole: (() => void) | null = null;
+    let disposeConsole: (() => Promise<void>) | null = null;
     // The initializer awaits; if the catalog unmounted meanwhile (navigation
     // to a workspace), nothing may register or setState — and anything that
     // did is torn down here rather than leaking into the workspace's /proc.
     let cancelled = false;
+    const teardown = registerFileSystemTeardown(async () => {
+      cancelled = true;
+      disposeEvents?.();
+      await disposeConsole?.();
+    }, 'Catalog console');
     (async () => {
       await refreshLocal();
       if (cancelled) return;
@@ -91,11 +97,12 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
         const consoleEvents = new Events();
         if (cancelled) return;
         let timer: ReturnType<typeof setTimeout> | null = null;
-        disposeEvents = consoleEvents.on('fs:changed', () => {
-          if (resettingStorage) return;
+        const offEvents = consoleEvents.on('fs:changed', () => {
+          if (resettingStorage || cancelled) return;
           if (timer) clearTimeout(timer);
           timer = setTimeout(() => void refreshLocal().then(refreshVerdicts), 300);
         });
+        disposeEvents = () => { offEvents(); if (timer) clearTimeout(timer); };
         // A pod-less console (D18): its own small PID namespace (nothing runs
         // here but this shell), images / volumes / artipod over the page's rows.
         const rootConsole = openConsole({
@@ -103,14 +110,14 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           identity: { kind: 'catalog', name: 'catalog', version: process.env.NEXT_PUBLIC_ARTIPOD_VERSION },
           extraCommands: [factoryReset],
         });
-        disposeConsole = () => { void rootConsole.dispose(); };
-        if (cancelled) { disposeConsole(); return; }
+        disposeConsole = async () => { await rootConsole.dispose(); };
+        if (cancelled) { await disposeConsole(); return; }
         setRootSandbox(rootConsole.sandbox);
       } catch {
         // fs init failed — no console
       }
     })();
-    return () => { cancelled = true; disposeEvents?.(); disposeConsole?.(); };
+    return () => { void teardown().catch(error => console.error('catalog close failed:', error)); };
   }, []);
 
   // Ancestry verdicts follow server refs + local heads.

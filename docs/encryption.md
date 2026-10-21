@@ -31,6 +31,11 @@ Previously decrypted application memory cannot be retroactively revoked.
 Unsaved editor drafts survive locking in this tab's RAM and return after
 authenticated unlock; they are not written to browser storage until saved.
 Reloading or closing the tab discards those unsaved drafts.
+If lease loss leaves a failed persistence queue, authenticated recovery drains
+and disposes the old sessions, closes the failed mount and reopens the saved
+generation in the same page. The recovery warning identifies potentially unsaved
+changes; it does not turn failed writes into durable success. RAM editor drafts
+remain available for review and an explicit save.
 This encryption boundary does not make ordinary ZenFS multi-block mutations
 crash-atomic: the existing transaction rollback defect under backing failures
 remains, so a failed operation can require recovery. Migration uses its own

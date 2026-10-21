@@ -36,6 +36,33 @@ async function seedTree() {
 }
 
 describe('workspace upper migration inside the encrypted root', () => {
+  it('opens an untouched broker upper containing only plaintext bootstrap records', async () => {
+    const { options, key } = await fixture();
+    const configured = await resolveMountConfig({ backend: InMemory });
+    const blocks = (configured as unknown as { store: InMemoryStore }).store;
+    const old = await encryptedStoreMount({ backing: { kind: 'config', config: configured }, getKey: () => key });
+    await old.flush();
+    expect(await old.readdir('/')).toEqual([]);
+    expect(blocks.has(0)).toBe(true);
+    expect([...blocks.values()].every(bytes => !isEncryptedBlob(bytes))).toBe(true);
+    const legacyBlocks = `/.artipod/uppers/${await upperDirName(REF)}`;
+    await fs.promises.mkdir(legacyBlocks, { recursive: true });
+    for (const [id, bytes] of blocks) await fs.promises.writeFile(`${legacyBlocks}/${id}`, bytes);
+    const upper = await openWorkspaceUpper(options);
+    expect(await upper.readdir('/')).toEqual([]);
+    expect(await fs.promises.exists(committed)).toBe(true);
+    expect(await fs.promises.exists(legacyBlocks)).toBe(false);
+    const bytes = new TextEncoder().encode(PAYLOAD);
+    await upper.createFile(`/${NAME}`, { uid: 0, gid: 0, mode: 0o100600 });
+    await upper.write(`/${NAME}`, bytes, 0);
+    await upper.touch(`/${NAME}`, { size: bytes.length });
+    await options.flush();
+    const reopened = await openWorkspaceUpper(options);
+    const saved = new Uint8Array((await reopened.stat(`/${NAME}`)).size);
+    await reopened.read(`/${NAME}`, saved, 0, saved.length);
+    expect(new TextDecoder().decode(saved)).toBe(PAYLOAD);
+  });
+
   it.each(['missing', 'empty'])('preserves a damaged legacy upper with a %s root', async kind => {
     const { options } = await fixture();
     const legacyBlocks = `/.artipod/uppers/${await upperDirName(REF)}`;

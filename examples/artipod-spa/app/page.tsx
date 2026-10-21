@@ -13,17 +13,17 @@ import Workspace from '@/components/Workspace';
 import { actorId, keys } from '@/lib/boot';
 import { initRouting, routeStore } from '@/lib/stores/route';
 import { brokerStore } from '@/lib/stores/broker';
-import { initFileSystem } from '@/lib/filesystem';
+import { fileSystemNeedsRecovery, initFileSystem, recoverFileSystem } from '@/lib/filesystem';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import OfflineToggle from '@/components/OfflineToggle';
 
-type BootState = { phase: 'loading' | 'ready' | 'locked' | 'error'; message?: string; memoryOnly?: boolean };
+type BootState = { phase: 'loading' | 'ready' | 'locked' | 'error'; message?: string; memoryOnly?: boolean; canRecover?: boolean };
 
 export default function Page() {
   const route = useStore(routeStore, (s) => s.route);
   const broker = useStore(brokerStore);
   const [boot, setBoot] = useState<BootState>({ phase: 'loading' });
-  const [retry, setRetry] = useState(0);
+  const [retry, setRetry] = useState({ version: 0, recover: false });
 
   useEffect(() => {
     const svc = keys();
@@ -31,7 +31,7 @@ export default function Page() {
     let generation = 0;
     let installed = false;
     let usableKey: CryptoKey | null = null;
-    const openRoot = async (): Promise<void> => {
+    const openRoot = async (recover = false): Promise<void> => {
       const attempt = ++generation;
       setBoot({ phase: 'loading' });
       try {
@@ -44,17 +44,18 @@ export default function Page() {
         }
         // No catalog, registry, console or workspace may touch the root until
         // its required key is available and the protected filesystem opens.
-        const info = await initFileSystem();
+        const recovery = recover ? await recoverFileSystem() : null;
+        const info = recovery?.info ?? await initFileSystem();
         if (cancelled || attempt !== generation) return;
         if (svc.storagePolicy === 'encrypted' && !svc.getKey()) {
           setBoot({ phase: 'locked' });
           return;
         }
         initRouting();
-        setBoot({ phase: 'ready', memoryOnly: (info as { memoryOnly?: boolean } | null)?.memoryOnly });
+        setBoot({ phase: 'ready', memoryOnly: (info as { memoryOnly?: boolean } | null)?.memoryOnly, message: recovery?.warning });
       } catch (error) {
         if (cancelled || attempt !== generation) return;
-        setBoot({ phase: 'error', message: error instanceof Error ? error.message : String(error) });
+        setBoot({ phase: 'error', message: error instanceof Error ? error.message : String(error), canRecover: fileSystemNeedsRecovery() });
       }
     };
     const off = brokerStore.subscribe(() => {
@@ -75,7 +76,7 @@ export default function Page() {
         if (cancelled) return;
         installed = true;
         usableKey = svc.getKey();
-        await openRoot();
+        await openRoot(retry.recover);
       } catch (error) {
         if (!cancelled) setBoot({ phase: 'error', message: error instanceof Error ? error.message : String(error) });
       }
@@ -98,6 +99,7 @@ export default function Page() {
               ? 'Log in to unlock your encrypted workspaces. If you are offline and your key lease has expired, reconnect before logging in.'
               : boot.message}
           </p>
+          {!locked && boot.canRecover && <p>Reopen the saved storage generation to recover from the failed write. Unsaved editor drafts remain in this tab; review and save them again after recovery.</p>}
           <div className="flex flex-wrap items-center gap-3">
             <EncryptionBadge principal={actorId} />
             <OfflineToggle />
@@ -105,8 +107,8 @@ export default function Page() {
               type="button"
               className="rounded border px-3 py-1.5 text-sm"
               style={{ borderColor: 'var(--mieweb-border, #888)' }}
-              onClick={() => setRetry((value) => value + 1)}
-            >Retry opening storage</button>
+              onClick={() => setRetry(value => ({ version: value.version + 1, recover: !locked && !!boot.canRecover }))}
+            >{!locked && boot.canRecover ? 'Recover saved storage' : 'Retry opening storage'}</button>
           </div>
         </section>
       </main>
@@ -120,6 +122,7 @@ export default function Page() {
   );
   return (
     <div className="flex h-[var(--app-height)] flex-col">
+      {boot.message && <p role="alert" className="shrink-0 border-b px-4 py-2 text-sm">{boot.message}</p>}
       {boot.memoryOnly && (
         <p role="alert" className="shrink-0 border-b px-4 py-2 text-sm" style={{ background: 'var(--mieweb-muted, #333)', borderColor: 'var(--mieweb-border, #888)' }}>
           Memory-only workspace: this server does not provide an encryption key. Local edits disappear when this page closes or reloads; publish or download your work to keep it.

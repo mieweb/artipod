@@ -11,7 +11,7 @@
 import type { PodEvents } from '@artipod/core/host';
 import type { Sandbox } from '@artipod/core/sandbox';
 import { actorId, keys, uiState, workspaceUrl, type Route } from '../boot';
-import { flushFileSystem, initFileSystem } from '../filesystem';
+import { FileSystemClosePersistenceError, flushFileSystem, initFileSystem } from '../filesystem';
 import { openWorkspaceUpper } from './workspace-storage';
 import { TaskScheduler } from './task-scheduler';
 import { initialSyncState, reduceSync, wantsPush, type SyncEvent, type SyncState } from './sync-machine';
@@ -415,7 +415,10 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
         // keys, hydration, the process namespace) unregister — the next
         // session must not collide.
-        try { await flushFileSystem(); }
+        try {
+          try { await flushFileSystem(); }
+          catch (error) { throw new FileSystemClosePersistenceError(error); }
+        }
         finally {
           closed = true;
           try { pod.keyring.revokeAll(); pod.dispose(); }
