@@ -7,9 +7,10 @@
  */
 import type { ZenFsLike } from '../sandbox/types.js';
 import { OCI_ROOT } from './store.js';
-import { resolveStorageAccess } from '../storage/context.js';
+import { readStorageTextFile, writeStorageTextFile } from '../storage/text-file.js';
 
 export const SETTINGS_PATH = `${OCI_ROOT}/settings.json`;
+const PREVIOUS_PATH = `${OCI_ROOT}/.settings.previous`;
 
 export interface PodSettings {
   /** Sync verbs and auto-push refuse to touch the network while true. */
@@ -17,33 +18,19 @@ export interface PodSettings {
 }
 
 export async function readPodSettings(zfs: ZenFsLike): Promise<PodSettings> {
-  try {
-    const value: unknown = JSON.parse((await zfs.promises.readFile(SETTINGS_PATH, 'utf8')) as string);
-    if (!value || typeof value !== 'object' || Array.isArray(value) ||
-        ('offline' in value && typeof value.offline !== 'boolean')) {
-      throw new Error('Invalid pod settings; saved preferences were preserved');
-    }
-    return value as PodSettings;
-  } catch (error) {
-    if ((error as { code?: string })?.code !== 'ENOENT') throw error;
-    return {};
+  const text = await readStorageTextFile({ zfs, path: SETTINGS_PATH, previousPath: PREVIOUS_PATH });
+  if (text === null) return {};
+  const value: unknown = JSON.parse(text);
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      ('offline' in value && typeof value.offline !== 'boolean')) {
+    throw new Error('Invalid pod settings; saved preferences were preserved');
   }
+  return value as PodSettings;
 }
 
 export async function writePodSettings(zfs: ZenFsLike, patch: Partial<PodSettings>): Promise<PodSettings> {
   const next = { ...(await readPodSettings(zfs)), ...patch };
   if (next.offline !== undefined && typeof next.offline !== 'boolean') throw new Error('Invalid offline preference');
-  const storage = resolveStorageAccess(zfs);
-  const temporary = `${OCI_ROOT}/.${crypto.randomUUID().replace(/-/g, '')}`;
-  await zfs.promises.mkdir(OCI_ROOT, { recursive: true });
-  // Never shrink the live settings inode in place. A failed multi-block
-  // transaction can otherwise persist new bytes with the old length. Stage
-  // inside the same protected root and drain before replacing its name.
-  // A failed stage may leave an opaque temporary; the saved preference stays
-  // intact and the pending key-service preference can replay after recovery.
-  await zfs.promises.writeFile(temporary, JSON.stringify(next, null, 2), { flag: 'wx' });
-  await storage?.flush();
-  await zfs.promises.rename(temporary, SETTINGS_PATH);
-  await storage?.flush();
+  await writeStorageTextFile({ zfs, path: SETTINGS_PATH, previousPath: PREVIOUS_PATH }, JSON.stringify(next, null, 2));
   return next;
 }

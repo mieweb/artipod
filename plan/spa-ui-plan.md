@@ -264,9 +264,12 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
   complete file to a fallback, and install through same-directory renames into
   absent names. Reads use the fallback only when the primary is absent. Retired
   fallback cleanup cannot invalidate the primary or current fallback locator.
-- Verification: core lint/build/test pass (935 tests and 35 checkpoint tests),
+- The same overwrite-rename loss was reproduced in pod settings. Recoverable
+  text-file replacement lives in core and is shared by settings and the SPA's
+  registry medium, including serialized writes and context-owned flushes.
+- Verification: core lint/build/test pass (953 tests and 35 checkpoint tests),
   root `npx tsc --noEmit` passes, SPA lint/typecheck and 85 tests pass, and static
-  export passes its version/struct-minify assertions. The 56 extension tests,
+  export passes its version/struct-minify assertions. The 82 extension tests,
   Chromium migration/app checks and packed Node/OPFS/IndexedDB consumer pass.
   Browser checks report zero plaintext leaks and no unhandled errors; the new
   quota-failure scenario recovers without a broker login and preserves both

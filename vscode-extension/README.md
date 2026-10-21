@@ -75,6 +75,8 @@ filesystem working directory.
 - Wait for background tasks and native terminal writes to finish before
   capturing a snapshot. The extension coordinates its own Artipod terminals;
   it cannot stop other processes writing to the folder.
+  Manual and shell snapshot commands share that coordination: busy peer
+  terminals prevent capture, and new input waits until the snapshot finishes.
 - Opening a snapshot always creates a separate workspace. This release does
   not expose an in-place restore command or rewind chat conversations.
 

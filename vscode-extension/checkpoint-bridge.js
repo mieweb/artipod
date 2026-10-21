@@ -40,12 +40,20 @@ class CheckpointBridge {
   }
 
   async readMapping(context) {
-    const mapping = await fs.readFile(this.mappingPath(context), 'utf8').then(JSON.parse).catch(error => {
+    let text;
+    try { text = await fs.readFile(this.mappingPath(context), 'utf8'); }
+    catch (error) {
       if (error.code === 'ENOENT') { return undefined; }
       throw error;
-    });
-    if (mapping && (mapping.version !== 1 || mapping.rootId !== this.backend.rootId || mapping.providerId !== 'artipod' ||
-      mappingKey(mapping.context) !== mappingKey(context) || !/^snap-[a-f0-9]{12}$/.test(mapping.checkpointId))) {
+    }
+    // Only a missing file permits a first capture. Present falsy JSON values
+    // are corrupt records and must never rebind an already-started request.
+    const mapping = JSON.parse(text);
+    if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping) ||
+      mapping.version !== 1 || mapping.rootId !== this.backend.rootId || mapping.providerId !== 'artipod' ||
+      !mapping.context || typeof mapping.context !== 'object' || Array.isArray(mapping.context) ||
+      ['sessionId', 'requestId', 'checkpointId'].some(key => typeof mapping.context[key] !== 'string' || !mapping.context[key] || mapping.context[key] !== context[key]) ||
+      typeof mapping.checkpointId !== 'string' || mapping.checkpointId.length !== 17 || !/^snap-[a-f0-9]{12}$/.test(mapping.checkpointId)) {
       throw new Error('The Artipod checkpoint mapping is invalid. Refusing to restore another workspace or request.');
     }
     return mapping;

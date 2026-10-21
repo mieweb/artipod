@@ -26,8 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reject native snapshot materialization across volume boundaries before changing
   live files, and retain directories needed by nested restore exclusions (#83).
 - Serialize workspace teardown before replacement boot, preserve the encrypted
-  registry through interrupted replacement, and expose recovery immediately
-  after failed storage writes even while the broker lease stays valid (#83).
+  registry and pod settings through interrupted replacement, and expose recovery
+  immediately after failed storage writes even while the broker lease stays valid (#83).
+- Coordinate extension shell snapshot commands with other terminals, and reject
+  malformed saved checkpoint mappings without recapturing started requests (#83).
 - Close remaining storage-boundary gaps from #119: require snapshot output stores
   to share the protected context, enforce registered-root policies, and exclude
   asynchronous raw storage operations from managed root replacement. Reject

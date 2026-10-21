@@ -7,9 +7,14 @@ const { Worker } = require('node:worker_threads');
  * native writers still need to be stopped by the caller. */
 class WorkspaceOperationGate {
   constructor() { this.terminals = new Set(); this.checkpointActive = false; this.queue = Promise.resolve(); }
-  checkpoint(operation) {
+  checkpoint(operation, request) {
     const result = this.queue.catch(() => {}).then(async () => {
-      if ([...this.terminals].some(terminal => terminal.busy)) {
+      if (request && (!this.terminals.has(request.terminal) || request.terminal.closed || request.terminal.stopping || !request.terminal.pending.has(request.inputId))) {
+        throw new Error('The requesting Artipod terminal command is no longer active.');
+      }
+      if ([...this.terminals].some(terminal => terminal === request?.terminal
+        ? terminal.stopping || [...terminal.pending].some(id => id !== request.inputId)
+        : terminal.busy)) {
         throw new Error('Wait for the Artipod terminal command to finish before creating or restoring a checkpoint.');
       }
       this.checkpointActive = true;
@@ -36,6 +41,7 @@ class ArtipodTerminal {
     this.onDidWrite = this.output.event;
     this.onDidClose = this.closedEvent.event;
     this.pending = new Set();
+    this.checkpoints = new Map();
     this.buffer = [];
     this.sequence = 0;
     this.closed = false;
@@ -61,6 +67,8 @@ class ArtipodTerminal {
       if (message.type === 'data') { this.output.fire(message.data); }
       if (message.type === 'ready') { this.workerReady = true; this.resolveReady(message.rootId); this.flushInput(); }
       if (message.type === 'done') { this.pending.delete(message.id); }
+      if (message.type === 'checkpoint-request') { this.requestCheckpoint(message); }
+      if (message.type === 'checkpoint-complete') { this.checkpoints.get(message.id)?.release(); }
       if (message.type === 'error') { this.fail(new Error(message.message)); }
       if (message.type === 'exit') { this.close(message.code); }
     });
@@ -76,6 +84,26 @@ class ArtipodTerminal {
     this.output.fire(`\r\nArtipod: ${error.message}\r\n`);
     this.rejectReady(error);
     this.close(1);
+  }
+
+  requestCheckpoint(message) {
+    if (!Number.isSafeInteger(message.id) || !Number.isSafeInteger(message.inputId) || this.checkpoints.has(message.id)) {
+      this.worker?.postMessage({ type: 'checkpoint-response', id: message.id, error: 'Invalid Artipod snapshot coordination request.' });
+      return;
+    }
+    let release;
+    const completion = new Promise(resolve => { release = resolve; });
+    const request = { release };
+    this.checkpoints.set(message.id, request);
+    return this.gate.checkpoint(async () => {
+      if (this.closed || this.workerExited) { throw new Error('The requesting Artipod terminal closed.'); }
+      this.worker.postMessage({ type: 'checkpoint-response', id: message.id });
+      await completion;
+    }, { terminal: this, inputId: message.inputId }).catch(error => {
+      if (!this.closed && !this.workerExited) {
+        this.worker.postMessage({ type: 'checkpoint-response', id: message.id, error: error.message });
+      }
+    }).finally(() => { this.checkpoints.delete(message.id); });
   }
 
   handleInput(data) {
@@ -115,6 +143,9 @@ class ArtipodTerminal {
   }
 
   releaseGate() {
+    // Called only after confirmed termination/exit. A close request alone is
+    // not evidence that a worker has stopped its native filesystem writes.
+    for (const request of this.checkpoints.values()) { request.release(); }
     this.stopping = false;
     this.pending.clear();
     this.gate.terminals.delete(this);

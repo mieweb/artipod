@@ -9,3 +9,5 @@ export * from './browser-vault.js';
 export * from './encrypted-store.js';
 export * from './directory-store.js';
 export { workspaceUpperPaths, upperDirName, openWorkspaceUpper } from './workspace.js';
+export { readStorageTextFile, writeStorageTextFile } from './text-file.js';
+export type { StorageTextFileOptions } from './text-file.js';

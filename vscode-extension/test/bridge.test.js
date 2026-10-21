@@ -120,6 +120,85 @@ test('resuming a request requires an existing mapping and never invents a before
   assert.equal(await fs.readFile(editorPath, 'utf8'), 'agent turn content');
 });
 
+test('corrupt existing mappings cannot rebind a started request or modify its saved bytes', async t => {
+  const { temporary, workspacePath, vscode, backend, bridge } = await fixture(t);
+  const editorPath = path.join(workspacePath, 'editor.txt');
+  await fs.writeFile(editorPath, 'before the request');
+  const token = await bridge.capture(request);
+  const mappingPath = bridge.mappingPath(request);
+  const originalBytes = await fs.readFile(mappingPath);
+  const original = JSON.parse(originalBytes);
+  const checkpoints = await backend.list();
+  const metadata = path.join(workspacePath, '.artipod/oci/snapshots');
+  const snapshotFiles = (await fs.readdir(metadata)).sort();
+  const snapshotBytes = await Promise.all(snapshotFiles.map(name => fs.readFile(path.join(metadata, name))));
+  await fs.writeFile(editorPath, 'after the request started');
+  const targetPath = path.join(temporary, 'fork');
+  await fs.mkdir(targetPath);
+  let captures = 0;
+  let restores = 0;
+  let forks = 0;
+  let saves = 0;
+  const create = backend.create.bind(backend);
+  const restore = backend.restore.bind(backend);
+  const fork = backend.fork.bind(backend);
+  backend.create = (...args) => { captures++; return create(...args); };
+  backend.restore = (...args) => { restores++; return restore(...args); };
+  backend.fork = (...args) => { forks++; return fork(...args); };
+  vscode.workspace.textDocuments.push({
+    uri: vscode.Uri.file(editorPath), isDirty: true,
+    async save() { saves++; await fs.writeFile(editorPath, 'must not save after the request started'); return true; }
+  });
+  const malformed = [
+    { name: 'null', value: null },
+    { name: 'false', value: false },
+    { name: 'zero', value: 0 },
+    { name: 'empty string', value: '' },
+    { name: 'array', value: [] },
+    { name: 'string', value: 'not a mapping' },
+    { name: 'missing fields', value: {} },
+    { name: 'null context', value: { ...original, context: null } },
+    { name: 'array context', value: { ...original, context: [] } },
+    { name: 'empty request ID', value: { ...original, context: { ...request, requestId: '' } } },
+    { name: 'another request', value: { ...original, context: { ...request, requestId: 'another request' } } },
+    { name: 'another root', value: { ...original, rootId: original.rootId === '0000000000000000' ? '1111111111111111' : '0000000000000000' } },
+    { name: 'another provider', value: { ...original, providerId: 'another provider' } },
+    { name: 'array checkpoint ID', value: { ...original, checkpointId: [original.checkpointId] } },
+    { name: 'checkpoint ID with a trailing newline', value: { ...original, checkpointId: original.checkpointId + '\n' } },
+    { name: 'empty file', text: '' },
+    { name: 'invalid JSON', text: '{' },
+  ];
+  for (const entry of malformed) {
+    await t.test(entry.name, async () => {
+      const bytes = Buffer.from(entry.text ?? ` ${JSON.stringify(entry.value)}\n`);
+      await fs.writeFile(mappingPath, bytes);
+      // Reopening the bridge models an extension/window restart mid-request.
+      const restarted = new CheckpointBridge(vscode, backend, bridge.mappingDirectory, bridge.workspaceUri);
+      const invalid = /mapping is invalid|JSON/;
+      await assert.rejects(restarted.capture(request), invalid);
+      await assert.rejects(restarted.capture({ ...request, requireExisting: true }), invalid);
+      await assert.rejects(restarted.restore(request), invalid);
+      await assert.rejects(restarted.fork({ ...request, targetPath, targetSessionId: 'fork-session' }), invalid);
+      assert.equal(captures, 0);
+      assert.equal(restores, 0);
+      assert.equal(forks, 0);
+      assert.equal(saves, 0);
+      assert.deepEqual(await fs.readFile(mappingPath), bytes);
+      assert.deepEqual(await fs.readdir(path.dirname(mappingPath)), [path.basename(mappingPath)]);
+      assert.equal(await fs.readFile(editorPath, 'utf8'), 'after the request started');
+      assert.deepEqual((await fs.readdir(metadata)).sort(), snapshotFiles);
+      assert.deepEqual(await Promise.all(snapshotFiles.map(name => fs.readFile(path.join(metadata, name)))), snapshotBytes);
+      assert.deepEqual(await fs.readdir(targetPath), []);
+      // Repairing only the original bytes restores the first capture's identity.
+      await fs.writeFile(mappingPath, originalBytes);
+      assert.deepEqual(await restarted.capture({ ...request, requireExisting: true }), token);
+    });
+  }
+  assert.deepEqual(await backend.list(), checkpoints);
+  await bridge.restore(request);
+  assert.equal(await fs.readFile(editorPath, 'utf8'), 'before the request');
+});
+
 test('fork isolates filesystem root and persists target conversation mapping', async t => {
   const { temporary, workspacePath, vscode, bridge } = await fixture(t);
   await fs.writeFile(path.join(workspacePath, 'fork.txt'), 'checkpoint content');

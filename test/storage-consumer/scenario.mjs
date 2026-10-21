@@ -1,6 +1,6 @@
 /** Shared Node/browser exercise. Every library import is a published entry. */
 import { createZenFsPod } from '@artipod/core';
-import { createStorageSession } from '@artipod/core/storage';
+import { createStorageSession, readStorageTextFile, writeStorageTextFile } from '@artipod/core/storage';
 import { generateBlobKey, OciStore, SnapshotManager } from '@artipod/core/oci';
 
 const check = (condition, message) => { if (!condition) throw new Error(message); };
@@ -63,6 +63,10 @@ export async function writeScenario(adapters, key, markers) {
   const storage = await session.open();
   equal(storage.protection, 'encrypted', 'Protected session must be encrypted');
   rejectUnrelatedSnapshotStore(storage);
+  const metadata = { zfs: storage.zfs, path: '/.artipod/consumer-state.json', previousPath: '/.artipod/.consumer-state.previous' };
+  await writeStorageTextFile(metadata, JSON.stringify({ metadata: markers.metadata, saved: false }));
+  await writeStorageTextFile(metadata, JSON.stringify({ metadata: markers.metadata, saved: true }));
+  equal(await readStorageTextFile(metadata), JSON.stringify({ metadata: markers.metadata, saved: true }), 'Core metadata replacement must round-trip through public exports');
   const pod = await createZenFsPod(manifest, { storage, storagePolicy: 'protected', proc: false });
   const p = storage.zfs.promises;
   const directory = `/workspace/${markers.directory}`;
