@@ -128,6 +128,27 @@ describe('authenticated recovery of a failed encrypted browser root', () => {
     expect(mocks.storage.openBrowserVault).toHaveBeenCalledOnce();
   });
 
+  it.each(['adoption', 'flush'])('rejects an old initialization delayed during %s without touching the replacement or marking it failed', async stage => {
+    const failure = new Error('sticky write failure');
+    const filesystem = await failedRoot(failure);
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    if (stage === 'adoption') mocks.vault.adoptKey.mockImplementationOnce(async () => { entered(); await gate; });
+    else mocks.vault.flush.mockImplementationOnce(async () => { entered(); await gate; throw new Error('late old flush failure'); });
+    const oldOpening = filesystem.initFileSystem();
+    void oldOpening.catch(() => {});
+    await started;
+    await filesystem.recoverFileSystem();
+    const replacementFlushes = mocks.reopened.flush.mock.calls.length;
+    finish();
+    await expect(oldOpening).rejects.toThrow('storage changed while initialization was completing');
+    expect(mocks.reopened.flush).toHaveBeenCalledTimes(replacementFlushes);
+    expect(filesystem.fileSystemNeedsRecovery()).toBe(false);
+    await expect(filesystem.initFileSystem()).resolves.toMatchObject({ encrypted: true });
+  });
+
   it('retains a prior teardown failure and reports it instead of remounting over undisposed consumers', async () => {
     const failure = new Error('sticky write failure');
     const filesystem = await failedRoot(failure);
