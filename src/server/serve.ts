@@ -107,12 +107,12 @@ async function readStoreIdentity(storeDir: string): Promise<StoreIdentity | null
     text = await readFile(file, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw new Error(`Cannot read encrypted store identity at ${file}; restore access or use --keyless.`);
+      throw new Error(`Cannot read encrypted store identity at ${file}; restore access or use --keyless.`, { cause: error });
     }
     // No identity, but ciphertext on disk (`.alias` twins): the layout IS
     // encrypted — plaintext writes beside it would break the at-rest invariant.
     if (await hasCiphertextBlobs(storeDir)) {
-      throw new Error(`${storeDir} holds encrypted blobs but ${file} is missing. Restore it (podId + authority), or use --keyless for blind hosting. Refusing to serve it as a plaintext store.`);
+      throw new Error(`${storeDir} holds encrypted blobs but ${file} is missing. Restore it (podId + authority), or use --keyless for blind hosting. Refusing to serve it as a plaintext store.`, { cause: error });
     }
     return null;
   }

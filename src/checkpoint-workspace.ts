@@ -97,7 +97,7 @@ async function withWorkspaceLock<T>(workspacePath: string, operation: () => Prom
   const lock = path.join(directory, createHash('sha256').update(workspacePath).digest('hex'));
   try { await fs.mkdir(lock, { mode: 0o700 }); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Artipod checkpoint store is busy (${lock}); stop its owner before removing a stale lock`);
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Artipod checkpoint store is busy (${lock}); stop its owner before removing a stale lock`, { cause: error });
     throw error;
   }
   const lockIdentity = await fs.lstat(lock);
@@ -123,7 +123,7 @@ async function serialized<T>(workspacePath: string, operation: () => Promise<T>,
     const lock = path.join(metadata, 'checkpoint-lock');
     try { await fs.mkdir(lock); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Artipod checkpoint store is busy (${lock}); stop its owner before removing a stale lock`);
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Artipod checkpoint store is busy (${lock}); stop its owner before removing a stale lock`, { cause: error });
       throw error;
     }
     let result: T;
@@ -226,7 +226,7 @@ export class ArtipodWorkspace {
       const metadata = path.join(destination, '.artipod');
       try { await fs.mkdir(metadata); }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Artipod fork destination is already reserved or non-empty');
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Artipod fork destination is already reserved or non-empty', { cause: error });
         throw error;
       }
       const lock = path.join(metadata, 'checkpoint-lock');

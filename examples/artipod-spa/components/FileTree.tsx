@@ -50,7 +50,6 @@ export default function FileTree({ onSelectFile, events, roots, getDehydratedPat
         return { dispose: off };
       },
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootsKey]);
 
   useEffect(() => {

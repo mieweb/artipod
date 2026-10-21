@@ -1,0 +1,9 @@
+# Dependency upgrade follow-up
+
+Validated on 2026-10-05 during the Dependabot remediation. Compatible security patches are applied independently of major-version migrations.
+
+The narrowly scoped holds in `.github/dependabot.yml` record the reasons and recheck conditions for Node type majors, TypeScript 7, Vitest 5, Next 16 lint configuration, SPA ESLint 10, and ZenFS 2.7.6. Revisit those constraints when changing runtime/framework support or when the affected upstream package supplies a compatible fix; do not dismiss a security advisory merely because its proposed major upgrade is deferred.
+
+One upstream issue remains without a patched release: [GHSA-vfj7-8cjw-p6xm / CVE-2026-93687](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) in `braces@3.0.3`. The SPA development-only dependency path is `eslint-config-next@15.5.25 → @next/eslint-plugin-next@15.5.25 → fast-glob@3.3.1 → micromatch@4.0.8 → braces@3.0.3`. Deeply nested untrusted glob patterns can cause a denial of service in tooling; Next's lint `rootDir` setting is one glob input. The package is not imported by the application and the SPA production dependency audit is clean. The five development audit entries are manifestations of this one advisory. Keep it visible and update when a patched braces release or compatible Next lint dependency removes the affected package; rerun lint, static export, and the audit.
+
+Codecov's ingest/API wildcard certificate was expired during validation. Coverage generation succeeds and GitHub saves `core-coverage` (LCOV, 14-day retention). OIDC acquisition and the pinned official PyPI CLI install succeed, but Codecov has not accepted the upload. Once Codecov restores valid TLS, verify actual upload acceptance in the action log before considering the outage resolved. TLS verification remains enabled; coverage upload retains its existing advisory status. No unattended monitoring is configured.

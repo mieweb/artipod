@@ -14,7 +14,7 @@ function ensureBase64Codecs(): Promise<void> {
       fromBase64?: (s: string, o?: { alphabet?: string }) => Uint8Array;
       prototype: { toBase64?: (o?: { alphabet?: string; omitPadding?: boolean }) => string };
     };
-    let ok = false;
+    let ok: boolean;
     try {
       const decoded = U8.fromBase64?.('-_8', { alphabet: 'base64url' });
       const encoded = U8.prototype.toBase64?.call(new Uint8Array([251, 255]), { alphabet: 'base64url', omitPadding: true });
