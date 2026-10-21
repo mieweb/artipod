@@ -50,8 +50,8 @@ Persistent browser workspace contents and names must be encrypted before their f
 
 Final checks on the rebased implementation:
 
-- Root lint/build and 765 Vitest tests plus 30 checkpoint tests passed.
-- SPA lint/typecheck and 75 tests passed; `npm run build:ui` completed with
+- Root lint/build and 771 Vitest tests plus 35 checkpoint tests passed.
+- SPA lint/typecheck and 77 tests passed; `npm run build:ui` completed with
   version and struct-minifier assertions intact.
 - Chromium 149.0.7827.55: the actual-app harness passed all 17 raw-storage
   checkpoints with zero plaintext marker leaks and zero unhandled page errors.
