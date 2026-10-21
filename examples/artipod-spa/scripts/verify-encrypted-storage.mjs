@@ -42,6 +42,9 @@ const names = {
   label: `storage-probe-snapshot-${id}`,
   ref: `storage-probe-ref-${id}:_1`,
   overlay: `storage-probe-overlay-${id}.txt`,
+  editorFile: `storage-probe-editor-${id}.md`,
+  editorSaved: `storage-probe-editor-saved-${id}`,
+  editorDraft: `storage-probe-editor-unsaved-${id}`,
 };
 const canary = `observer-canary-${id}`;
 const events = [];
@@ -260,6 +263,7 @@ try {
   await context.exposeBinding('__reportPersistence', (_, event) => { events.push(event); });
   await context.addInitScript(observePersistence, { markers: Object.values(names), canary });
   page = await context.newPage();
+  await page.clock.install({ time: new Date() });
   page.on('pageerror', (error) => diagnostics.push(`pageerror: ${error.message}`));
   page.on('console', (message) => { if (['warning', 'error'].includes(message.type())) diagnostics.push(`${message.type()}: ${message.text()}`); });
 
@@ -354,6 +358,64 @@ try {
     await checkFiles();
     await audit('unlocked');
   });
+  await step('dirty editor text survives release and offline expiry without being saved', async () => {
+    await page.evaluate(async (names) => {
+      const pod = window.__artipod;
+      const root = `/work/${names.workspace}`;
+      await pod.zfs.promises.writeFile(`${root}/${names.editorFile}`, names.editorSaved);
+      const shell = pod.createSandbox({ confineTo: root });
+      try {
+        const result = await shell.exec(`edit '/${names.editorFile}'`);
+        if (result.exitCode) throw new Error(`Could not open editor: ${result.stderr}`);
+      } finally { shell.dispose(); }
+    }, names);
+    const editable = () => page.locator('.ProseMirror[contenteditable="true"]:visible').first();
+    const waitForEditorText = (text) => page.waitForFunction((text) =>
+      document.querySelector('.ProseMirror[contenteditable="true"]')?.textContent === text, text);
+    await editable().waitFor();
+    // RichEditor loads its markdown asynchronously after mounting. Typing
+    // before that seed finishes would test its initialization race instead.
+    await waitForEditorText(names.editorSaved);
+    await editable().fill(names.editorDraft);
+    await page.getByLabel('Unsaved changes', { exact: true }).waitFor();
+    assert.equal(await editable().textContent(), names.editorDraft, 'Editor did not accept the synthetic keystrokes');
+    await page.getByRole('button', { name: 'Release the key lease', exact: true }).click();
+    await page.getByRole('heading', { name: 'Browser storage is locked', exact: true }).waitFor();
+    await audit('unsaved editor while locked');
+    await page.getByRole('button', { name: /encrypted · locked — login/ }).click();
+    await ready();
+    await page.getByLabel('Unsaved changes', { exact: true }).waitFor();
+    await waitForEditorText(names.editorDraft);
+    assert.equal(await editable().textContent(), names.editorDraft, 'Lease release discarded editor text');
+    const readSavedText = () => page.evaluate(async (names) => window.__artipod.zfs.promises.readFile(`/work/${names.workspace}/${names.editorFile}`, 'utf8'), names);
+    assert.equal(await readSavedText(), names.editorSaved, 'Unlock silently saved an unsaved draft');
+
+    await page.getByRole('button', { name: 'online', exact: true }).click();
+    await page.evaluate(() => window.__artipod.zfs.promises.mkdir('/.artipod', { recursive: true }));
+    const remaining = await page.evaluate(() => {
+      const expiresAt = window.__artipod.locker.status()[0]?.expiresAt;
+      if (!expiresAt) throw new Error('No broker lease expiry is available');
+      return expiresAt - Date.now();
+    });
+    await page.clock.fastForward(Math.max(1, remaining + 1000));
+    await page.getByRole('heading', { name: 'Browser storage is locked', exact: true }).waitFor();
+    await audit('unsaved editor after offline expiry');
+    // The server uses real time. Restore wall time before requesting its next
+    // signed lease, after proving that expiry actually unmounted the editor.
+    await page.clock.setSystemTime(new Date());
+    await page.getByRole('button', { name: 'offline (forced)', exact: true }).click();
+    await page.getByRole('button', { name: /encrypted · locked — login/ }).click();
+    await ready();
+    await page.getByLabel('Unsaved changes', { exact: true }).waitFor();
+    await waitForEditorText(names.editorDraft);
+    assert.equal(await editable().textContent(), names.editorDraft, 'Offline expiry discarded editor text');
+    assert.equal(await readSavedText(), names.editorSaved, 'Expiry recovery changed saved file contents');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByLabel('Unsaved changes', { exact: true }).waitFor({ state: 'detached' });
+    // The markdown serializer terminates a paragraph with one newline.
+    assert.equal(await readSavedText(), `${names.editorDraft}\n`, 'Explicit save did not write the restored editor text');
+    await audit('restored editor explicitly saved');
+  });
   await step('publish scratch and push an overlay with filename metadata', async () => {
     const result = await page.evaluate(async (names) => {
       const pod = window.__artipod;
@@ -388,6 +450,17 @@ try {
     assert.equal(await page.evaluate(() => !!window.__artipod), false, 'Locked reload mounted a workspace');
     await audit('missing grant and offline key server');
     await context.unroute('**/api/keys**');
+  });
+  await step('online reload after release keeps a visible login until explicit unlock', async () => {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByRole('heading', { name: 'Browser storage is locked', exact: true }).waitFor();
+    await page.getByRole('button', { name: /encrypted · locked — login/ }).waitFor();
+    assert.equal(await page.evaluate(() => !!window.__artipod), false, 'Online reload automatically reopened a released workspace');
+    await audit('released grant online reload');
+    await page.getByRole('button', { name: /encrypted · locked — login/ }).click();
+    await ready(names.ref);
+    await checkFiles(names.ref);
+    await audit('explicit login after released online reload');
   });
   await step('a confirmed non-broker service offers visibly memory-only editing', async () => {
     const volatile = await browser.newContext();

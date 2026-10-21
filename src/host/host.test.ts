@@ -208,6 +208,66 @@ describe('TerminalSession', () => {
 });
 
 describe('FileBuffer', () => {
+  it('keeps edits typed during an in-flight save dirty against the text actually written', async () => {
+    await zfs.promises.writeFile('/repo/saving.txt', 'original');
+    let finishWrite!: () => void;
+    const writing = new Promise<void>((resolve) => { finishWrite = resolve; });
+    const guarded = { ...zfs, promises: new Proxy(zfs.promises, { get(target, key) {
+      if (key === 'writeFile') return async (...args: unknown[]) => {
+        await writing;
+        return Reflect.apply(target.writeFile, target, args);
+      };
+      return Reflect.get(target, key);
+    } }) };
+    const buffer = await FileBuffer.open({ zfs: guarded, path: '/repo/saving.txt' });
+    buffer.setContent('first edit');
+    const saved = buffer.save();
+    buffer.setContent('second edit');
+    finishWrite();
+    await saved;
+    expect(await zfs.promises.readFile(buffer.path, 'utf8')).toBe('first edit');
+    expect(buffer.savedContent).toBe('first edit');
+    expect(buffer.content).toBe('second edit');
+    expect(buffer.isDirty).toBe(true);
+    buffer.dispose();
+  });
+
+  it('preserves dirty text and baseline when reload fails with an access error', async () => {
+    await zfs.promises.writeFile('/repo/locked.txt', 'saved');
+    let denied = false;
+    const guarded = { ...zfs, promises: new Proxy(zfs.promises, { get(target, key) {
+      if (key === 'readFile' && denied) return async () => { throw Object.assign(new Error('locked'), { code: 'EACCES' }); };
+      return Reflect.get(target, key);
+    } }) };
+    const buffer = await FileBuffer.open({ zfs: guarded, path: '/repo/locked.txt' });
+    buffer.setContent('unsaved');
+    denied = true;
+    await expect(buffer.reload()).rejects.toMatchObject({ code: 'EACCES' });
+    expect(buffer.content).toBe('unsaved');
+    expect(buffer.isDirty).toBe(true);
+    buffer.setContent('saved');
+    expect(buffer.isDirty).toBe(false);
+    buffer.dispose();
+  });
+
+  it('does not mistake an unavailable filesystem for deletion on external change', async () => {
+    await zfs.promises.writeFile('/repo/locked.txt', 'saved');
+    let denied = false;
+    const guarded = { ...zfs, promises: new Proxy(zfs.promises, { get(target, key) {
+      if (key === 'readFile' && denied) return async () => { throw Object.assign(new Error('I/O failed'), { code: 'EIO' }); };
+      return Reflect.get(target, key);
+    } }) };
+    const buffer = await FileBuffer.open({ zfs: guarded, path: '/repo/locked.txt', events });
+    denied = true;
+    events.emit('fs:changed', { paths: [buffer.path], origin: 'external' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(buffer.content).toBe('saved');
+    expect(buffer.isDirty).toBe(false);
+    expect(buffer.externallyChanged).toBe(false);
+    buffer.dispose();
+  });
+
   it('opens, edits, saves, and reports dirty state', async () => {
     await zfs.promises.writeFile('/repo/a.md', 'one');
     const buffer = await FileBuffer.open({ zfs, path: '/repo/a.md', events });

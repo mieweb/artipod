@@ -28,10 +28,19 @@ lock. Lease expiry denies even cached filesystem reads; key replacement must
 authenticate existing ciphertext before access resumes. Flush failures propagate
 to saves and shell operations instead of being reported as durable success.
 Previously decrypted application memory cannot be retroactively revoked.
+Unsaved editor drafts survive locking in this tab's RAM and return after
+authenticated unlock; they are not written to browser storage until saved.
+Reloading or closing the tab discards those unsaved drafts.
 This encryption boundary does not make ordinary ZenFS multi-block mutations
 crash-atomic: the existing transaction rollback defect under backing failures
 remains, so a failed operation can require recovery. Migration uses its own
 verified generation protocol and preserves original sources until commit.
+
+Confirmed browser reset stops key renewal and new filesystem writes, drains
+accepted operations, and retains both writer locks until private storage deletion
+finishes. An expired key or failed final flush is reported as a warning while
+the confirmed erase continues. A failed erase preserves the encryption-required
+bootstrap until the remaining backing stores have been removed.
 
 The browser vault currently encrypts its blocks directly with the leased broker
 KEK; this fix does not introduce independent per-layer or per-generation DEKs.

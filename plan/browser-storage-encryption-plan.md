@@ -1,6 +1,6 @@
 # Encrypt browser scratch workspaces and filename metadata
 
-Status: implemented and validated on `fix/browser-storage-encryption`, rebased onto `artipod` commit `3bd6536f35a05135ec5d244db433ae93ffeccbcb`; ready for pull-request review. Original findings verified on 2026-10-21 against `artipod` commit `422da9754d3a9aa0df2289aca66ffa60310c8e0a`.
+Status: implemented on `fix/browser-storage-encryption`; pull-request review fixes and CI validation are recorded in [#117](https://github.com/mieweb/artipod/pull/117). Original findings verified on 2026-10-21 against `artipod` commit `422da9754d3a9aa0df2289aca66ffa60310c8e0a`.
 
 Tracking issue: [mieweb/artipod#116](https://github.com/mieweb/artipod/issues/116). The issue contains the full implementation plan.
 
@@ -25,6 +25,10 @@ Persistent browser workspace contents and names must be encrypted before their f
 - Registry, catalog, editor and shell operations use the same root. Persistence
   errors propagate through flush. One tab owns the root, replacing the old
   advisory multi-tab model and raw-OPFS registry writer.
+- Unsaved editor drafts remain only in tab memory through lock/unlock. Reset
+  drains key-service and filesystem writes while retaining writer ownership
+  through terminal deletion events, including blocked IndexedDB deletions.
+  Damaged legacy uppers without a valid root block remain untouched for recovery.
 - Existing durable OCI whiteouts/history migrate as bytes. Legacy unsynced CoW
   deletions were held only in memory; no migration can recover them after an
   old tab exits. Making that journal restart-persistent is separate work.
@@ -42,15 +46,19 @@ Persistent browser workspace contents and names must be encrypted before their f
 
 Final checks on the rebased implementation:
 
-- Root lint/build and 747 Vitest tests plus 29 checkpoint tests passed.
-- SPA lint/typecheck and 52 tests passed; `npm run build:ui` completed with
+- Root lint/build and 755 Vitest tests plus 29 checkpoint tests passed before
+  incorporating the parent pull request's additional native snapshot regressions.
+- SPA lint/typecheck and 69 tests passed; `npm run build:ui` completed with
   version and struct-minifier assertions intact.
-- Chromium 149.0.7827.55: the actual-app harness passed all 10 raw-storage
+- Chromium 149.0.7827.55: the actual-app harness passed all 15 raw-storage
   checkpoints with zero plaintext marker leaks and zero unhandled page errors.
 - The independent adapter harness passed OPFS and IndexedDB migrations,
   identical retained backend copies, interrupted cleanup, writer exclusion,
   raw write-history scans, backend anchoring and fail-closed OPFS probing.
 - The locked gate was visually checked in dark mode; text contrast was 17.18:1.
+- Pull requests targeting the parent `artipod` branch run the regular CI jobs.
+  A dedicated Chromium CI job runs both raw-adapter and actual-app storage
+  verification, including release/reload, dirty drafts and offline lease expiry.
 
 
 Targeted tests cover first-write ciphertext, cached access while locked,

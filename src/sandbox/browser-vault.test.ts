@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { InMemory, InMemoryStore, type FileSystem } from '@zenfs/core';
 import { encryptBlob, generateBlobKey, importBlobKey, isEncryptedBlob } from '../oci/cipher.js';
-import { openBrowserVault, type BrowserVaultAdapters, type BrowserVaultControl, type BrowserVaultLegacySource } from './browser-vault.js';
+import { openBrowserVault, resetBrowserVault, type BrowserVaultAdapters, type BrowserVaultControl, type BrowserVaultLegacySource } from './browser-vault.js';
 
 const NAME = 'PATIENT-MARKER-Jane-Doe.csv';
 const MARKER = 'PII-MARKER,private-row\n';
@@ -30,6 +30,8 @@ async function get(filesystem: FileSystem, path: string): Promise<string> {
 class HistoryStore extends InMemoryStore {
   readonly writes: Uint8Array[] = [];
   failAfter = Infinity;
+  closes = 0;
+  close(): void { this.closes++; }
   set(id: number, bytes: Uint8Array): this {
     if (this.writes.length >= this.failAfter) throw new Error('QuotaExceededError');
     this.writes.push(bytes.slice());
@@ -48,6 +50,8 @@ class Harness implements BrowserVaultAdapters {
   onControl?: (control: BrowserVaultControl) => void;
   onOpen?: (store: HistoryStore) => void;
   failCleanup = false;
+  onErase?: () => Promise<void>;
+  erased = false;
   async readControl() { return this.control && structuredClone(this.control); }
   async writeControl(control: BrowserVaultControl) {
     this.control = structuredClone(control);
@@ -73,6 +77,13 @@ class Harness implements BrowserVaultAdapters {
     return { kind: 'store' as const, store };
   }
   async removeGeneration(id: string) { this.stores.delete(id); }
+  async erase() {
+    expect(this.locked).toBe(true);
+    await this.onErase?.();
+    this.stores.clear();
+    this.control = null;
+    this.erased = true;
+  }
   async legacySources() { return this.sources.filter(source => !this.removed.has(source.id)); }
   async addSource(files: Record<string, string | Uint8Array>, id = 'legacy', target = '/') {
     const filesystem = InMemory.create({});
@@ -362,5 +373,108 @@ describe('whole-browser encrypted vault', () => {
     current = validRenewed;
     await vault.close();
     harness.assertOnlyCiphertext();
+  });
+
+  it('keeps writer ownership through reset deletion and closes connections before erasing', async () => {
+    const harness = new Harness();
+    const key = await generateBlobKey();
+    const vault = await openBrowserVault({ adapters: harness, getKey: () => key });
+    const store = harness.stores.get(vault.generation)!;
+    let finishErase!: () => void;
+    const gate = new Promise<void>(resolve => { finishErase = resolve; });
+    let eraseStarted!: () => void;
+    const started = new Promise<void>(resolve => { eraseStarted = resolve; });
+    harness.onErase = async () => {
+      expect(store.closes).toBeGreaterThan(0);
+      eraseStarted();
+      await gate;
+    };
+    const resetting = vault.reset();
+    await started;
+    await expect(openBrowserVault({ adapters: harness, getKey: () => key })).rejects.toThrow('Another writer');
+    expect(() => vault.filesystem.statSync('/')).toThrow('closed');
+    let closeFinished = false;
+    const closing = vault.close().then(() => { closeFinished = true; });
+    await Promise.resolve();
+    expect(closeFinished).toBe(false);
+    finishErase();
+    expect(await resetting).toEqual({ warnings: [] });
+    await closing;
+    expect(harness.erased).toBe(true);
+    expect(harness.locked).toBe(false);
+  });
+
+  it('continues a confirmed reset after failed persistence and reports the warning', async () => {
+    const harness = new Harness();
+    const key = await generateBlobKey();
+    const vault = await openBrowserVault({ adapters: harness, getKey: () => key });
+    const store = harness.stores.get(vault.generation)!;
+    store.failAfter = store.writes.length;
+    await expect(put(vault.filesystem, '/quota.csv', MARKER)).rejects.toThrow();
+    const result = await vault.reset();
+    expect(result.warnings.join(' ')).toContain('QuotaExceededError');
+    expect(harness.erased).toBe(true);
+    expect(harness.locked).toBe(false);
+  });
+
+  it('drains an already-started operation before erasing and rejects new operations', async () => {
+    const harness = new Harness();
+    const key = await generateBlobKey();
+    const vault = await openBrowserVault({ adapters: harness, getKey: () => key });
+    await put(vault.filesystem, '/prior.csv', MARKER);
+    await vault.flush();
+    const filesystem = vault.filesystem;
+    const originalRead = Object.getOwnPropertyDescriptor(filesystem, 'read')!.value as FileSystem['read'];
+    let finishRead!: () => void;
+    let readStarted!: () => void;
+    const gate = new Promise<void>(resolve => { finishRead = resolve; });
+    const started = new Promise<void>(resolve => { readStarted = resolve; });
+    // Capture a VFS read that was accepted before reset began.
+    const backing = harness.stores.get(vault.generation)!;
+    const originalGet = backing.get.bind(backing);
+    // A test hook on the low-level FS method lets the exposed lifecycle proxy
+    // observe a pending operation without relying on browser I/O timing.
+    Object.defineProperty(filesystem, 'read', { configurable: true, value: async function(this: FileSystem, ...args: Parameters<FileSystem['read']>) {
+      readStarted(); await gate;
+      // Raw store reads remain available while the accepted call drains.
+      expect(originalGet(0)).toBeDefined();
+      return Reflect.apply(originalRead, this, args);
+    } });
+    const read = filesystem.read('/prior.csv', new Uint8Array(MARKER.length), 0, MARKER.length);
+    await started;
+    const resetting = vault.reset();
+    expect(() => filesystem.statSync('/')).toThrow('reset is in progress');
+    await Promise.resolve();
+    expect(harness.erased).toBe(false);
+    finishRead();
+    await read;
+    await resetting;
+    expect(harness.erased).toBe(true);
+  });
+
+  it('reports erasure failure and reacquires ownership before a retry', async () => {
+    const harness = new Harness();
+    const key = await generateBlobKey();
+    const vault = await openBrowserVault({ adapters: harness, getKey: () => key });
+    harness.onErase = async () => { throw new Error('Deletion failed'); };
+    await expect(vault.reset()).rejects.toThrow('Deletion failed');
+    expect(harness.control?.encryptionRequired).toBe(true);
+    expect(harness.erased).toBe(false);
+    expect(harness.locked).toBe(false);
+    const other = await openBrowserVault({ adapters: harness, getKey: () => key });
+    await expect(vault.reset()).rejects.toThrow('Another writer');
+    await other.close();
+    harness.onErase = undefined;
+    await vault.reset();
+    expect(harness.erased).toBe(true);
+  });
+
+  it('resets fresh or locked state without opening a generation or needing its key', async () => {
+    const harness = new Harness();
+    const result = await resetBrowserVault({ adapters: harness });
+    expect(result).toEqual({ warnings: [] });
+    expect(harness.stores.size).toBe(0);
+    expect(harness.erased).toBe(true);
+    expect(harness.locked).toBe(false);
   });
 });

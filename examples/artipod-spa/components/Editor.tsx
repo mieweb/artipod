@@ -11,20 +11,27 @@ import dynamicImport from 'next/dynamic';
 import { FileBuffer } from '@artipod/core/host';
 import type { PodEvents } from '@artipod/core/host';
 import { fs } from '@/lib/filesystem';
+import { keys } from '@/lib/boot';
+import { editorDrafts } from '@/lib/services/editor-drafts';
 
 const KerebronSurface = dynamicImport(() => import('@/components/KerebronSurface'), {
   ssr: false,
   loading: () => <div className="flex h-full items-center justify-center text-gray-400">loading editor…</div>,
 });
 
+function requireEditorAccess(): void {
+  if (keys().storagePolicy === 'encrypted') keys().requireKey();
+}
+
 interface EditorProps {
+  workspaceId: string;
   filepath: string;
   onClose: () => void;
   events?: PodEvents;
   readOnly?: boolean;
 }
 
-export default function Editor({ filepath, onClose, events, readOnly }: EditorProps) {
+export default function Editor({ workspaceId, filepath, onClose, events, readOnly }: EditorProps) {
   const [buffer, setBuffer] = useState<FileBuffer | null>(null);
   const [seed, setSeed] = useState(''); // surface seed — changes only on open/reload
   const [generation, setGeneration] = useState(0); // remount key for external reloads
@@ -36,35 +43,46 @@ export default function Editor({ filepath, onClose, events, readOnly }: EditorPr
   useEffect(() => {
     let disposed = false;
     let current: FileBuffer | null = null;
+    let detachDraft: (() => void) | null = null;
     setLoading(true);
     setError('');
-    FileBuffer.open({ zfs: fs, path: filepath, events, readOnly })
+    Promise.resolve().then(() => {
+      requireEditorAccess();
+      return FileBuffer.open({ zfs: fs, path: filepath, events, readOnly });
+    })
       .then((b) => {
         if (disposed) {
           b.dispose();
           return;
         }
+        // The key may have expired while the asynchronous read was pending.
+        try { requireEditorAccess(); }
+        catch (error) { b.dispose(); throw error; }
         current = b;
         setBuffer(b);
-        setSeed(b.content);
-        setIsDirty(b.isDirty);
-        b.onChange((buf) => {
-          setIsDirty(buf.isDirty);
-          setExternallyChanged(buf.externallyChanged);
+        detachDraft = editorDrafts.attach(workspaceId, filepath, b, (snapshot) => {
+          setIsDirty(snapshot.isDirty);
+          setExternallyChanged(snapshot.externallyChanged);
         });
+        setSeed(b.content);
+        setGeneration((value) => value + 1);
       })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
+      .catch((e: Error) => { if (!disposed) setError(e.message); })
+      .finally(() => { if (!disposed) setLoading(false); });
     return () => {
       disposed = true;
+      // Draft capture is synchronous on change. Cleanup performs no read or
+      // write against a root that may already be locked.
+      detachDraft?.();
       current?.dispose();
       setBuffer(null);
     };
-  }, [filepath, events, readOnly]);
+  }, [workspaceId, filepath, events, readOnly]);
 
   const handleSave = async () => {
     if (!buffer) return;
     try {
+      requireEditorAccess();
       await buffer.save();
     } catch (e) {
       setError((e as Error).message);
@@ -73,10 +91,13 @@ export default function Editor({ filepath, onClose, events, readOnly }: EditorPr
 
   const handleReload = async () => {
     if (!buffer) return;
-    await buffer.reload();
-    setSeed(buffer.content);
-    setExternallyChanged(false);
-    setGeneration((g) => g + 1); // uncontrolled surface — remount with the fresh content
+    try {
+      requireEditorAccess();
+      await buffer.reload();
+      setSeed(buffer.content);
+      setExternallyChanged(false);
+      setGeneration((g) => g + 1); // uncontrolled surface — remount with the fresh content
+    } catch (e) { setError((e as Error).message); }
   };
 
   return (
@@ -84,13 +105,13 @@ export default function Editor({ filepath, onClose, events, readOnly }: EditorPr
       <div className="flex items-center justify-between border-b border-gray-700 bg-[#2d2d2d] p-2">
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-bold">{filepath}</h2>
-          {isDirty && <span className="text-xs text-yellow-500">●</span>}
+          {isDirty && <span className="text-xs text-yellow-500" aria-label="Unsaved changes">●</span>}
         </div>
         <div className="flex gap-2">
           <button onClick={handleSave} className="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700">
             Save
           </button>
-          <button onClick={onClose} className="rounded bg-gray-700 px-3 py-1 text-xs hover:bg-gray-600">
+          <button onClick={() => { editorDrafts.close(workspaceId, filepath); onClose(); }} className="rounded bg-gray-700 px-3 py-1 text-xs hover:bg-gray-600">
             Close
           </button>
         </div>
@@ -111,7 +132,7 @@ export default function Editor({ filepath, onClose, events, readOnly }: EditorPr
       ) : (
         <div className="relative flex-1 overflow-hidden">
           <KerebronSurface
-            key={`${filepath}:${generation}`}
+            key={`${workspaceId}:${filepath}:${generation}`}
             language={buffer?.language ?? 'plaintext'}
             value={seed}
             onChange={(next) => buffer?.setContent(next)}

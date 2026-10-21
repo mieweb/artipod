@@ -23,10 +23,10 @@ catch (error) {
 }
 const bundle = await build({ stdin: { resolveDir: root, contents: `
   import * as zen from '@zenfs/core';
-  import {openBrowserVault,createBrowserVaultAdapters,browserVaultRequired} from './src/sandbox/browser-vault.ts';
+  import {openBrowserVault,createBrowserVaultAdapters,browserVaultRequired,resetBrowserVault} from './src/sandbox/browser-vault.ts';
   import {encryptedStoreMount} from './src/sandbox/encrypted-store.ts';
   import {importBlobKey,encryptBlob,isEncryptedBlob} from './src/oci/cipher.ts';
-  globalThis.vaultApi={zen,openBrowserVault,createBrowserVaultAdapters,browserVaultRequired,encryptedStoreMount,importBlobKey,encryptBlob,isEncryptedBlob};
+  globalThis.vaultApi={zen,openBrowserVault,createBrowserVaultAdapters,browserVaultRequired,resetBrowserVault,encryptedStoreMount,importBlobKey,encryptBlob,isEncryptedBlob};
 ` }, bundle: true, write: false, platform: 'browser', format: 'iife', target: 'es2022' });
 const server = createServer((request, response) => {
   response.setHeader('Cache-Control', 'no-store');
@@ -171,6 +171,171 @@ async function installHelpers(page) {
 
 try {
   browser = await playwright.chromium.launch({ headless: true, ...(process.env.CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } : {}) });
+  {
+    const context = await browser.newContext();
+    const owner = await context.newPage();
+    await installHelpers(owner);
+    const generation = await owner.evaluate(async () => {
+      const root = await navigator.storage.getDirectory();
+      await window.writeRawFile(root, 'artipod-models/public-model.bin', 'public reset-safe asset');
+      window.vault = await window.vaultApi.openBrowserVault({ getKey: () => window.key, backend: 'indexeddb' });
+      await window.writeLogical(window.vault.filesystem, '/before-reset.csv', window.marker);
+      await window.vault.flush();
+      window.resetDone = false;
+      window.blockedDeletion = false;
+      const remove = indexedDB.deleteDatabase;
+      indexedDB.deleteDatabase = function(name) {
+        const request = remove.call(this, name);
+        request.addEventListener('blocked', () => { window.blockedDeletion = true; });
+        return request;
+      };
+      return window.vault.generation;
+    });
+    const blocker = await context.newPage();
+    await installHelpers(blocker);
+    await blocker.evaluate(async generation => {
+      window.heldDatabase = await new Promise((resolve, reject) => {
+        const request = indexedDB.open(`artipod-vault-blocks-${generation}`);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }, generation);
+    await owner.evaluate(() => {
+      window.resetTask = window.vault.reset().then(result => { window.resetResult = result; window.resetDone = true; });
+    });
+    await owner.waitForFunction(() => window.blockedDeletion);
+    assert.equal(await owner.evaluate(() => window.resetDone), false, 'blocked deletion is not a completed reset');
+    assert.equal(await owner.evaluate(() => window.vaultApi.browserVaultRequired()), true, 'bootstrap must remain until backing deletion completes');
+    const denied = await blocker.evaluate(async () => {
+      try { await window.vaultApi.openBrowserVault({ getKey: () => window.key }); return false; }
+      catch (error) { return error.message.includes('another tab'); }
+    });
+    assert.equal(denied, true, 'reset must retain writer ownership while IDB deletion is blocked');
+    await blocker.evaluate(() => window.heldDatabase.close());
+    await owner.waitForFunction(() => window.resetDone);
+    const erased = await owner.evaluate(async () => ({
+      result: window.resetResult,
+      required: await window.vaultApi.browserVaultRequired(),
+      databases: (await indexedDB.databases()).map(db => db.name),
+      model: await (await (await (await navigator.storage.getDirectory()).getDirectoryHandle('artipod-models')).getFileHandle('public-model.bin')).getFile().then(file => file.text()),
+    }));
+    assert.deepEqual(erased.result, { warnings: [] });
+    assert.equal(erased.required, false);
+    assert.equal(erased.databases.some(name => name.startsWith('artipod')), false);
+    assert.equal(erased.model, 'public reset-safe asset');
+    const fresh = await blocker.evaluate(async prior => {
+      const vault = await window.vaultApi.openBrowserVault({ getKey: () => window.key });
+      const result = { different: vault.generation !== prior, absent: !(await vault.filesystem.exists('/before-reset.csv')) };
+      await vault.close();
+      await window.vaultApi.resetBrowserVault();
+      return result;
+    }, generation);
+    assert.deepEqual(fresh, { different: true, absent: true });
+    reports.push('Confirmed IDB reset retains both writer locks through blocked deletion, closes connections, preserves public models and permits a fresh open only afterward');
+    await context.close();
+  }
+  {
+    const context = await browser.newContext();
+    const owner = await context.newPage();
+    await installHelpers(owner);
+    await owner.evaluate(async () => {
+      const source = window.vaultApi.zen.InMemory.create({});
+      await source.ready();
+      await window.writeLogical(source, '/blocked-migration.csv', window.marker);
+      await window.writeOldDatabase('artipodfs', source.store);
+      window.migrationDone = false;
+      window.blockedDeletion = false;
+      const remove = indexedDB.deleteDatabase;
+      indexedDB.deleteDatabase = function(name) {
+        const request = remove.call(this, name);
+        request.addEventListener('blocked', () => { window.blockedDeletion = true; });
+        return request;
+      };
+    });
+    const blocker = await context.newPage();
+    await installHelpers(blocker);
+    await blocker.evaluate(async () => {
+      window.heldDatabase = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('artipodfs');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    });
+    await owner.evaluate(() => {
+      window.migrationTask = window.vaultApi.openBrowserVault({ getKey: () => window.key }).then(vault => {
+        window.vault = vault;
+        window.migrationDone = true;
+      });
+    });
+    await owner.waitForFunction(() => window.blockedDeletion);
+    assert.equal(await owner.evaluate(() => window.migrationDone), false);
+    const denied = await blocker.evaluate(async () => {
+      try { await window.vaultApi.openBrowserVault({ getKey: () => window.key }); return false; }
+      catch (error) { return error.message.includes('another tab'); }
+    });
+    assert.equal(denied, true, 'migration must retain writer ownership while old DB deletion is blocked');
+    await blocker.evaluate(() => window.heldDatabase.close());
+    await owner.waitForFunction(() => window.migrationDone);
+    assert.equal(await owner.evaluate(() => window.readLogical(window.vault.filesystem, '/blocked-migration.csv')), marker);
+    await owner.evaluate(() => window.vault.close());
+    reports.push('Legacy IDB migration retains writer locks until a blocked cleanup deletion completes');
+    await context.close();
+  }
+  {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await installHelpers(page);
+    const reset = await page.evaluate(async () => {
+      const root = await navigator.storage.getDirectory();
+      await window.writeRawFile(root, 'artipod-models/public-model.bin', 'public reset-safe asset');
+      let leased = true;
+      const vault = await window.vaultApi.openBrowserVault({ getKey: () => { if (!leased) throw new Error('Lease expired'); return window.key; } });
+      await window.writeLogical(vault.filesystem, '/discarded.csv', window.marker);
+      await vault.flush();
+      leased = false;
+      const result = await vault.reset();
+      const required = await window.vaultApi.browserVaultRequired();
+      const entries = [];
+      for await (const name of root.keys()) entries.push(name);
+      return { result, required, entries };
+    });
+    assert.equal(reset.result.warnings.some(warning => warning.includes('Lease expired')), true);
+    assert.equal(reset.required, false);
+    assert.deepEqual(reset.entries, ['artipod-models']);
+    reports.push('Confirmed OPFS reset reports failed lease/flush and still erases private state while preserving public models');
+    await context.close();
+  }
+  {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await installHelpers(page);
+    const failure = await page.evaluate(async () => {
+      const api = window.vaultApi;
+      const vault = await api.openBrowserVault({ getKey: () => window.key });
+      await window.writeLogical(vault.filesystem, '/preserved.csv', window.marker);
+      await vault.flush();
+      const remove = FileSystemDirectoryHandle.prototype.removeEntry;
+      FileSystemDirectoryHandle.prototype.removeEntry = function(name, options) {
+        if (name === 'artipod-vault') return Promise.reject(new DOMException('Synthetic erase denied', 'NotAllowedError'));
+        return remove.call(this, name, options);
+      };
+      let message;
+      try { await vault.reset(); } catch (error) { message = error.message; }
+      const required = await api.browserVaultRequired();
+      FileSystemDirectoryHandle.prototype.removeEntry = remove;
+      const recovered = await api.openBrowserVault({ getKey: () => window.key });
+      const value = await window.readLogical(recovered.filesystem, '/preserved.csv');
+      await recovered.close();
+      await api.resetBrowserVault();
+      return { message, required, value, cleared: !(await api.browserVaultRequired()) };
+    });
+    assert.equal(failure.message, 'Synthetic erase denied');
+    assert.equal(failure.required, true);
+    assert.equal(failure.value, marker);
+    assert.equal(failure.cleared, true);
+    reports.push('Erasure failure is reported, retains the required bootstrap and permits explicit lock-protected recovery/reset retry');
+    await context.close();
+  }
   {
     const context = await browser.newContext();
     const page = await context.newPage();

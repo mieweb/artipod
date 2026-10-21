@@ -39,6 +39,8 @@ export class KeysService {
   private lastProbeError: string | null = null;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private leaseGeneration = 0;
+  private storageSuspended = false;
+  private readonly storageOperations = new Set<Promise<unknown>>();
   /** Authentication challenges contain no usable key material and may survive lock. */
   private readonly keyChecks = new Map<string, { iv: ArrayBuffer; ciphertext: ArrayBuffer }>();
   private installed = false;
@@ -47,6 +49,9 @@ export class KeysService {
   private principal: (() => Promise<string>) | null = null;
   /** U3 wires the pod-settings write-through here (fs exists only after boot). */
   private offlineWriter: ((value: boolean) => Promise<void>) | null = null;
+  /** An explicit toggle wins over stored settings until its write succeeds. */
+  private pendingOffline: { value: boolean } | null = null;
+  private offlineWrites: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly adapters: ServiceAdapters,
@@ -80,6 +85,29 @@ export class KeysService {
 
   get probeError(): string | null {
     return this.lastProbeError;
+  }
+
+  private async stored<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.storageSuspended) throw new Error('Key storage is suspended for browser reset; reload to resume');
+    const pending = operation();
+    this.storageOperations.add(pending);
+    try { return await pending; }
+    finally { this.storageOperations.delete(pending); }
+  }
+
+  private persist(key: string, value: unknown): Promise<void> {
+    return this.stored(() => this.adapters.kv.put(key, value));
+  }
+
+  /** Drain device/grant IO before erasure, retaining the lease only for flush. */
+  async suspendForReset(): Promise<() => void> {
+    this.storageSuspended = true;
+    this.leaseGeneration += 1;
+    this.scheduler.cancel(RENEW_TASK);
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = null;
+    while (this.storageOperations.size) await Promise.allSettled([...this.storageOperations]);
+    return () => this.dropLease();
   }
 
   // ── keys (never in a store) ──────────────────────────────────────────────
@@ -121,7 +149,7 @@ export class KeysService {
     this.leaseB64 = null;
     this.currentLease = null;
     this.podKeys = {};
-    void this.adapters.kv.put('session', undefined).catch(() => {});
+    void this.persist('session', undefined).catch(() => {});
     this.setState({ status: 'locked', meta: this.state.meta, lastRenewedAt: this.state.lastRenewedAt });
   }
 
@@ -152,11 +180,26 @@ export class KeysService {
   setForcedOffline(value: boolean): void {
     this.adapters.mirror.set(OFFLINE_KEY, value ? '1' : null);
     settingsStore.setState({ forcedOffline: value });
-    void this.offlineWriter?.(value).catch(() => {});
+    this.pendingOffline = { value };
+    void this.flushOfflinePreference().catch(() => {});
+  }
+
+  /** Retry after the root adopts an unlocked key, before reading saved settings. */
+  flushOfflinePreference(): Promise<void> {
+    const writing = this.offlineWrites.catch(() => {}).then(async () => {
+      while (this.pendingOffline && this.offlineWriter && !this.storageSuspended) {
+        const pending = this.pendingOffline;
+        await this.offlineWriter(pending.value);
+        if (this.pendingOffline === pending) this.pendingOffline = null;
+      }
+    });
+    this.offlineWrites = writing;
+    return writing;
   }
 
   /** Adopt an externally-changed pod setting (shells write it; U3 calls this on fs:changed). */
   reconcileOffline(value: boolean): void {
+    if (this.pendingOffline) return;
     this.adapters.mirror.set(OFFLINE_KEY, value ? '1' : null);
     if (value !== this.forcedOffline) settingsStore.setState({ forcedOffline: value });
   }
@@ -220,12 +263,12 @@ export class KeysService {
 
   /** This device's ECDH keypair (non-extractable, structured-cloned into kv). */
   private async deviceKeyPair(): Promise<{ privateKey: CryptoKey; publicKeyB64: string }> {
-    const read = await this.adapters.kv.get<{ privateKey: CryptoKey; publicKeyB64: string }>('keypair');
+    const read = await this.stored(() => this.adapters.kv.get<{ privateKey: CryptoKey; publicKeyB64: string }>('keypair'));
     if (read) return read;
     const { generateDeviceKeyPair } = await import('@artipod/core/manager');
     const pair = await generateDeviceKeyPair();
     const record = { privateKey: pair.privateKey, publicKeyB64: pair.publicKeyB64 };
-    await this.adapters.kv.put('keypair', record);
+    await this.persist('keypair', record);
     return record;
   }
 
@@ -282,10 +325,10 @@ export class KeysService {
     if (this.released || this.adapters.mirror.get(RELEASED_KEY) === '1') return false;
     const generation = this.leaseGeneration;
     try {
-      const wire = await this.adapters.kv.get<WireWrappedLoginResult>('session');
+      const wire = await this.stored(() => this.adapters.kv.get<WireWrappedLoginResult>('session'));
       if (!wire) return false;
       if (!Number.isFinite(Date.parse(wire.lease.expiresAt)) || Date.parse(wire.lease.expiresAt) <= this.adapters.now()) {
-        await this.adapters.kv.put('session', undefined);
+        await this.persist('session', undefined);
         return false;
       }
       const device = await this.deviceKeyPair();
@@ -302,6 +345,7 @@ export class KeysService {
 
   /** Login uses an opaque profile identity and must never depend on the locked filesystem. */
   async login(principal: string): Promise<boolean> {
+    if (this.storageSuspended) return false;
     // A background tab may not have run its expiry timer yet. Revoke the old
     // grant before capturing this fresh login's cancellation generation.
     this.hasLiveLease();
@@ -323,7 +367,7 @@ export class KeysService {
       const { lease, cryptoKeys } = await unwrapLoginResult(wire, device.privateKey);
       const validated = await this.validateKeys(cryptoKeys);
       if (generation !== this.leaseGeneration || this.released) return false;
-      await this.adapters.kv.put('session', wire).catch(() => {}); // wrapped ciphertext only
+      await this.persist('session', wire).catch(() => {}); // wrapped ciphertext only
       if (generation !== this.leaseGeneration || this.released) return false;
       this.adapters.mirror.set(RELEASED_KEY, null);
       this.adopt(wire, lease, validated, meta, true);
@@ -363,6 +407,7 @@ export class KeysService {
   /** The bare fetch minus the lease patch — the offline toggle still blocks it
    * (or probe/login would sneak past the "dead network"). */
   private rawFetch: typeof fetch = (...args) => {
+    if (this.storageSuspended) return Promise.reject(new Error('Key storage is suspended for browser reset'));
     if (this.forcedOffline && this.isApiUrl(args[0] as RequestInfo | URL)) {
       return Promise.reject(new TypeError('Failed to fetch — forced offline (demo toggle)'));
     }
@@ -400,6 +445,7 @@ export class KeysService {
    * plaintext serves it is a passthrough. Idempotent.
    */
   async install(principal: () => Promise<string>): Promise<BrokerSnapshot> {
+    if (this.storageSuspended) throw new Error('Key storage is suspended for browser reset; reload to resume');
     this.principal = principal;
     if (!this.installed) {
       this.installed = true;
@@ -419,7 +465,13 @@ export class KeysService {
       }
       return this.state;
     }
-    if (!this.hasLiveLease() && !this.released) await this.login(await principal());
+    if (!this.hasLiveLease()) {
+      if (this.released) {
+        // A reload creates a fresh snapshot even though the persisted release
+        // marker suppresses login. Keep the explicit unlock action available.
+        this.setState({ status: 'locked', meta, lastRenewedAt: this.state.lastRenewedAt });
+      } else await this.login(await principal());
+    }
     return this.state;
   }
 }
