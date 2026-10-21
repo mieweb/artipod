@@ -250,6 +250,30 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 
 ## Worklog
 
+### Promotion review fixes — PR #83 (2026-10-21)
+
+- Workspace openings reserve teardown synchronously before a replacement boot,
+  including canceled pending opens. Disposal attempts every release; unknown
+  cleanup failures block replacement, while a final flush failure permits
+  authenticated recovery after verified disposal. Failed boots also dispose
+  partial pods, sandboxes, subscriptions and delayed lifetime locks.
+- Page observes the core storage session's serializable snapshot independently
+  of broker changes. A post-boot failed write exposes the existing recovery
+  action; recovery keeps dirty editor drafts in tab memory until explicit save.
+- Registry writes stage and flush inside the encrypted root, move the previous
+  complete file to a fallback, and install through same-directory renames into
+  absent names. Reads use the fallback only when the primary is absent. Retired
+  fallback cleanup cannot invalidate the primary or current fallback locator.
+- Verification: core lint/build/test pass (935 tests and 35 checkpoint tests),
+  root `npx tsc --noEmit` passes, SPA lint/typecheck and 85 tests pass, and static
+  export passes its version/struct-minify assertions. The 56 extension tests,
+  Chromium migration/app checks and packed Node/OPFS/IndexedDB consumer pass.
+  Browser checks report zero plaintext leaks and no unhandled errors; the new
+  quota-failure scenario recovers without a broker login and preserves both
+  saved bytes and dirty drafts. Fault injection covers registry staging, both
+  rename records and interrupted retired-file deletion; an independent sweep
+  verified valid old/new JSON at every one of the 16 backing-write positions.
+
 ### Core storage and key extraction — issue #118 (2026-10-21)
 
 - Moved reusable broker/key custody, device-wrapped offline grants, renewal,

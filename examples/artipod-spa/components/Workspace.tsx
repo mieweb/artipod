@@ -42,10 +42,7 @@ export default function Workspace({ route }: { route: Route }) {
 
   useEffect(() => {
     let cancelled = false;
-    let opened: PodSession | null = null;
     let offInspect: (() => void) | undefined;
-    let closing: Promise<void> | null = null;
-    const close = (session: PodSession): Promise<void> => closing ??= session.close();
     // Show "Opening…" NOW — the boot itself queues behind the previous
     // session's serialized close (flush-push included).
     workspaceStore.setState({ ...initialWorkspace, syncActive: route.isRef && route.mode === 'rw' });
@@ -54,13 +51,11 @@ export default function Workspace({ route }: { route: Route }) {
       cancelled = true;
       offInspect?.();
       sessionRef.current = null;
-      const session = opened ?? await opening.catch(() => null);
-      if (session) await close(session);
+      await opening.close();
     }, 'Workspace session');
     void opening
       .then((session) => {
-        if (cancelled) return close(session);
-        opened = session;
+        if (cancelled) return opening.close();
         sessionRef.current = session;
         setSessionTick((t) => t + 1);
         if (route.runIntent) setView('preview');
@@ -83,12 +78,20 @@ export default function Workspace({ route }: { route: Route }) {
         offInspect = session.events.on('fs:changed', () => void inspect());
       })
       .catch((e) => {
-        console.error('workspace boot failed:', e);
-        if (!cancelled) workspaceStore.setState({ phase: 'error', error: (e as Error).message });
+        if (!cancelled) {
+          console.error('workspace boot failed:', e);
+          workspaceStore.setState({ phase: 'error', error: (e as Error).message });
+        }
       });
     return () => {
       // U5: leaving the route closes the session — flush-push, unsubscribe,
       // pod.dispose (overlays + proc providers), Web Lock release.
+      cancelled = true;
+      offInspect?.();
+      sessionRef.current = null;
+      // Core invokes registered teardown callbacks in a microtask. Claim the
+      // session lifecycle synchronously before the next effect queues its boot.
+      void opening.close().catch(() => {});
       void teardown().catch(error => console.error('workspace close failed:', error));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

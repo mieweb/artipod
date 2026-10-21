@@ -64,6 +64,12 @@ A present malformed vault bootstrap is an error, including JSON null and other
 primitive values. Only a definitively absent control record permits creation;
 a corrupt record never authorizes replacing the saved generation with an empty one.
 
+The SPA registry stages updates inside the encrypted root and retains a previous
+complete registry while installing the replacement. Recovery uses that fallback
+only when the primary name is absent; malformed or inaccessible primary JSON
+still fails visibly. Failed writes are observed independently of the broker lease
+so saved storage can be recovered without discarding tab-only editor drafts.
+
 The managed vault currently encrypts its blocks directly with the supplied key
 (the leased broker KEK in the SPA); it does not introduce independent per-layer
 or per-generation DEKs. Browser history, git author preferences and optional

@@ -242,6 +242,17 @@ async function ready(ref) {
   assert.equal(await page.getByText(/Memory-only workspace:/).count(), 0, 'Encrypted test must never fall back to volatile or plaintext storage');
 }
 
+async function readyAfterUnlock() {
+  // A background registry write may have been in flight when the lease was
+  // revoked. Renewing the key cannot repair a failed persistence queue; take
+  // the visible recovery action explicitly before checking saved bytes/drafts.
+  await page.waitForFunction(() => (!!window.__artipod && !document.querySelector('[aria-label="Browser storage access"]')) ||
+    [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Recover saved storage'));
+  const recover = page.getByRole('button', { name: 'Recover saved storage', exact: true });
+  if (await recover.isVisible()) await recover.click();
+  await ready();
+}
+
 async function audit(stage) {
   const summary = await page.evaluate(() => window.__inspectRawPersistence());
   const leaks = events.filter((event) => !event.canary);
@@ -419,7 +430,7 @@ try {
     await page.getByRole('heading', { name: 'Browser storage is locked', exact: true }).waitFor();
     await audit('unsaved editor while locked');
     await page.getByRole('button', { name: /encrypted · locked — login/ }).click();
-    await ready();
+    await readyAfterUnlock();
     await page.getByLabel('Unsaved changes', { exact: true }).waitFor();
     await waitForEditorText(names.editorDraft);
     assert.equal(await editable().textContent(), names.editorDraft, 'Lease release discarded editor text');
@@ -441,7 +452,7 @@ try {
     await page.clock.setSystemTime(new Date());
     await page.getByRole('button', { name: 'offline (forced)', exact: true }).click();
     await page.getByRole('button', { name: /encrypted · locked — login/ }).click();
-    await ready();
+    await readyAfterUnlock();
     await page.getByLabel('Unsaved changes', { exact: true }).waitFor();
     await waitForEditorText(names.editorDraft);
     assert.equal(await editable().textContent(), names.editorDraft, 'Offline expiry discarded editor text');
@@ -451,6 +462,41 @@ try {
     // The markdown serializer terminates a paragraph with one newline.
     assert.equal(await readSavedText(), `${names.editorDraft}\n`, 'Explicit save did not write the restored editor text');
     await audit('restored editor explicitly saved');
+  });
+  await step('recover a failed write while the broker lease stays valid without losing drafts', async () => {
+    const draft = `${names.editorDraft}-quota-recovery`;
+    const editable = page.locator('.ProseMirror[contenteditable="true"]:visible').first();
+    const saved = await page.evaluate(async (names) => window.__artipod.zfs.promises.readFile(`/work/${names.workspace}/${names.editorFile}`, 'utf8'), names);
+    await editable.fill(draft);
+    await page.getByLabel('Unsaved changes', { exact: true }).waitFor();
+    let logins = 0;
+    const loginRequest = request => { if (new URL(request.url()).pathname === '/api/keys/login') logins++; };
+    page.on('request', loginRequest);
+    try {
+      const result = await page.evaluate(async (names) => {
+        const encrypt = SubtleCrypto.prototype.encrypt;
+        SubtleCrypto.prototype.encrypt = async () => { throw new DOMException('Synthetic storage quota failure', 'QuotaExceededError'); };
+        try {
+          await window.__artipod.zfs.promises.writeFile(`/work/${names.workspace}/${names.editorFile}`, names.editorSaved);
+          return { saved: true };
+        } catch (error) { return { saved: false, error: error.message }; }
+        finally { SubtleCrypto.prototype.encrypt = encrypt; }
+      }, names);
+      assert.equal(result.saved, false, 'Injected quota failure was reported as saved');
+      await page.getByRole('heading', { name: 'Browser storage could not open', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Release the key lease', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Recover saved storage', exact: true }).click();
+      await ready();
+      await page.getByRole('alert').filter({ hasText: 'Storage reopened from its saved generation after a failed write.' }).waitFor();
+      await page.getByLabel('Unsaved changes', { exact: true }).waitFor();
+      await page.waitForFunction(draft => document.querySelector('.ProseMirror[contenteditable="true"]')?.textContent === draft, draft);
+      assert.equal(await page.evaluate(async (names) => window.__artipod.zfs.promises.readFile(`/work/${names.workspace}/${names.editorFile}`, 'utf8'), names), saved, 'Recovery changed saved bytes or silently saved the draft');
+      assert.equal(logins, 0, 'Recovery of an I/O failure required a new broker login');
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await page.getByLabel('Unsaved changes', { exact: true }).waitFor({ state: 'detached' });
+      assert.equal(await page.evaluate(async (names) => window.__artipod.zfs.promises.readFile(`/work/${names.workspace}/${names.editorFile}`, 'utf8'), names), `${draft}\n`, 'The recovered draft could not be explicitly saved');
+      await audit('quota failure recovery with a valid broker lease');
+    } finally { page.off('request', loginRequest); }
   });
   for (const interruption of ['release', 'expiry']) await step(`recover a queued write interrupted by ${interruption} without losing drafts`, async () => {
     const editable = page.locator('.ProseMirror[contenteditable="true"]:visible').first();

@@ -3,8 +3,8 @@
  * extracted from the old app's 300-line boot effect. `open(route)` builds
  * the pod (encrypted block-store upper under a broker, authority adoption,
  * publish handler, push retry on the sync-machine + TaskScheduler, event
- * bridge into workspaceStore) and returns a session; `close()` is the U5
- * teardown seam — a stub here, real disposal when reloads go away.
+ * bridge into workspaceStore) and returns a session; `close()` drains and
+ * disposes it before another workspace can register mounts or proc providers.
  *
  * Live objects (pod, sandbox, events) live HERE; stores get snapshots only.
  */
@@ -21,6 +21,7 @@ import { navigateTo } from '../stores/route';
 import { nextDraftRef } from '../boot';
 import { createBrowserRuntime, type BrowserRuntime } from '@artipod/core/apps';
 import { catalogInventory } from './inventory';
+import { disposeSessionResources, SessionDisposalError, SessionLifecycle, type SessionOpening } from './pod-session-lifecycle';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
 
@@ -34,7 +35,7 @@ export interface PodSession {
   publish(target?: string): Promise<string>;
   /** Suggested publish target for the panel (fork → next free _ tag). */
   suggestPublishValue(): Promise<string>;
-  /** U5 seam: dispose pod/mounts/subscriptions. Today navigation reloads. */
+  /** Drain pending work and dispose this pod's mounts/subscriptions. */
   close(): Promise<void>;
 }
 
@@ -45,27 +46,61 @@ export const wsLockName = (id: string): string => `artipod-ws-${id}`;
 // are page-global, so the NEXT open must wait for the previous teardown
 // (flush-push included) or the old dispose() tears down the new session's
 // registrations (the "single-provider collision" landmine, observed live).
-let lifecycle: Promise<unknown> = Promise.resolve();
+const lifecycle = new SessionLifecycle(bootPodSession, error => error instanceof FileSystemClosePersistenceError);
+export type PodSessionOpening = SessionOpening<PodSession>;
 
-export function openPodSession(route: Route): Promise<PodSession> {
-  const opened = lifecycle.catch(() => {}).then(() => bootPodSession(route));
-  lifecycle = opened.catch(() => {});
-  return opened;
+export function openPodSession(route: Route): PodSessionOpening {
+  return lifecycle.open(route);
 }
 
 async function bootPodSession(route: Route): Promise<PodSession> {
+  let releaseWsLock: (() => void) | null = null;
+  let cleanupPod: Pod | undefined;
+  let cleanupSandbox: Sandbox | undefined;
+  let cleanupRuntime: BrowserRuntime | undefined;
+  let cleanupScheduler: TaskScheduler | undefined;
+  let cleanupRearm: (() => void) | undefined;
+  let cleanupBroker: (() => void) | undefined;
+  let stopPreview: (() => void) | undefined;
+  let probeTimer: ReturnType<typeof setTimeout> | null = null;
+  const offs: (() => void)[] = [];
+  let closed = false;
+  let disposed = false;
+  let pushTerminated = false;
+  const disposeResources = (): void => {
+    if (disposed) return;
+    disposed = true; closed = true; pushTerminated = true;
+    disposeSessionResources([
+      () => cleanupScheduler?.cancel(PUSH_TASK),
+      () => cleanupRuntime?.dispose(),
+      () => { if (stopPreview) window.removeEventListener('pagehide', stopPreview); },
+      ...offs,
+      () => cleanupBroker?.(),
+      () => cleanupRearm?.(),
+      () => { if (probeTimer) clearTimeout(probeTimer); },
+      () => cleanupSandbox?.dispose(),
+      () => cleanupPod?.keyring.revokeAll(),
+      () => cleanupPod?.dispose(),
+      () => releaseWsLock?.(),
+      () => {
+        const debug = window as unknown as { __artipod?: unknown };
+        if (debug.__artipod === cleanupPod) delete debug.__artipod;
+      },
+    ]);
+  };
+  try {
   workspaceStore.setState({ ...initialWorkspace, syncActive: route.isRef && route.mode === 'rw' });
   // Hold a lifetime lock so the catalog's sweeper knows this tab is alive.
   // U5: the session RELEASES it on close — navigation no longer reloads.
-  let releaseWsLock: (() => void) | null = null;
   try {
     void navigator.locks.request(
       wsLockName(route.id),
       { mode: 'shared' },
       () => new Promise<void>((resolve) => {
-        releaseWsLock = resolve;
+        if (closed) resolve();
+        else releaseWsLock = resolve;
       }),
-    );
+    ).catch(() => {});
   } catch {
     // no Web Locks — the sweeper is conservative without it
   }
@@ -191,10 +226,10 @@ async function bootPodSession(route: Route): Promise<PodSession> {
 
   // Push retry rides the sync-machine + a NAMED task (visible in artipod ps).
   const scheduler = svc.scheduler;
+  cleanupScheduler = scheduler;
   let syncState: SyncState = { ...initialSyncState, offline: svc.forcedOffline };
   // `kill <sync:push pid>` (TERM): no more runs, no re-arming, row retired —
   // the documented close semantics, not a cancel that the next edit undoes.
-  let pushTerminated = false;
   const dispatch = (event: SyncEvent): void => {
     syncState = reduceSync(syncState, event);
     if (!pushTerminated && wantsPush(syncState, event) && event.type !== 'edit') void scheduler.run(PUSH_TASK);
@@ -254,9 +289,11 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       extraCommands: [publishCmd],
     },
   );
+  cleanupPod = pod;
   podRef = pod;
   const { processes } = pod;
   const sandbox = pod.createSandbox({ confineTo: pod.basis ? pod.basis.at : blankRoot });
+  cleanupSandbox = sandbox;
   const exec = sandbox.exec.bind(sandbox);
   sandbox.exec = async (...args) => {
     const result = await exec(...args);
@@ -269,8 +306,6 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   // ── sync status + retry ────────────────────────────────────────────────────
   // The catalog's verdict rides push OUTCOMES, not trust in autoPush.
   // U5: every subscription is collected for close() — no page-lifetime leaks.
-  const offs: (() => void)[] = [];
-  let closed = false;
   const reportPersistenceFailure = (error: unknown): void => {
     console.error('workspace persistence failed:', error);
     if (!closed) workspaceStore.setState({ sync: { kind: 'failed', at: Date.now(), error: error instanceof Error ? error.message : String(error) } });
@@ -319,6 +354,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     if (task) pushProcess.update({ state: task.state, detail: task.lastResult ? { last: task.lastResult } : undefined });
     if (task && task.state === 'idle' && task.nextRunAt === undefined) scheduler.schedule(PUSH_TASK, 15_000);
   });
+  cleanupRearm = rearm;
   // Reconnect + lease renewal: broker snapshots drive both retry and re-key.
   const unsubBroker = brokerStore.subscribe(() => {
     const lease = svc.getLease();
@@ -340,9 +376,10 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     if (!pushTerminated) void scheduler.run(PUSH_TASK);
   });
 
+  cleanupBroker = unsubBroker;
+
   // Track unpushed work for the catalog: probe the upper after changes/pushes.
   const upperAt = route.isRef ? `/.artipod/upper/${encodeURIComponent(route.id)}` : blankRoot;
-  let probeTimer: ReturnType<typeof setTimeout> | null = null;
   const probe = (): void => {
     if (probeTimer) clearTimeout(probeTimer);
     probeTimer = setTimeout(() => {
@@ -373,7 +410,8 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     list: async path => await pod.zfs.promises.readdir(path) as string[],
     stat: async path => await pod.zfs.promises.lstat(path),
   }, pod.basis ? pod.basis.at : blankRoot, { processes, detail: { pod: route.id } });
-  const stopPreview = () => runtime.stop();
+  cleanupRuntime = runtime;
+  stopPreview = () => runtime.stop();
   window.addEventListener('pagehide', stopPreview);
 
   const session: PodSession = {
@@ -395,52 +433,28 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       }
     },
     async close(): Promise<void> {
-      runtime.dispose();
-      window.removeEventListener('pagehide', stopPreview);
-      const closing = (async () => {
-        // Nothing new may start pushing from here on; then flush.
+      let failure: unknown;
+      try {
+        // Stop rearming before draining the current push. All resource releases
+        // still run if cancellation, flushing, or one release itself fails.
         pushTerminated = true;
         scheduler.cancel(PUSH_TASK);
-        // Flush-on-close (U5): a mid-flight or pending push finishes BEFORE the
-        // pod dies — `pod.pushBasis()` awaits an in-flight push plus one
-        // follow-up, so this really drains. Offline or ro: nothing to flush;
-        // the registry flag stands.
         if (route.isRef && route.mode === 'rw' && !svc.forcedOffline) {
           try {
             const result = await pod.pushBasis();
-            if (result) {
-              await io.patch(route.id, { unsynced: false });
-            }
+            if (result) await io.patch(route.id, { unsynced: false });
           } catch {
-            // server unreachable — unsynced flag remains truthful
+            // Server unreachable: the unsynced flag remains truthful.
           }
         }
-        // Unsubscribe audit: every listener this session attached comes off.
-        for (const off of offs) off();
-        unsubBroker();
-        rearm();
-        if (probeTimer) clearTimeout(probeTimer);
-        // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
-        // keys, hydration, the process namespace) unregister — the next
-        // session must not collide.
-        try {
-          try { await flushFileSystem(); }
-          catch (error) { throw new FileSystemClosePersistenceError(error); }
-        }
-        finally {
-          closed = true;
-          try { pod.keyring.revokeAll(); pod.dispose(); }
-          finally {
-            releaseWsLock?.();
-            const w = window as unknown as { __artipod?: unknown };
-            if (w.__artipod === pod) delete w.__artipod;
-          }
-        }
-      })();
-      // The caller receives the real failure; the serialization tail must
-      // remain handled even when no subsequent workspace is opened.
-      lifecycle = lifecycle.catch(() => {}).then(() => closing).catch(() => {});
-      return closing;
+        try { await flushFileSystem(); }
+        catch (error) { throw new FileSystemClosePersistenceError(error); }
+      } catch (error) { failure = error; }
+      // A disposal error overrides the flush-only classification and blocks
+      // the next boot. Successful disposal permits authenticated recovery.
+      disposeResources();
+      if (failure) throw failure;
+
     },
   };
 
@@ -457,4 +471,9 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   }
 
   return session;
+  } catch (error) {
+    try { disposeResources(); }
+    catch (cleanupError) { throw new SessionDisposalError(new AggregateError([error, cleanupError], 'Workspace boot and cleanup failed')); }
+    throw error;
+  }
 }

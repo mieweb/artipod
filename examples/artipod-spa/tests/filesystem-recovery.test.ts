@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { StorageSessionSnapshot } from '@artipod/core/storage';
 
 const mocks = vi.hoisted(() => {
   class PersistenceError extends Error {}
   const initial = { zfs: { promises: {} }, encrypted: true };
   const reopened = { zfs: { promises: {} }, encrypted: true };
   const teardown = vi.fn(async () => {});
+  let snapshot: StorageSessionSnapshot = { status: 'closed', needsRecovery: false };
+  const listeners = new Set<() => void>();
+  const publish = (value: StorageSessionSnapshot) => { snapshot = value; for (const listener of listeners) listener(); };
   const session = {
     open: vi.fn(async () => initial), needsRecovery: vi.fn(() => false),
     recover: vi.fn(async () => ({ info: reopened, warning: 'Some changes could not be saved' })),
     registerTeardown: vi.fn(() => teardown), openWorkspaceUpper: vi.fn(),
+    getSnapshot: vi.fn(() => snapshot),
+    subscribe: vi.fn((listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }),
   };
-  return { PersistenceError, initial, reopened, session, teardown, create: vi.fn(() => session) };
+  return { PersistenceError, initial, reopened, session, teardown, publish, listeners, create: vi.fn(() => session) };
 });
 vi.mock('@artipod/core/storage', () => ({ createStorageSession: mocks.create, StorageClosePersistenceError: mocks.PersistenceError }));
 vi.mock('@artipod/core/sandbox', () => ({ loadBackendPref: () => null }));
@@ -23,10 +29,41 @@ beforeEach(() => {
   mocks.session.open.mockResolvedValue(mocks.initial);
   mocks.session.recover.mockResolvedValue({ info: mocks.reopened, warning: 'Some changes could not be saved' });
   mocks.session.needsRecovery.mockReturnValue(false);
+  mocks.listeners.clear();
+  mocks.publish({ status: 'closed', needsRecovery: false });
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('SPA recovery bridge to the core storage session', () => {
+  it('observes post-boot write failure and recovery without a broker change or storage reinitialization', async () => {
+    const filesystem = await import('../lib/filesystem');
+    const observed: StorageSessionSnapshot[] = [];
+    const off = filesystem.subscribeFileSystem(() => observed.push(filesystem.getFileSystemSnapshot()));
+    const beforeOpen = filesystem.getFileSystemSnapshot();
+    expect(filesystem.getFileSystemSnapshot()).toBe(beforeOpen);
+    expect(filesystem.getServerFileSystemSnapshot()).toBe(beforeOpen);
+    expect(mocks.create).not.toHaveBeenCalled();
+    await filesystem.initFileSystem('indexeddb');
+    expect(mocks.create).toHaveBeenCalledOnce();
+    expect(mocks.create.mock.calls[0]).toEqual([{ policy: 'broker', keys: {}, backend: 'indexeddb' }]);
+    mocks.publish({ status: 'open', needsRecovery: false, protection: 'encrypted' });
+    mocks.publish({ status: 'failed', needsRecovery: true, protection: 'encrypted' });
+    expect(observed.at(-1)).toEqual({ status: 'failed', needsRecovery: true, protection: 'encrypted' });
+    expect(mocks.session.open).toHaveBeenCalledOnce();
+    mocks.session.recover.mockImplementationOnce(async () => {
+      mocks.publish({ status: 'recovering', needsRecovery: true, protection: 'encrypted' });
+      mocks.publish({ status: 'open', needsRecovery: false, protection: 'encrypted' });
+      return { info: mocks.reopened, warning: 'Some changes could not be saved' };
+    });
+    await filesystem.recoverFileSystem();
+    expect(observed.map(snapshot => snapshot.status)).toEqual(['open', 'failed', 'recovering', 'open']);
+    expect(filesystem.getFileSystemSnapshot().needsRecovery).toBe(false);
+    expect(filesystem.fs).toBe(mocks.reopened.zfs);
+    off();
+    mocks.publish({ status: 'failed', needsRecovery: true });
+    expect(observed).toHaveLength(4);
+  });
+
   it('reports core recovery state and registers consumer teardown on the same session', async () => {
     const filesystem = await import('../lib/filesystem');
     expect(filesystem.fileSystemNeedsRecovery()).toBe(false);

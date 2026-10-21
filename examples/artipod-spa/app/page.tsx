@@ -6,14 +6,14 @@
  * route so switching pods unmounts the old session (PodSessionService.close
  * flushes + disposes) and boots the next in the same page.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useStore } from 'zustand';
 import Catalog from '@/components/Catalog';
 import Workspace from '@/components/Workspace';
 import { actorId, keys } from '@/lib/boot';
 import { initRouting, routeStore } from '@/lib/stores/route';
 import { brokerStore } from '@/lib/stores/broker';
-import { fileSystemNeedsRecovery, initFileSystem, recoverFileSystem } from '@/lib/filesystem';
+import { fileSystemNeedsRecovery, getFileSystemSnapshot, getServerFileSystemSnapshot, initFileSystem, recoverFileSystem, subscribeFileSystem } from '@/lib/filesystem';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import OfflineToggle from '@/components/OfflineToggle';
 
@@ -22,6 +22,7 @@ type BootState = { phase: 'loading' | 'ready' | 'locked' | 'error'; message?: st
 export default function Page() {
   const route = useStore(routeStore, (s) => s.route);
   const broker = useStore(brokerStore);
+  const storage = useSyncExternalStore(subscribeFileSystem, getFileSystemSnapshot, getServerFileSystemSnapshot);
   const [boot, setBoot] = useState<BootState>({ phase: 'loading' });
   const [retry, setRetry] = useState({ version: 0, recover: false });
 
@@ -86,7 +87,9 @@ export default function Page() {
 
   const expired = broker.status === 'leased' && (!broker.expiresAt || broker.expiresAt <= Date.now());
   const locked = broker.status === 'locked' || expired || boot.phase === 'locked';
-  if (locked || boot.phase === 'error') {
+  const storageFailed = storage.status === 'failed' || (storage.needsRecovery && storage.status !== 'recovering' && storage.status !== 'resetting');
+  const canRecover = storage.needsRecovery || !!boot.canRecover;
+  if (locked || boot.phase === 'error' || storageFailed) {
     return (
       <main
         className="flex h-[var(--app-height)] items-center justify-center p-6"
@@ -97,9 +100,9 @@ export default function Page() {
           <p role="status">
             {locked
               ? 'Log in to unlock your encrypted workspaces. If you are offline and your key lease has expired, reconnect before logging in.'
-              : boot.message}
+              : boot.phase === 'error' ? boot.message : 'A write to browser storage could not be saved.'}
           </p>
-          {!locked && boot.canRecover && <p>Reopen the saved storage generation to recover from the failed write. Unsaved editor drafts remain in this tab; review and save them again after recovery.</p>}
+          {!locked && canRecover && <p>Reopen the saved storage generation to recover from the failed write. Unsaved editor drafts remain in this tab; review and save them again after recovery.</p>}
           <div className="flex flex-wrap items-center gap-3">
             <EncryptionBadge principal={actorId} />
             <OfflineToggle />
@@ -107,8 +110,8 @@ export default function Page() {
               type="button"
               className="rounded border px-3 py-1.5 text-sm"
               style={{ borderColor: 'var(--mieweb-border, #888)' }}
-              onClick={() => setRetry(value => ({ version: value.version + 1, recover: !locked && !!boot.canRecover }))}
-            >{!locked && boot.canRecover ? 'Recover saved storage' : 'Retry opening storage'}</button>
+              onClick={() => setRetry(value => ({ version: value.version + 1, recover: !locked && canRecover }))}
+            >{!locked && canRecover ? 'Recover saved storage' : 'Retry opening storage'}</button>
           </div>
         </section>
       </main>

@@ -5,7 +5,8 @@
  */
 import { browserAdapters } from './services/adapters';
 import { KeysService } from './services/keys-service';
-import { UiStateIO, memoryStateMedium, type StateMedium } from './services/ui-state';
+import { UiStateIO } from './services/ui-state';
+import { registryStateMedium } from './services/registry-medium';
 import { registryActions } from './stores/registry';
 import { initFileSystem } from './filesystem';
 
@@ -70,34 +71,12 @@ export function keys(): KeysService {
   return keysSingleton;
 }
 
-/** Protected logical registry; the vault enforces one writer, with a local RMW mutex. */
-function zenfsStateMedium(): StateMedium {
-  const memory = memoryStateMedium();
-  return {
-    async read(): Promise<string | null> {
-      const { fs } = await import('./filesystem');
-      try { return await fs.promises.readFile('/.artipod/ui-state.json', 'utf8') as string; }
-      catch (error) {
-        if ((error as { code?: string }).code === 'ENOENT') return null;
-        throw error;
-      }
-    },
-    async write(text: string): Promise<void> {
-      const { fs, flushFileSystem } = await import('./filesystem');
-      await fs.promises.mkdir('/.artipod', { recursive: true });
-      await fs.promises.writeFile('/.artipod/ui-state.json', text);
-      await flushFileSystem();
-    },
-    withLock: (fn) => memory.withLock(fn),
-  };
-}
-
 let ioSingleton: Promise<{ io: UiStateIO; registry: ReturnType<typeof registryActions> }> | null = null;
 
 export function uiState(): Promise<{ io: UiStateIO; registry: ReturnType<typeof registryActions> }> {
   ioSingleton ??= (async () => {
     await initFileSystem();
-    const io = new UiStateIO(zenfsStateMedium());
+    const io = new UiStateIO(registryStateMedium(() => import('./filesystem')));
     return { io, registry: registryActions(io) };
   })().catch(error => { ioSingleton = null; throw error; });
   return ioSingleton;

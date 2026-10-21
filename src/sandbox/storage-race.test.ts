@@ -72,7 +72,7 @@ describe('raw storage operation exclusion', () => {
   it.each(['init', 'migrate', 'mount'] as const)('holds %s ownership through a delayed plaintext backend', async kind => {
     await fs.promises.writeFile('/public.txt', 'ordinary plaintext source');
     const target = await plaintextBackend();
-    const operation = track(kind === 'init'
+    const operation = track<unknown>(kind === 'init'
       ? initFileSystem('indexeddb', { storagePolicy: 'plaintext' })
       : kind === 'migrate'
         ? migrateStorage('indexeddb', undefined, { storagePolicy: 'plaintext' })

@@ -72,6 +72,8 @@ post-checkpoint additions, recreates deleted paths, and handles file/directory/
 link replacements. Replacing modified regular files avoids changing hardlinked
 content outside the workspace. The root directory and surviving subdirectories
 retain their identities so native filesystem watchers stay attached.
+Excluded entries retain the directories needed to contain them; a saved file or
+symlink conflicting with those directories is rejected before live changes.
 
 `restore()` returns `{rootId, checkpointId, changes}` after completion and calls
 `onDidRestore` listeners. Every change has a relative POSIX `path`, `type`
@@ -94,6 +96,9 @@ Artipod `TerminalSession` or use the CLI.
 
 ## Prototype limits
 
+- Native restore and checkout reject nested volume or device boundaries before
+  changing live files. Filename-equivalence validation must use the workspace's
+  volume, including its metadata probe and materialization destination.
 - Stop terminal commands, tasks, background servers and other external writers
   before capture or restore. A workspace lock serializes checkpoint API calls
   across processes; it does not pause native processes, CLI/serve commands, or

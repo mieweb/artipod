@@ -66,6 +66,8 @@ filesystem working directory.
   targets Node.js 22, introduced in VS Code 1.101.
 - One trusted local folder containing an unencrypted Artipod. Remote, browser,
   multi-root, and virtual workspaces are not supported in this release.
+- Snapshot materialization rejects nested volume/device boundaries before
+  changing files; the workspace and its destination must share one volume.
 - The local implementation uses OS filesystem operations. CI tests and packages
   the extension on Linux and macOS with Node.js 22 and 24; the graphical VS Code
   smoke test was performed on macOS. Windows needs separate platform testing,

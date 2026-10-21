@@ -80,7 +80,7 @@ export interface SnapshotManagerOptions extends StorageAccessOptions {
 export interface SnapshotFilesystem {
   promises: ZenFsLike['promises'];
   /** Reject distinct snapshot paths that alias on the materialization volume. */
-  validateSnapshotPaths?: (paths: readonly string[]) => Promise<void>;
+  validateSnapshotPaths?: (paths: readonly string[], options?: { destination?: string }) => Promise<void>;
 }
 
 export interface SnapshotRestoreChange {
@@ -166,7 +166,7 @@ export class SnapshotManager {
 
   // --- workspace walk ---------------------------------------------------------
 
-  private async walk(filesystem = this.workspaceFs, { allowEmptySymlinkTargets = false } = {}): Promise<Map<string, FileRecord & { bytes?: Uint8Array }>> {
+  private async walk(filesystem = this.workspaceFs, { allowEmptySymlinkTargets = false, retainedAncestors }: { allowEmptySymlinkTargets?: boolean; retainedAncestors?: Set<string> } = {}): Promise<Map<string, FileRecord & { bytes?: Uint8Array }>> {
     const p = filesystem.promises;
     // A saved tree can be valid while a live root has been redirected. Check
     // every root component before readdir/readFile can follow it outside the
@@ -188,7 +188,16 @@ export class SnapshotManager {
     const visit = async (dir: string): Promise<void> => {
       for (const name of (await p.readdir(dir) as string[]).sort()) {
         const path = dir === '/' ? `/${name}` : `${dir}/${name}`;
-        if (this.excluded(path)) continue;
+        if (this.excluded(path)) {
+          // Excluded entries are deliberately retained. Their real, traversed
+          // ancestors cannot be removed even when absent from the saved tree.
+          let ancestor = dir;
+          while (retainedAncestors && ancestor !== '/') {
+            retainedAncestors.add(ancestor);
+            ancestor = ancestor.slice(0, ancestor.lastIndexOf('/')) || '/';
+          }
+          continue;
+        }
         this.validatePath(path);
         if (name.startsWith('.wh.')) throw new Error(`Unsupported workspace entry (OCI whiteout name): ${path}`);
         const stat = await p.lstat(path);
@@ -449,7 +458,7 @@ export class SnapshotManager {
       throw new Error('Snapshot checkout destination must be outside reserved Artipod metadata and runtime paths');
     }
     // Validate every byte/path before even creating the destination directory.
-    const { head, target } = await this.validatedSnapshot(id, false);
+    const { head, target } = await this.validatedSnapshot(id, false, destination);
     const p = this.workspaceFs.promises;
     let ancestor = '';
     for (const part of destination.split('/').slice(1)) {
@@ -495,7 +504,7 @@ export class SnapshotManager {
   }
 
   /** Shared preflight for in-place restore and a fresh checkout destination. */
-  private async validatedSnapshot(id: string, honorExcludes = true): Promise<{ head: SnapshotManifest; target: Map<string, FileRecord & { bytes?: Uint8Array }> }> {
+  private async validatedSnapshot(id: string, honorExcludes = true, destination = '/'): Promise<{ head: SnapshotManifest; target: Map<string, FileRecord & { bytes?: Uint8Array }> }> {
     const chain = await this.chain(id);
     const head = chain[chain.length - 1];
     if (JSON.stringify(head.roots) !== JSON.stringify(this.roots)) throw new Error('Artipod snapshot roots do not match this workspace');
@@ -546,7 +555,7 @@ export class SnapshotManager {
     for (const [root, mode] of Object.entries(head.rootModes ?? {})) {
       if (!this.roots.includes(root) || !Number.isInteger(mode) || mode < 0 || mode > 0o777) throw new Error('Invalid Artipod snapshot root mode');
     }
-    await this.workspaceFs.validateSnapshotPaths?.([...new Set([...implicitDirectories, ...target.keys()])]);
+    await this.workspaceFs.validateSnapshotPaths?.([...new Set([...implicitDirectories, ...target.keys()])], { destination });
     return { head, target };
   }
 
@@ -564,7 +573,23 @@ export class SnapshotManager {
     const p = this.workspaceFs.promises;
     // A valid saved tree may repair a native empty-target link in live work;
     // these entries can be unlinked safely but must never enter new snapshots.
-    const current = await this.walk(this.workspaceFs, { allowEmptySymlinkTargets: true });
+    const retainedAncestors = new Set<string>();
+    const current = await this.walk(this.workspaceFs, { allowEmptySymlinkTargets: true, retainedAncestors });
+    // Live directories may introduce mount boundaries absent from the saved
+    // tree. Finish their native preflight before chmod, unlink, or rmdir.
+    await this.workspaceFs.validateSnapshotPaths?.([...this.roots, ...current.keys()]);
+    let retainedDirectories = false;
+    for (const path of retainedAncestors) {
+      const next = target.get(path);
+      if (next && next.type !== 'dir') throw new Error(`Snapshot target conflicts with an excluded entry's retained ancestor: ${path}`);
+      const retained = current.get(path);
+      // Extend only the transient restore plan. Stored manifests and indexes
+      // still describe the captured tree; exclusions retain their own folders.
+      if (!next && retained?.type === 'dir') { target.set(path, retained); retainedDirectories = true; }
+    }
+    // A retained folder may alias a differently spelled target on native
+    // volumes. Validate the extended plan before any live mutation as well.
+    if (retainedDirectories) await this.workspaceFs.validateSnapshotPaths?.([...this.roots, ...target.keys()]);
     const changes: SnapshotRestoreChange[] = [];
     const kind = (r: FileRecord): SnapshotRestoreChange['kind'] => r.type === 'dir' ? 'directory' : r.type;
     const same = (a: FileRecord, b: FileRecord) => a.type === b.type && a.mode === b.mode && a.contentDigest === b.contentDigest && a.linkTarget === b.linkTarget;
