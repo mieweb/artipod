@@ -73,7 +73,7 @@ interface InventoryEntry { path: string; mode: number; size: number; mtimeMs: nu
 interface MigrationSource { id: string; target: string; entries: InventoryEntry[] }
 interface MigrationJournal { formatVersion: 1; sources: MigrationSource[] }
 
-function validateControl(value: BrowserVaultControl): BrowserVaultControl {
+function validateControl(value: BrowserVaultControl | null | undefined): BrowserVaultControl {
   const fields = ['formatVersion', 'cipher', 'encryptionRequired', 'backend', 'generation', 'phase'];
   if (!value || typeof value !== 'object' || Object.keys(value).some(key => !fields.includes(key)) ||
       value.formatVersion !== 1 || value.cipher !== 'aes-256-gcm-chunked' || value.encryptionRequired !== true ||
@@ -263,7 +263,9 @@ export async function openBrowserVault(options: {
   const assertAccess = () => { accessKey(); };
   try {
     let control = await adapters.readControl();
-    if (control) validateControl(control);
+    // Only the adapter's explicit absence sentinel permits initialization.
+    // Validate every other value, including malformed falsy adapter output.
+    if (control !== null) validateControl(control);
     else {
       control = { formatVersion: 1, cipher: 'aes-256-gcm-chunked', encryptionRequired: true,
         backend: adapters.backend, generation: null, phase: 'pending' };
@@ -435,8 +437,11 @@ async function readBrowserControl(): Promise<BrowserVaultControl | null> {
   try {
     const tx = db.transaction('control', 'readonly');
     const done = transactionDone(tx);
-    const [value] = await Promise.all([request(tx.objectStore('control').get('root')), done]) as [BrowserVaultControl | undefined, void];
-    return value === undefined ? null : validateControl(value);
+    const store = tx.objectStore('control');
+    // IDB get() returns undefined for both a missing key and a saved undefined
+    // value. Check existence in the same transaction before treating it absent.
+    const [value, count] = await Promise.all([request(store.get('root')), request(store.count('root')), done]) as [BrowserVaultControl | undefined, number, void];
+    return count === 0 ? null : validateControl(value);
   } finally { db.close(); }
 }
 async function writeBrowserControl(value: BrowserVaultControl): Promise<void> {

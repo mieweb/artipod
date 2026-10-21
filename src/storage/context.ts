@@ -38,6 +38,10 @@ const filesystems = new WeakMap<object, StorageContext>();
 const roots = new WeakMap<object, RootRecord>();
 const projections = new WeakMap<object, StorageContext>();
 let configuredRoot: object | undefined;
+let rootConfiguration: object | undefined;
+let rawOperation: object | undefined;
+let rootGeneration = 0;
+const rawSingletons = new WeakSet<object>();
 
 export function registerStorageContext(context: StorageContext, options: { assertActive: () => void; wrapFilesystem?: (source: ZenFsLike, release?: () => void) => ZenFsLike }): void {
   if (contexts.has(context)) throw new Error('Storage context is already registered');
@@ -92,6 +96,8 @@ export function assertStorageRootConfiguration(root: FileSystem, protectedPersis
   if (record) {
     if (!record.isOwned()) throw new Error('The core storage root is no longer owned');
     record.assertAccess();
+    if (storagePolicy === 'protected' && record.protection === 'plaintext') throw new Error('Protected storage requires an encrypted or volatile core storage root');
+    if (storagePolicy === 'memory' && record.protection !== 'volatile') throw new Error('Memory storage requires a volatile core storage root');
     if (storagePolicy === 'plaintext' && record.protection !== 'plaintext') throw new Error('A protected storage root cannot be downgraded to plaintext');
     return;
   }
@@ -99,19 +105,58 @@ export function assertStorageRootConfiguration(root: FileSystem, protectedPersis
   if (root.name !== 'tmpfs' && storagePolicy !== 'plaintext') throw new Error('Raw persistent storage requires an explicit storagePolicy: plaintext choice');
 }
 
-export function activateStorageRoot(root: FileSystem): void { configuredRoot = root; }
+export function activateStorageRoot(root: FileSystem, singleton?: ZenFsLike): void {
+  if (configuredRoot !== root) rootGeneration++;
+  configuredRoot = root;
+  rootConfiguration = undefined;
+  if (singleton) rawSingletons.add(singleton);
+}
 
 /** Reserve singleton ownership before configure's dynamic import or backend awaits. */
 export function reserveStorageRoot(root: FileSystem, protectedPersistence = false, storagePolicy?: StoragePolicy): () => void {
+  if (rawOperation) throw new Error('A raw storage operation is in progress; retry after it has finished');
+  if (rootConfiguration) throw new Error('Another storage operation owns the root configuration');
   assertStorageRootConfiguration(root, protectedPersistence, storagePolicy);
   const previous = configuredRoot;
+  const reservation = {};
+  rootConfiguration = reservation;
   configuredRoot = root;
-  return () => { if (configuredRoot === root) configuredRoot = previous; };
+  // Reserving also retires raw views before configure can switch global mounts.
+  if (previous !== root) rootGeneration++;
+  return () => {
+    if (rootConfiguration !== reservation) return;
+    rootConfiguration = undefined;
+    if (configuredRoot === root) configuredRoot = previous;
+  };
 }
 
 export function assertRawStorageOperation(operation: string): void {
+  if (rootConfiguration) throw new Error(`${operation}: another storage operation owns the root configuration`);
   const record = configuredRoot && roots.get(configuredRoot);
   if (record?.isOwned() && record.protection !== 'plaintext') throw new Error(`${operation}: the core storage session owns the protected root; raw storage cannot replace or expose it`);
+}
+
+/** Hold the singleton exclusion through backend awaits, mutation, and cleanup. */
+export function beginRawStorageOperation(operation: string, options: { allowProtectedRoot?: boolean } = {}): () => void {
+  if (rawOperation) throw new Error(`${operation}: another raw storage operation is in progress`);
+  if (rootConfiguration) throw new Error(`${operation}: another storage operation owns the root configuration`);
+  if (!options.allowProtectedRoot) assertRawStorageOperation(operation);
+  const reservation = {};
+  rawOperation = reservation;
+  return () => { if (rawOperation === reservation) rawOperation = undefined; };
+}
+
+/** Legacy singleton consumers must not follow a later core-owned root. */
+export function captureRawStorageAccess(zfs: ZenFsLike): () => void {
+  const generation = rootGeneration;
+  return () => {
+    // A caller can retain the singleton before the first core configure.
+    // Recognize it when that configure registers it, without affecting
+    // independently supplied filesystem implementations.
+    if (!rawSingletons.has(zfs)) return;
+    if (generation !== rootGeneration) throw new Error('The raw storage filesystem no longer owns the configured root');
+    assertRawStorageOperation('Raw filesystem access');
+  };
 }
 
 export function registerStorageProjection(root: FileSystem, context: StorageContext): void {

@@ -18,7 +18,7 @@ import type { ZenFsLike } from '../sandbox/types.js';
 import { sha256, isDigest, type Digest } from './digest.js';
 import { gzip } from './gzip.js';
 import { indexTar, writeTar, whiteoutPathFor, makeLayerIndexArtifact, ANNOTATION_HYDRATION, ANNOTATION_LAYER_INDEX, ANNOTATION_LAYER_GROUP, type TarWriteEntry } from './tar.js';
-import { OciStore, OCI_ROOT } from './store.js';
+import { OciStore, OCI_ROOT, assertOciStoreStorage } from './store.js';
 import { ANNOTATION_PARENTS } from './file-layer.js';
 import { AUDIT_MEDIA_TYPE } from '../manager/audit.js';
 import { mergeLayerEntries, mountOciView } from './view.js';
@@ -120,8 +120,9 @@ export class SnapshotManager {
   constructor(options: SnapshotManagerOptions) {
     const storage = resolveStorageAccess(options.zfs, options);
     if (storage && storage.protection !== 'plaintext' && options.workspaceFs && options.workspaceFs !== options.zfs) throw new Error('Protected snapshots must use the owning core storage filesystem');
+    if (storage && storage.protection !== 'plaintext') assertOciStoreStorage(options.store, storage);
     this.zfs = options.zfs;
-    this.storageOptions = { storage: options.storage, storagePolicy: options.storagePolicy };
+    this.storageOptions = Object.freeze({ storage, storagePolicy: options.storagePolicy });
     this.store = options.store;
     this.roots = options.roots;
     this.exclude = [...(options.defaultExcludes === false ? RESERVED_ROOTS : DEFAULT_EXCLUDE), ...(options.exclude ?? [])];
@@ -129,13 +130,18 @@ export class SnapshotManager {
   }
 
   private get p() {
-    resolveStorageAccess(this.zfs, this.storageOptions);
+    this.assertStorageAccess();
     return this.zfs.promises;
   }
 
   private get workspaceFs(): SnapshotFilesystem {
-    resolveStorageAccess(this.zfs, this.storageOptions);
+    this.assertStorageAccess();
     return this.heldWorkspaceFs;
+  }
+
+  private assertStorageAccess(): void {
+    const storage = resolveStorageAccess(this.zfs, this.storageOptions);
+    if (storage && storage.protection !== 'plaintext') assertOciStoreStorage(this.store, storage);
   }
 
   /** Create directory components without following an existing symlink alias. */
@@ -768,6 +774,23 @@ export class SnapshotManager {
     const snapshots = await this.list();
     const head = await this.readHead();
     if (head && !snapshots.some(snapshot => snapshot.id === head)) throw new Error('Cannot collect storage with a missing snapshot HEAD');
+    // Every saved branch contributes roots, including branches outside HEAD.
+    // A missing manifest may be recoverable while its layer bytes still exist;
+    // never discard those bytes because an incomplete graph hid their digest.
+    const snapshotById = new Map(snapshots.map(snapshot => [snapshot.id, snapshot]));
+    const validatedSnapshots = new Set<string>();
+    for (const snapshot of snapshots) {
+      const chain = new Set<string>();
+      let cursor: string | null = snapshot.id;
+      while (cursor && !validatedSnapshots.has(cursor)) {
+        if (chain.has(cursor)) throw new Error('Cannot collect storage with a snapshot parent cycle');
+        chain.add(cursor);
+        const parent = snapshotById.get(cursor);
+        if (!parent) throw new Error('Cannot collect storage when a snapshot parent is missing');
+        cursor = parent.parent;
+      }
+      for (const id of chain) validatedSnapshots.add(id);
+    }
     for (const snap of snapshots) markDigest(snap.diff.diffId);
 
     // Finish the entire reachability graph before issuing any deletion. An

@@ -60,6 +60,10 @@ finishes. An expired key or failed final flush is reported as a warning while
 the confirmed erase continues. A failed erase preserves the encryption-required
 bootstrap until the remaining backing stores have been removed.
 
+A present malformed vault bootstrap is an error, including JSON null and other
+primitive values. Only a definitively absent control record permits creation;
+a corrupt record never authorizes replacing the saved generation with an empty one.
+
 The managed vault currently encrypts its blocks directly with the supplied key
 (the leased broker KEK in the SPA); it does not introduce independent per-layer
 or per-generation DEKs. Browser history, git author preferences and optional
@@ -89,6 +93,15 @@ Pass the `StorageSessionInfo` returned by `open()` as the `storage` option to
 `createZenFsPod`, `OciStore` or `SnapshotManager`; the
 context binds protection to the owning filesystem and becomes invalid after the
 session closes. Copying its public fields does not create a trusted context.
+Protected snapshots require their `OciStore` to belong to that same live context;
+an unrelated plaintext output store is rejected before capture or output I/O.
+Requested policies apply to registered roots too: persistent encrypted storage
+cannot satisfy a `memory` request, and plaintext cannot satisfy `protected`.
+Raw singleton initialization, realization, mounting and migration reserve root
+ownership through asynchronous setup and cleanup. An overlapping managed root
+configuration fails with a busy error and can be retried after the operation
+finishes. Legacy OCI stores tied to a replaced singleton root must be recreated;
+they cannot follow the replacement root into another session.
 Hosts retain control of authentication, UI and RAM drafts, and must report any
 recovery warning about potentially unsaved changes. `reset()` is terminal for
 that session controller, including after an erase failure: use a new controller

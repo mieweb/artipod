@@ -317,6 +317,29 @@ describe('whole-browser encrypted vault', () => {
     expect(harness.stores.size).toBe(0);
   });
 
+  it.each([false, 0, '', undefined, NaN])('rejects a malformed adapter control value (%s) without replacing saved storage', async malformed => {
+    const harness = new Harness();
+    const key = await generateBlobKey();
+    const vault = await openBrowserVault({ getKey: () => key, adapters: harness });
+    await put(vault.filesystem, `/${NAME}`, MARKER);
+    await vault.close();
+    const control = structuredClone(harness.control);
+    const controls = structuredClone(harness.controls);
+    const saved = harness.stores.get(vault.generation)!;
+    const records = [...saved.keys()].map(id => [id, saved.get(id)!.slice()] as const);
+    const writes = saved.writes.length;
+    harness.readControl = async () => malformed as unknown as BrowserVaultControl;
+    await expect(openBrowserVault({ getKey: () => key, adapters: harness }).then(async unexpected => {
+      await unexpected.close();
+    })).rejects.toThrow('bootstrap is corrupt');
+    expect(harness.locked).toBe(false);
+    expect(harness.control).toEqual(control);
+    expect(harness.controls).toEqual(controls);
+    expect([...harness.stores.keys()]).toEqual([vault.generation]);
+    expect([...saved.keys()].map(id => [id, saved.get(id)])).toEqual(records);
+    expect(saved.writes).toHaveLength(writes);
+  });
+
   it('enforces a single writer and releases ownership on close and failed mount', async () => {
     const harness = new Harness();
     const key = await generateBlobKey();

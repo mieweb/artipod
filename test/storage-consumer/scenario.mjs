@@ -1,7 +1,7 @@
 /** Shared Node/browser exercise. Every library import is a published entry. */
 import { createZenFsPod } from '@artipod/core';
 import { createStorageSession } from '@artipod/core/storage';
-import { generateBlobKey } from '@artipod/core/oci';
+import { generateBlobKey, OciStore, SnapshotManager } from '@artipod/core/oci';
 
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const equal = (actual, expected, message) => check(JSON.stringify(actual) === JSON.stringify(expected), `${message}: ${JSON.stringify(actual)}`);
@@ -43,11 +43,26 @@ export async function rejectUnsafePolicies() {
   return { rejected: 2, initializationCalls: calls.length };
 }
 
+function rejectUnrelatedSnapshotStore(storage) {
+  const calls = [];
+  const plaintext = { promises: new Proxy({}, { get: (_, name) => () => {
+    calls.push(String(name));
+    throw new Error('Protected snapshot reached an unrelated plaintext filesystem');
+  } }) };
+  const store = new OciStore(plaintext);
+  let failure;
+  try { new SnapshotManager({ zfs: storage.zfs, storage, store, roots: ['/workspace'] }); }
+  catch (error) { failure = error; }
+  check(failure, 'Protected snapshots accepted an unrelated plaintext OCI store');
+  equal(calls, [], 'Unrelated snapshot store must be rejected before filesystem I/O');
+}
+
 export async function writeScenario(adapters, key, markers) {
   const provider = injectedKeys(key);
   const session = createStorageSession({ keys: provider, adapters });
   const storage = await session.open();
   equal(storage.protection, 'encrypted', 'Protected session must be encrypted');
+  rejectUnrelatedSnapshotStore(storage);
   const pod = await createZenFsPod(manifest, { storage, storagePolicy: 'protected', proc: false });
   const p = storage.zfs.promises;
   const directory = `/workspace/${markers.directory}`;

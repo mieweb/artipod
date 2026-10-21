@@ -13,6 +13,15 @@ async function temporary() {
   directories.push(directory);
   return directory;
 }
+async function rawFiles(directory: string, prefix = ''): Promise<Record<string, Uint8Array>> {
+  const files: Record<string, Uint8Array> = {};
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const name = `${prefix}${entry.name}`;
+    if (entry.isDirectory()) Object.assign(files, await rawFiles(join(directory, entry.name), `${name}/`));
+    else files[name] = new Uint8Array(await readFile(join(directory, entry.name)));
+  }
+  return files;
+}
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
 
 describe('native encrypted storage backing', () => {
@@ -20,6 +29,7 @@ describe('native encrypted storage backing', () => {
     const directory = await temporary();
     const writes: Array<{ path: string; bytes: Uint8Array }> = [];
     const adapters = await createNativeStorageAdapters(directory, { onWrite: (path, bytes) => { writes.push({ path, bytes }); } });
+    expect(await adapters.readControl()).toBeNull();
     const key = await generateBlobKey();
     let vault = await openBrowserVault({ adapters, getKey: () => key });
     const path = '/PRIVATE-native-name.csv';
@@ -97,6 +107,37 @@ describe('native encrypted storage backing', () => {
     const fresh = await openBrowserVault({ adapters: await createNativeStorageAdapters(directory), getKey: () => key });
     expect(fresh.generation).not.toBe(generation);
     await fresh.close();
+  });
+
+  it.each(['null', 'false', '0', '""', '[]', '{}'])('preserves saved storage when the control file contains %s', async control => {
+    const directory = await temporary();
+    const key = await generateBlobKey();
+    const vault = await openBrowserVault({ adapters: await createNativeStorageAdapters(directory), getKey: () => key });
+    const path = '/retained-private.csv';
+    const body = new TextEncoder().encode('saved rows must remain reachable');
+    await vault.filesystem.createFile(path, { uid: 0, gid: 0, mode: 0o100600 });
+    await vault.filesystem.write(path, body, 0);
+    await vault.filesystem.touch(path, { size: body.length });
+    const generation = vault.generation;
+    await vault.close();
+    const originalControl = await readFile(join(directory, 'control.json'));
+    await writeFile(join(directory, 'control.json'), control);
+    const original = await rawFiles(directory);
+    const adapters = await createNativeStorageAdapters(directory);
+    // Close an incorrectly successful open so the regression itself cannot
+    // leave a writer behind when it runs against the broken implementation.
+    await expect(openBrowserVault({ adapters, getKey: () => key }).then(async unexpected => {
+      await unexpected.close();
+    })).rejects.toThrow(/control file|bootstrap is corrupt/);
+    expect(await rawFiles(directory)).toEqual(original);
+    expect(await readdir(join(directory, 'generations'))).toEqual([generation]);
+    await writeFile(join(directory, 'control.json'), originalControl);
+    const reopened = await openBrowserVault({ adapters, getKey: () => key });
+    expect(reopened.generation).toBe(generation);
+    const actual = new Uint8Array(body.length);
+    await reopened.filesystem.read(path, actual, 0, actual.length);
+    expect(actual).toEqual(body);
+    await reopened.close();
   });
 
   it('preserves orphaned encrypted generations instead of initializing an empty replacement', async () => {

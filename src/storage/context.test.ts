@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ZenFsLike } from '../sandbox/types.js';
 import { OciStore } from '../oci/store.js';
 import { SnapshotManager } from '../oci/snapshot.js';
-import { invalidateStorageContext, registerStorageContext, registerStorageProjection, resolveStorageContext, assertStorageProjection, type StorageContext } from './context.js';
+import { configureStorageRoot, createMemoryStorageRoot } from '../sandbox/storage.js';
+import { invalidateStorageContext, registerStorageContext, registerStorageProjection, registerStorageRoot, resolveStorageContext, assertStorageProjection, type StorageContext } from './context.js';
 
 function fixture() {
   const mkdir = vi.fn();
@@ -15,6 +16,19 @@ function fixture() {
 }
 
 describe('core storage capability', () => {
+  it.each([
+    ['plaintext', 'protected', 'Protected storage'],
+    ['plaintext', 'memory', 'Memory storage'],
+    ['encrypted', 'memory', 'Memory storage'],
+  ] as const)('rejects a registered %s root requested as %s before replacing the filesystem', async (protection, storagePolicy, error) => {
+    const zfs = await configureStorageRoot(await createMemoryStorageRoot());
+    await zfs.promises.writeFile('/original', 'keep original root');
+    const root = await createMemoryStorageRoot();
+    registerStorageRoot(root, { protection, isOwned: () => true, assertAccess() {} });
+    await expect(configureStorageRoot(root, { storagePolicy })).rejects.toThrow(error);
+    expect(await zfs.promises.readFile('/original', 'utf8')).toBe('keep original root');
+  });
+
   it('rejects clones, other filesystems, and requested policy downgrades', () => {
     const { storage, zfs } = fixture();
     expect(resolveStorageContext(storage, zfs, 'protected')).toBe(storage);

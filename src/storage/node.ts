@@ -170,7 +170,14 @@ export async function createNativeStorageAdapters(directory: string, options: Na
         const path = join(root, CONTROL);
         const info = await fs.lstat(path);
         if (!info.isFile() || info.isSymbolicLink()) throw new Error('Invalid native storage control file');
-        return JSON.parse(await fs.readFile(path, 'utf8')) as BrowserVaultControl;
+        const value: unknown = JSON.parse(await fs.readFile(path, 'utf8'));
+        // A present JSON null is corruption, not an absent bootstrap. Reject
+        // primitive/array records here; the vault validates object fields
+        // before it can create a generation or replace the control file.
+        if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+          throw new Error('Invalid native storage control file');
+        }
+        return value as BrowserVaultControl;
       } catch (error) {
         if (!missing(error)) throw error;
         try {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ZenFsLike } from '../sandbox/types.js';
 import { createStorageSession, type StorageSession } from '../storage/index.js';
 import { createNativeStorageAdapters } from '../storage/node.js';
+import { configureStorageRoot, createMemoryStorageRoot } from '../sandbox/storage.js';
 import { generateBlobKey } from './cipher.js';
 import { OciStore, SUPERBLOCK_PATH } from './store.js';
 
@@ -25,6 +26,26 @@ async function memoryStore() {
 }
 
 describe('OCI metadata fail-closed behavior', () => {
+  it('retires a known raw singleton store after root replacement without blocking independent plaintext stores', async () => {
+    const raw = await configureStorageRoot(await createMemoryStorageRoot());
+    const oldStore = new OciStore(raw);
+    await oldStore.init();
+    const session = createStorageSession({ policy: 'memory' });
+    sessions.push(session);
+    const storage = await session.open();
+    const pathsBefore = await storage.zfs.promises.readdir('/.artipod/oci/refs').catch(() => []);
+    expect(() => oldStore.getSuperblock()).toThrow('no longer owns the configured root');
+    await expect(oldStore.init()).rejects.toThrow('no longer owns the configured root');
+    await expect(oldStore.putRef('unexpected', `sha256:${'0'.repeat(64)}`, 'application/test')).rejects.toThrow('no longer owns the configured root');
+    expect(await storage.zfs.promises.readdir('/.artipod/oci/refs').catch(() => [])).toEqual(pathsBefore);
+
+    const mkdir = vi.fn(async () => {});
+    const writeFile = vi.fn(async () => {});
+    const independent = { promises: { mkdir, writeFile, readFile: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } } } as unknown as ZenFsLike;
+    await expect(new OciStore(independent, { storagePolicy: 'plaintext' }).init()).resolves.toHaveProperty('formatVersion', 1);
+    expect(writeFile).toHaveBeenCalledOnce();
+  });
+
   it.each(['EACCES', 'EIO'])('does not replace an unreadable superblock or create metadata on %s', async code => {
     const failure = Object.assign(new Error('saved superblock unavailable'), { code });
     const mkdir = vi.fn();
