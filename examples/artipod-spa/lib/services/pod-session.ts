@@ -10,9 +10,9 @@
  */
 import type { PodEvents } from '@artipod/core/host';
 import type { Sandbox } from '@artipod/core/sandbox';
-import { keys, uiState, workspaceUrl, type Route } from '../boot';
-import { initFileSystem } from '../filesystem';
-import { upperDirName } from './ui-state';
+import { actorId, keys, uiState, workspaceUrl, type Route } from '../boot';
+import { flushFileSystem, initFileSystem } from '../filesystem';
+import { openWorkspaceUpper } from './workspace-storage';
 import { TaskScheduler } from './task-scheduler';
 import { initialSyncState, reduceSync, wantsPush, type SyncEvent, type SyncState } from './sync-machine';
 import { workspaceStore, initialWorkspace } from '../stores/workspace';
@@ -86,31 +86,12 @@ async function bootPodSession(route: Route): Promise<PodSession> {
 
   // Writable workspaces (rw AND cow) get a persistent upper keyed by ref —
   // one local working state per ref; the mode only chooses auto-push.
-  const { mountConfigForSpec, encryptedStoreMount } = await import('@artipod/core/sandbox');
   const svc = keys();
   const brokerKey = svc.getKey();
   const brokerLease = svc.getLease();
   let cowUpper: unknown;
   if (route.isRef && route.mode !== 'ro') {
-    if (brokerKey) {
-      // Broker serve: the working tree is an opaque encrypted BLOCK STORE —
-      // no filenames/tree shape on the backing medium; dir = hash(ref).
-      const dirName = await upperDirName(route.id);
-      const backing =
-        info?.backend === 'opfs'
-          ? {
-              kind: 'opfs' as const,
-              dir: ((await mountConfigForSpec({ type: 'opfs', dir: `.artipod/uppers/${dirName}` })) as { handle: FileSystemDirectoryHandle }).handle,
-            }
-          : { kind: 'config' as const, config: await mountConfigForSpec({ type: info?.backend ?? 'indexeddb', store: `artipod-upper::${dirName}` }) };
-      cowUpper = await encryptedStoreMount({ backing, getKey: svc.requireKey });
-    } else {
-      cowUpper = await mountConfigForSpec(
-        info?.backend === 'opfs'
-          ? { type: 'opfs', dir: `.artipod/uppers/${encodeURIComponent(route.id)}` }
-          : { type: 'indexeddb', store: `artipod-upper::${encodeURIComponent(route.id)}` },
-      );
-    }
+    cowUpper = await openWorkspaceUpper({ fs, ref: route.id, getKey: svc.requireKey, encrypted: !!info?.encrypted, flush: flushFileSystem });
   }
   const blankRoot = `/work/${route.id}`;
   if (!route.isRef) await fs.promises.mkdir(blankRoot, { recursive: true }).catch(() => {});
@@ -144,6 +125,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         actor,
         remote,
       });
+      await flushFileSystem();
       if (!result.pushed) return `nothing to push for ${route.id}`;
       await io.patch(route.id, { hasChanges: false });
       return `pushed ${route.id}: ${result.overlayLayers} overlay layer(s) → ${result.manifestDigest.slice(0, 19)}…`;
@@ -179,6 +161,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     // permanent: the upper is retired below — replaceable overlay layers
     // would be STRIPPED by the next (even empty) push from this actor
     const result = await pushOverlay({ store, zfs: pod.zfs, ref: target, upperAt, deletions, actor, remote, permanent: true });
+    await flushFileSystem();
     if (route.isRef && route.mode === 'cow') {
       // a cow fork migrates; NEVER empty an rw upper (its layers mirror the head)
       for (const name of (await fs.promises.readdir(upperAt).catch(() => [])) as string[]) {
@@ -249,7 +232,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
               encrypt: true,
               adopt: { lease: brokerLease, key: brokerKey },
               login: async () => {
-                if (!(await svc.login(actor))) throw new Error('broker login failed — is the serve still running with --encrypt?');
+                if (!(await svc.login(await actorId()))) throw new Error('broker login failed — is the serve still running with --encrypt?');
                 const lease = svc.getLease();
                 const key = svc.getKey();
                 const podId = podRef?.oci.store.getSuperblock().podId;
@@ -272,19 +255,30 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   podRef = pod;
   const { processes } = pod;
   const sandbox = pod.createSandbox({ confineTo: pod.basis ? pod.basis.at : blankRoot });
+  const exec = sandbox.exec.bind(sandbox);
+  sandbox.exec = async (...args) => {
+    const result = await exec(...args);
+    await flushFileSystem();
+    return result;
+  };
   // per-artipod catalog badge: ref workspaces under a broker keep ciphertext
-  await io.patch(route.id, { encrypted: !!brokerKey && route.isRef });
+  await io.patch(route.id, { encrypted: !!info?.encrypted });
 
   // ── sync status + retry ────────────────────────────────────────────────────
   // The catalog's verdict rides push OUTCOMES, not trust in autoPush.
   // U5: every subscription is collected for close() — no page-lifetime leaks.
   const offs: (() => void)[] = [];
+  let closed = false;
+  const reportPersistenceFailure = (error: unknown): void => {
+    console.error('workspace persistence failed:', error);
+    if (!closed) workspaceStore.setState({ sync: { kind: 'failed', at: Date.now(), error: error instanceof Error ? error.message : String(error) } });
+  };
   let needsPush = route.mode === 'rw' && ((await io.read()).workspaces.find((e) => e.id === route.id)?.unsynced ?? false);
   if (needsPush) syncState = reduceSync(syncState, { type: 'push-fail' });
   offs.push(
     events.on('sync:push', (e) => {
       needsPush = !e.ok;
-      void io.patch(route.id, { unsynced: !e.ok });
+      void io.patch(route.id, { unsynced: !e.ok }).catch(reportPersistenceFailure);
       dispatch(e.ok ? { type: 'push-ok', at: Date.now() } : { type: 'push-fail' });
       workspaceStore.setState({
         sync: e.ok ? { kind: 'synced', at: Date.now(), layers: e.layers } : { kind: 'failed', at: Date.now(), error: e.error },
@@ -305,7 +299,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       // nothing pending after all — the flag was stale
       needsPush = false;
       dispatch({ type: 'push-ok', at: Date.now() });
-      void io.patch(route.id, { unsynced: false });
+      await io.patch(route.id, { unsynced: false });
     }
   });
   // Boot retry (an offline session left work behind). The slow 15 s interval
@@ -325,11 +319,17 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   });
   // Reconnect + lease renewal: broker snapshots drive both retry and re-key.
   const unsubBroker = brokerStore.subscribe(() => {
-    if (!pushTerminated) void scheduler.run(PUSH_TASK);
     const lease = svc.getLease();
     const key = svc.getKey();
-    if (lease && key) void pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key });
-    else if (brokerStore.getState().status === 'locked') void pod.locker.lock();
+    if (brokerStore.getState().status === 'locked') {
+      // The root is already locked, so audit persistence may fail. Revocation
+      // must happen first and must never depend on an audit write succeeding.
+      pod.keyring.revokeAll('kek:');
+      void pod.locker.lock().catch((error) => console.warn('workspace lock audit unavailable:', error));
+      return;
+    }
+    if (lease && key) void pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key }).catch(reportPersistenceFailure);
+    if (!pushTerminated) void scheduler.run(PUSH_TASK);
   });
 
   // Track unpushed work for the catalog: probe the upper after changes/pushes.
@@ -349,7 +349,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         }
         const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
         await io.patch(route.id, { hasChanges: entries.length > 0 });
-      })();
+      })().catch(reportPersistenceFailure);
     }, 500);
   };
   offs.push(events.on('fs:changed', probe));
@@ -401,7 +401,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
           try {
             const result = await pod.pushBasis();
             if (result) {
-              void io.patch(route.id, { unsynced: false });
+              await io.patch(route.id, { unsynced: false });
             }
           } catch {
             // server unreachable — unsynced flag remains truthful
@@ -415,12 +415,20 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
         // keys, hydration, the process namespace) unregister — the next
         // session must not collide.
-        pod.dispose();
-        releaseWsLock?.();
-        const w = window as unknown as { __artipod?: unknown };
-        if (w.__artipod === pod) delete w.__artipod;
+        try { await flushFileSystem(); }
+        finally {
+          closed = true;
+          try { pod.keyring.revokeAll(); pod.dispose(); }
+          finally {
+            releaseWsLock?.();
+            const w = window as unknown as { __artipod?: unknown };
+            if (w.__artipod === pod) delete w.__artipod;
+          }
+        }
       })();
-      lifecycle = lifecycle.catch(() => {}).then(() => closing);
+      // The caller receives the real failure; the serialization tail must
+      // remain handled even when no subsequent workspace is opened.
+      lifecycle = lifecycle.catch(() => {}).then(() => closing).catch(() => {});
       return closing;
     },
   };

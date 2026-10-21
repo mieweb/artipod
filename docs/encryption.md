@@ -4,6 +4,45 @@
 
 **The principle everything follows from:** disk only ever holds *ciphertext + wrapped keys*; usable keys exist only in a memory keyring, on a lease with a TTL. "Access expires" is not something done to the data — it is the key evaporating. Login (or a grant, or a delegated authority) restores the key, never rewrites the data.
 
+## Browser persistence boundary
+
+The browser SPA opens `openBrowserVault` before mounting workspaces or reading
+the UI registry. Its entire logical filesystem is an `encryptedStoreMount`:
+contents, filenames, directory records, link targets, scratch files, workspace
+names and local OCI/snapshot indexes are encrypted **before the first protected
+OPFS or IndexedDB write**. Logical JSON metadata is ordinary JSON inside that
+filesystem; it is never a raw plaintext browser file.
+
+For the filesystem, only a versioned bootstrap (format, cipher, required-encryption
+flag, backend, opaque generation and migration phase) is outside encryption. The
+key service separately retains public broker/device metadata and device-wrapped
+grants; these records contain no workspace names or file paths. Backing blocks
+have numeric IDs beneath a random generation. Public model/runtime downloads
+remain in a separate cache. See [on-disk-layout.md](on-disk-layout.md#the-browsers-disk-spa)
+for the exact layout and legacy migration protocol.
+
+A known encrypted vault cannot open without its key. A failed broker probe is
+an error. A deployment reporting no broker offers visibly labeled memory-only
+work; no persistent plaintext fallback is selected. One tab owns the writer
+lock. Lease expiry denies even cached filesystem reads; key replacement must
+authenticate existing ciphertext before access resumes. Flush failures propagate
+to saves and shell operations instead of being reported as durable success.
+Previously decrypted application memory cannot be retroactively revoked.
+This encryption boundary does not make ordinary ZenFS multi-block mutations
+crash-atomic: the existing transaction rollback defect under backing failures
+remains, so a failed operation can require recovery. Migration uses its own
+verified generation protocol and preserves original sources until commit.
+
+The browser vault currently encrypts its blocks directly with the leased broker
+KEK; this fix does not introduce independent per-layer or per-generation DEKs.
+
+This boundary is specific to the browser SPA. Library callers using a plain
+filesystem still need to encrypt that filesystem: OCI blob encryption alone
+leaves local JSON indexes, refs and snapshot metadata exposed. Native host
+working trees and SRT shell integration are outside this change. Browser history,
+git author preferences and optional remembered credentials also remain outside
+the workspace filesystem vault.
+
 ## Key hierarchy
 
 ```
@@ -27,7 +66,7 @@ Rotation and sharing are **rewrap, not re-encrypt** (add a recipient = wrap the 
 - **Two identities per layer**: plaintext digest (diff ID — integrity/dedup inside a pod's history) and ciphertext digest (what stores, registries, and sync address). Sync and relays move ciphertext only.
 - **Decrypt-on-read** happens in a chunk-store layer *below* `OciLayerFS`; plaintext exists only in memory caches. `OciViewFS` and the CoW upper are oblivious.
 - **The writable upper is encrypted too** (per-generation DEK, same envelope). Layer-only encryption is theater — the upper holds the freshest data.
-- **Superblock** (small, cleartext, per pod store): opaque pod ID, cipher suite, envelope refs, timestamps. Enough to enumerate and mount-request pods without any key; no names or clinical metadata (identifiers stay inside the ciphertext).
+- **Superblock** (small logical record per pod store; also encrypted by the browser root): opaque pod ID, cipher suite, envelope refs, timestamps. Enough to enumerate and mount-request pods without any key; no names or clinical metadata (identifiers stay inside the ciphertext).
 - OCIcrypt-compatible envelopes where formats align; the chunked layer format itself is artipod-specific.
 
 ## The keyring and leases

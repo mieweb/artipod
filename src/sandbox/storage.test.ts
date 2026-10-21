@@ -3,8 +3,8 @@
  * the same code path serves indexeddb↔opfs in the browser).
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { configure, InMemory, fs as zfs, umount } from '@zenfs/core';
-import { migrateStorage, type MigrationProgress } from './storage.js';
+import { fs as zfs, umount } from '@zenfs/core';
+import { configureStorageRoot, createMemoryStorageRoot, initFileSystem, migrateStorage, mountBackend, unmountBackend, type MigrationProgress } from './storage.js';
 
 beforeEach(async () => {
   try {
@@ -12,7 +12,32 @@ beforeEach(async () => {
   } catch {
     // first run
   }
-  await configure({ mounts: { '/': InMemory } });
+  await configureStorageRoot(await createMemoryStorageRoot());
+});
+
+describe('protected browser root', () => {
+  it('rejects raw persistence and replacement before opening a backing device', async () => {
+    await configureStorageRoot(await createMemoryStorageRoot(), { protectedPersistence: true });
+    await zfs.promises.writeFile('/private-name.txt', 'private contents');
+
+    await expect(mountBackend('/raw-opfs', { type: 'opfs' })).rejects.toThrow('encrypted browser vault');
+    await expect(mountBackend('/raw-idb', { type: 'indexeddb' })).rejects.toThrow('encrypted browser vault');
+    await expect(migrateStorage('opfs')).rejects.toThrow('expose plaintext');
+    await expect(initFileSystem('memory')).rejects.toThrow('legacy raw storage cannot replace');
+    expect(await zfs.promises.readFile('/private-name.txt', 'utf8')).toBe('private contents');
+    expect(await zfs.promises.readdir('/')).toEqual(['private-name.txt']);
+  });
+
+  it('still permits volatile nested scratch mounts', async () => {
+    await configureStorageRoot(await createMemoryStorageRoot(), { protectedPersistence: true });
+    await mountBackend('/tmp', { type: 'memory' });
+    try {
+      await zfs.promises.writeFile('/tmp/transient.txt', 'volatile');
+      expect(await zfs.promises.readFile('/tmp/transient.txt', 'utf8')).toBe('volatile');
+    } finally {
+      await unmountBackend('/tmp');
+    }
+  });
 });
 
 describe('migrateStorage', () => {

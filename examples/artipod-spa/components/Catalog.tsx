@@ -70,8 +70,11 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
             };
           }
           try {
+            const { closeFileSystem } = await import('@/lib/filesystem');
+            await closeFileSystem();
             const opfsRoot = await navigator.storage.getDirectory();
             await opfsRoot.removeEntry('artipod-fs', { recursive: true }).catch(() => {});
+            await opfsRoot.removeEntry('artipod-vault', { recursive: true }).catch(() => {});
             for (const db of await indexedDB.databases()) {
               if (db.name && (db.name.startsWith('artipod') || db.name === 'browser-git-fs')) {
                 await new Promise((r) => {
@@ -139,7 +142,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
     !encryptionInPlay ? null : state === 'plaintext' ? (
       <span
         className="rounded bg-gray-800 px-1.5 py-0.5 text-gray-500"
-        title="stored unencrypted — content written before --encrypt (or a blank scratch tree); republish to encrypt"
+        title="server data is plaintext or this local workspace is memory-only; persistent browser workspaces require encryption"
       >
         plaintext
       </span>

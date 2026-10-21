@@ -45,7 +45,10 @@ export { makeProcessCommands } from './process-command.js';
 // App-facing sandbox infrastructure: storage backends, git ops + auth.
 export * from './storage.js';
 export { encryptedMount, type EncryptedFsOptions } from './encrypted-fs.js';
-export { encryptedStoreMount, type EncryptedStoreBacking, type EncryptedStoreMountOptions } from './encrypted-store.js';
+export { encryptedStoreMount, type EncryptedStoreBacking, type EncryptedStoreMountOptions, type EncryptedStoreFileSystem } from './encrypted-store.js';
+export { directoryStore, directoryMount } from './directory-store.js';
+export { openBrowserVault, browserVaultRequired, createBrowserVaultAdapters } from './browser-vault.js';
+export type { BrowserVault, BrowserVaultAdapters, BrowserVaultControl, BrowserVaultLegacySource } from './browser-vault.js';
 export { createIngest } from './ingest.js';
 export type { Ingest, IngestData, IngestOptions, IngestPutResult, IngestResult, IngestWriter } from './ingest.js';
 export { createGitOps, getAuthor, setAuthor, setCorsProxy, getCorsProxy } from './git.js';
