@@ -19,6 +19,8 @@ function close() {
 
 try {
   pod = await createZenFsPod({ formatVersion: 1, mounts: [{ name: 'work', path: '/', mode: 'rw', source: { kind: 'hostDir', dir: workerData.workspacePath } }] }, {
+    // VS Code edits this native workspace as ordinary host files.
+    storagePolicy: 'plaintext',
     proc: false,
     cwd: '/',
     identity: { kind: 'pod', name: basename(workerData.workspacePath), mode: 'local workspace' }
