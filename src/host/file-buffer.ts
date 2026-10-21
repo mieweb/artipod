@@ -62,6 +62,11 @@ export class FileBuffer {
     return this._content;
   }
 
+  /** Last text read from or successfully written to the filesystem. */
+  get savedContent(): string {
+    return this._savedContent;
+  }
+
   get isDirty(): boolean {
     return this._isDirty;
   }
@@ -93,11 +98,14 @@ export class FileBuffer {
 
   async reload(): Promise<void> {
     const { zfs, path } = this.opts;
+    let content: string;
     try {
-      this._content = (await zfs.promises.readFile(path, 'utf8')) as string;
-    } catch {
-      this._content = ''; // new file
+      content = (await zfs.promises.readFile(path, 'utf8')) as string;
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') throw error;
+      content = ''; // new file
     }
+    this._content = content;
     this._savedContent = this._content;
     this._isDirty = false;
     this._externallyChanged = false;
@@ -109,9 +117,10 @@ export class FileBuffer {
       throw new Error('read-only session: saving is disabled in this tab');
     }
     const { zfs, path, events } = this.opts;
-    await zfs.promises.writeFile(path, this._content);
-    this._savedContent = this._content;
-    this._isDirty = false;
+    const content = this._content;
+    await zfs.promises.writeFile(path, content);
+    this._savedContent = content;
+    this._isDirty = this._content !== content;
     this._externallyChanged = false;
     events?.emit('fs:changed', { paths: [path], origin: 'editor' });
     this.notify();
@@ -123,7 +132,10 @@ export class FileBuffer {
     let onDisk: string;
     try {
       onDisk = (await zfs.promises.readFile(path, 'utf8')) as string;
-    } catch {
+    } catch (error) {
+      // An unavailable/locked filesystem is not evidence that the file was
+      // deleted. Keep both clean text and dirty drafts until access returns.
+      if ((error as { code?: string }).code !== 'ENOENT') return;
       onDisk = '';
     }
     if (onDisk === this._savedContent) return; // nothing actually changed

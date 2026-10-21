@@ -1,0 +1,89 @@
+/** Native semantics for a single Node hostDir pod's snapshot filesystem. */
+import * as fs from 'node:fs/promises';
+import * as nativeHostFs from 'node:fs';
+import path from 'node:path';
+import type { ZenFsLike } from '../sandbox/types.js';
+import type { SnapshotFilesystem } from './snapshot.js';
+
+/** Keep every native realization dependency behind this browser-mapped module. */
+export { nativeHostFs };
+
+/** ZenFS Passthrough emulates symlinks; snapshot native links as native links. */
+export function createNativeWorkspaceFs(directory: string): ZenFsLike & SnapshotFilesystem {
+  const resolve = (name: string) => {
+    if (!name.startsWith('/') || name.includes('\0') || name.split('/').includes('..')) throw new Error(`Invalid pod path: ${name}`);
+    return path.join(directory, name);
+  };
+  const methods = ['readdir', 'lstat', 'stat', 'readFile', 'writeFile', 'mkdir', 'rmdir', 'unlink', 'chmod'] as const;
+  const promises: Record<string, unknown> = {};
+  for (const method of methods) promises[method] = (name: string, ...args: unknown[]) => (fs[method] as (...a: unknown[]) => unknown)(resolve(name), ...args);
+  promises.readlink = (name: string) => fs.readlink(resolve(name));
+  promises.symlink = (target: string, name: string) => fs.symlink(target, resolve(name));
+  const validateSnapshotPaths = async (paths: readonly string[], options: { destination?: string } = {}) => {
+    const destination = options.destination ?? '/';
+    resolve(destination);
+    const workspace = await fs.lstat(directory);
+    if (!workspace.isDirectory() || workspace.isSymbolicLink()) throw new Error('Snapshot materialization requires a real workspace directory');
+    // A single probe can represent only this workspace's volume. Reject nested
+    // devices, including checkout destinations, before materialization changes
+    // any live entries. A missing path will be created on its parent's volume;
+    // a live symlink is either rejected as an ancestor or replaced as an entry.
+    const existing = new Map<string, Awaited<ReturnType<typeof fs.lstat>> | null>();
+    for (const name of new Set([destination, ...paths.map(name => destination === '/' ? name : `${destination}${name === '/' ? '' : name}`)])) {
+      resolve(name);
+      let prefix = '';
+      for (const component of name.split('/').slice(1)) {
+        if (!component) continue;
+        prefix += `/${component}`;
+        let stat = existing.get(prefix);
+        if (stat === undefined) {
+          try { stat = await fs.lstat(resolve(prefix)); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            stat = null;
+          }
+          existing.set(prefix, stat);
+        }
+        if (!stat) break;
+        if (stat.isSymbolicLink()) break;
+        if (stat.dev !== workspace.dev) throw new Error(`Snapshot materialization across a volume or mount boundary is unsupported: ${prefix}`);
+        if (!stat.isDirectory()) break;
+      }
+    }
+    const siblings = new Map<string, string[]>();
+    // Compare user names with reserved roots too, even when those roots are
+    // absent from the snapshot. Exact sentinel spellings are deduplicated.
+    for (const name of new Set(['/.artipod', '/proc', ...paths])) {
+      resolve(name); // apply the same pod-path validation as ordinary operations
+      if (name === '/') continue;
+      const parent = name.slice(0, name.lastIndexOf('/')) || '/';
+      const group = siblings.get(parent) ?? [];
+      group.push(name.slice(name.lastIndexOf('/') + 1));
+      siblings.set(parent, group);
+    }
+    // Probe names on the actual filesystem: lowercasing alone misses Unicode
+    // normalization and other volume-specific equivalences. Only empty private
+    // directories are created; snapshot links and bytes never enter this tree.
+    const groups = [...siblings].filter(([, names]) => names.length > 1);
+    if (!groups.length) return;
+    const anchor = await fs.stat(path.join(directory, '.artipod'));
+    if (!anchor.isDirectory() || anchor.dev !== workspace.dev) throw new Error('Snapshot path preflight requires its metadata probe on the workspace volume');
+    const probe = await fs.mkdtemp(path.join(directory, '.artipod', 'path-preflight-'));
+    try {
+      for (const [i, [parent, names]] of groups.entries()) {
+        const group = path.join(probe, String(i));
+        await fs.mkdir(group);
+        for (const name of names) {
+          try { await fs.mkdir(path.join(group, name)); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Invalid Artipod snapshot filesystem-equivalent paths in ${parent}: ${name}`, { cause: error });
+            throw error;
+          }
+        }
+      }
+    } finally {
+      await fs.rm(probe, { recursive: true });
+    }
+  };
+  return { promises, validateSnapshotPaths } as unknown as ZenFsLike & SnapshotFilesystem;
+}

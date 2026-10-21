@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Public `@artipod/core/storage` sessions own protected persistence, key leases,
+  workspace migration, durability, teardown, recovery and reset outside the SPA
+  (#118). Persistent sessions require encryption by default; explicit memory and
+  plaintext modes report their actual protection. A native encrypted-directory
+  adapter shares the lifecycle through `@artipod/core/storage/node`.
+- Validate protected pod, adopted filesystem and metadata contexts before
+  initialization writes. Raw persistent manifests and browser initialization now
+  require `storagePolicy: 'plaintext'`; existing sandbox storage exports remain
+  deprecated compatibility aliases. See `docs/encryption.md` for the upgrade path.
+- Test an independently installed npm tarball in Node and Chromium, scanning raw
+  write history and final native/OPFS/IndexedDB backing for private names and data.
+
+### Fixed
+
+- Reject native snapshot materialization across volume boundaries before changing
+  live files, and retain directories needed by nested restore exclusions (#83).
+- Serialize workspace teardown before replacement boot, preserve the encrypted
+  registry and pod settings through interrupted replacement, and expose recovery
+  immediately after failed storage writes even while the broker lease stays valid (#83).
+- Coordinate extension shell snapshot commands with other terminals, and reject
+  malformed saved checkpoint mappings without recapturing started requests (#83).
+- Close remaining storage-boundary gaps from #119: require snapshot output stores
+  to share the protected context, enforce registered-root policies, and exclude
+  asynchronous raw storage operations from managed root replacement. Reject
+  malformed vault control records without creating an empty generation, and
+  abort garbage collection when a saved snapshot parent chain is incomplete.
+- Encrypt the browser SPA's whole persistent filesystem, including blank scratch
+  workspaces, filenames in local OCI/snapshot metadata and the UI registry (#116).
+  Migrate legacy OPFS/IndexedDB data through verified encrypted generations;
+  require a key lease and one writer, surface persistence errors, and offer
+  clearly labeled memory-only work when no broker is configured.
+- Preserve unsaved editor drafts in tab memory through lease locking, retain
+  reset ownership until deletion completes, and preserve damaged legacy workspace
+  blocks rather than migrating them as an empty tree.
+- Recover failed encrypted mounts without reloading or losing tab drafts, and
+  migrate untouched legacy IndexedDB uppers that contain only bootstrap records.
+
 ## [0.12.0] - 2026-09-14
 
 ### Added

@@ -25,10 +25,13 @@ import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
 import LayersView from '@/components/LayersView';
 import { Layers as LayersIcon } from 'lucide-react';
+import { editorDrafts } from '@/lib/services/editor-drafts';
+import { registerFileSystemTeardown } from '@/lib/filesystem';
 
 const Terminal = dynamicImport(() => import('@/components/Terminal'), { ssr: false });
 
 export default function Workspace({ route }: { route: Route }) {
+  const editorIdentity = `${route.isRef ? 'ref' : 'scratch'}:${route.id}`;
   const snap = useStore(workspaceStore);
   const [termOpen, setTermOpen] = useState(false);
   const [termHeight, setTermHeight] = useState(300);
@@ -39,18 +42,27 @@ export default function Workspace({ route }: { route: Route }) {
 
   useEffect(() => {
     let cancelled = false;
-    let opened: PodSession | null = null;
     let offInspect: (() => void) | undefined;
     // Show "Opening…" NOW — the boot itself queues behind the previous
     // session's serialized close (flush-push included).
     workspaceStore.setState({ ...initialWorkspace, syncActive: route.isRef && route.mode === 'rw' });
-    void openPodSession(route)
+    const opening = openPodSession(route);
+    const teardown = registerFileSystemTeardown(async () => {
+      cancelled = true;
+      offInspect?.();
+      sessionRef.current = null;
+      await opening.close();
+    }, 'Workspace session');
+    void opening
       .then((session) => {
-        if (cancelled) return void session.close();
-        opened = session;
+        if (cancelled) return opening.close();
         sessionRef.current = session;
         setSessionTick((t) => t + 1);
         if (route.runIntent) setView('preview');
+        else {
+          const selectedFile = editorDrafts.selectedFile(editorIdentity);
+          if (selectedFile) setEditingFile(selectedFile);
+        }
         const root = session.pod.basis?.at ?? `/work/${route.id}`;
         const inspect = async () => {
           try {
@@ -66,8 +78,10 @@ export default function Workspace({ route }: { route: Route }) {
         offInspect = session.events.on('fs:changed', () => void inspect());
       })
       .catch((e) => {
-        console.error('workspace boot failed:', e);
-        workspaceStore.setState({ phase: 'error', error: (e as Error).message });
+        if (!cancelled) {
+          console.error('workspace boot failed:', e);
+          workspaceStore.setState({ phase: 'error', error: (e as Error).message });
+        }
       });
     return () => {
       // U5: leaving the route closes the session — flush-push, unsubscribe,
@@ -75,7 +89,10 @@ export default function Workspace({ route }: { route: Route }) {
       cancelled = true;
       offInspect?.();
       sessionRef.current = null;
-      void opened?.close();
+      // Core invokes registered teardown callbacks in a microtask. Claim the
+      // session lifecycle synchronously before the next effect queues its boot.
+      void opening.close().catch(() => {});
+      void teardown().catch(error => console.error('workspace close failed:', error));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.id, route.isRef]);
@@ -325,6 +342,7 @@ export default function Workspace({ route }: { route: Route }) {
         {snap.editingFile && (
           <div className={`absolute inset-0 ${snap.activeView === 'editor' ? 'z-10' : 'invisible z-0'}`}>
             <Editor
+              workspaceId={editorIdentity}
               filepath={snap.editingFile}
               onClose={() => {
                 setEditingFile(null);

@@ -5,7 +5,8 @@
  */
 import { browserAdapters } from './services/adapters';
 import { KeysService } from './services/keys-service';
-import { UiStateIO, memoryStateMedium, opfsStateMedium, type StateMedium } from './services/ui-state';
+import { UiStateIO } from './services/ui-state';
+import { registryStateMedium } from './services/registry-medium';
 import { registryActions } from './stores/registry';
 import { initFileSystem } from './filesystem';
 
@@ -70,34 +71,27 @@ export function keys(): KeysService {
   return keysSingleton;
 }
 
-/** ZenFS-backed medium for non-OPFS backends (single-tab: the lock is a local mutex). */
-function zenfsStateMedium(): StateMedium {
-  const memory = memoryStateMedium();
-  return {
-    async read(): Promise<string | null> {
-      const { fs } = await import('./filesystem');
-      return ((await fs.promises.readFile('/.artipod/ui-state.json', 'utf8').catch(() => null)) as string | null) ?? null;
-    },
-    async write(text: string): Promise<void> {
-      const { fs } = await import('./filesystem');
-      await fs.promises.mkdir('/.artipod', { recursive: true }).catch(() => {});
-      await fs.promises.writeFile('/.artipod/ui-state.json', text);
-    },
-    withLock: (fn) => memory.withLock(fn),
-  };
-}
-
 let ioSingleton: Promise<{ io: UiStateIO; registry: ReturnType<typeof registryActions> }> | null = null;
 
 export function uiState(): Promise<{ io: UiStateIO; registry: ReturnType<typeof registryActions> }> {
   ioSingleton ??= (async () => {
-    const info = await initFileSystem();
-    const io = new UiStateIO(info?.backend === 'opfs' ? opfsStateMedium() : zenfsStateMedium());
+    await initFileSystem();
+    const io = new UiStateIO(registryStateMedium(() => import('./filesystem')));
     return { io, registry: registryActions(io) };
-  })();
+  })().catch(error => { ioSingleton = null; throw error; });
   return ioSingleton;
 }
 
+let bootstrapActor: string | null = null;
+/** Opaque login principal: obtaining a key must never open/write the registry. */
 export async function actorId(): Promise<string> {
-  return (await uiState()).io.actorId();
+  if (bootstrapActor) return bootstrapActor;
+  const name = 'artipod-profile-id';
+  try {
+    const saved = localStorage.getItem(name);
+    if (saved && /^browser:[0-9a-f-]{36}$/.test(saved)) return bootstrapActor = saved;
+  } catch { /* Storage restrictions still permit a volatile principal. */ }
+  bootstrapActor = `browser:${crypto.randomUUID()}`;
+  try { localStorage.setItem(name, bootstrapActor); } catch { /* Volatile identity. */ }
+  return bootstrapActor;
 }

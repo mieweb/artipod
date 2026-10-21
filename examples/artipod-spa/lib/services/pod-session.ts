@@ -3,16 +3,16 @@
  * extracted from the old app's 300-line boot effect. `open(route)` builds
  * the pod (encrypted block-store upper under a broker, authority adoption,
  * publish handler, push retry on the sync-machine + TaskScheduler, event
- * bridge into workspaceStore) and returns a session; `close()` is the U5
- * teardown seam — a stub here, real disposal when reloads go away.
+ * bridge into workspaceStore) and returns a session; `close()` drains and
+ * disposes it before another workspace can register mounts or proc providers.
  *
  * Live objects (pod, sandbox, events) live HERE; stores get snapshots only.
  */
 import type { PodEvents } from '@artipod/core/host';
 import type { Sandbox } from '@artipod/core/sandbox';
-import { keys, uiState, workspaceUrl, type Route } from '../boot';
-import { initFileSystem } from '../filesystem';
-import { upperDirName } from './ui-state';
+import { actorId, keys, uiState, workspaceUrl, type Route } from '../boot';
+import { FileSystemClosePersistenceError, flushFileSystem, initFileSystem } from '../filesystem';
+import { openWorkspaceUpper } from './workspace-storage';
 import { TaskScheduler } from './task-scheduler';
 import { initialSyncState, reduceSync, wantsPush, type SyncEvent, type SyncState } from './sync-machine';
 import { workspaceStore, initialWorkspace } from '../stores/workspace';
@@ -21,6 +21,7 @@ import { navigateTo } from '../stores/route';
 import { nextDraftRef } from '../boot';
 import { createBrowserRuntime, type BrowserRuntime } from '@artipod/core/apps';
 import { catalogInventory } from './inventory';
+import { disposeSessionResources, SessionDisposalError, SessionLifecycle, type SessionOpening } from './pod-session-lifecycle';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
 
@@ -34,7 +35,7 @@ export interface PodSession {
   publish(target?: string): Promise<string>;
   /** Suggested publish target for the panel (fork → next free _ tag). */
   suggestPublishValue(): Promise<string>;
-  /** U5 seam: dispose pod/mounts/subscriptions. Today navigation reloads. */
+  /** Drain pending work and dispose this pod's mounts/subscriptions. */
   close(): Promise<void>;
 }
 
@@ -45,27 +46,61 @@ export const wsLockName = (id: string): string => `artipod-ws-${id}`;
 // are page-global, so the NEXT open must wait for the previous teardown
 // (flush-push included) or the old dispose() tears down the new session's
 // registrations (the "single-provider collision" landmine, observed live).
-let lifecycle: Promise<unknown> = Promise.resolve();
+const lifecycle = new SessionLifecycle(bootPodSession, error => error instanceof FileSystemClosePersistenceError);
+export type PodSessionOpening = SessionOpening<PodSession>;
 
-export function openPodSession(route: Route): Promise<PodSession> {
-  const opened = lifecycle.catch(() => {}).then(() => bootPodSession(route));
-  lifecycle = opened.catch(() => {});
-  return opened;
+export function openPodSession(route: Route): PodSessionOpening {
+  return lifecycle.open(route);
 }
 
 async function bootPodSession(route: Route): Promise<PodSession> {
+  let releaseWsLock: (() => void) | null = null;
+  let cleanupPod: Pod | undefined;
+  let cleanupSandbox: Sandbox | undefined;
+  let cleanupRuntime: BrowserRuntime | undefined;
+  let cleanupScheduler: TaskScheduler | undefined;
+  let cleanupRearm: (() => void) | undefined;
+  let cleanupBroker: (() => void) | undefined;
+  let stopPreview: (() => void) | undefined;
+  let probeTimer: ReturnType<typeof setTimeout> | null = null;
+  const offs: (() => void)[] = [];
+  let closed = false;
+  let disposed = false;
+  let pushTerminated = false;
+  const disposeResources = (): void => {
+    if (disposed) return;
+    disposed = true; closed = true; pushTerminated = true;
+    disposeSessionResources([
+      () => cleanupScheduler?.cancel(PUSH_TASK),
+      () => cleanupRuntime?.dispose(),
+      () => { if (stopPreview) window.removeEventListener('pagehide', stopPreview); },
+      ...offs,
+      () => cleanupBroker?.(),
+      () => cleanupRearm?.(),
+      () => { if (probeTimer) clearTimeout(probeTimer); },
+      () => cleanupSandbox?.dispose(),
+      () => cleanupPod?.keyring.revokeAll(),
+      () => cleanupPod?.dispose(),
+      () => releaseWsLock?.(),
+      () => {
+        const debug = window as unknown as { __artipod?: unknown };
+        if (debug.__artipod === cleanupPod) delete debug.__artipod;
+      },
+    ]);
+  };
+  try {
   workspaceStore.setState({ ...initialWorkspace, syncActive: route.isRef && route.mode === 'rw' });
   // Hold a lifetime lock so the catalog's sweeper knows this tab is alive.
   // U5: the session RELEASES it on close — navigation no longer reloads.
-  let releaseWsLock: (() => void) | null = null;
   try {
     void navigator.locks.request(
       wsLockName(route.id),
       { mode: 'shared' },
       () => new Promise<void>((resolve) => {
-        releaseWsLock = resolve;
+        if (closed) resolve();
+        else releaseWsLock = resolve;
       }),
-    );
+    ).catch(() => {});
   } catch {
     // no Web Locks — the sweeper is conservative without it
   }
@@ -86,31 +121,12 @@ async function bootPodSession(route: Route): Promise<PodSession> {
 
   // Writable workspaces (rw AND cow) get a persistent upper keyed by ref —
   // one local working state per ref; the mode only chooses auto-push.
-  const { mountConfigForSpec, encryptedStoreMount } = await import('@artipod/core/sandbox');
   const svc = keys();
   const brokerKey = svc.getKey();
   const brokerLease = svc.getLease();
   let cowUpper: unknown;
   if (route.isRef && route.mode !== 'ro') {
-    if (brokerKey) {
-      // Broker serve: the working tree is an opaque encrypted BLOCK STORE —
-      // no filenames/tree shape on the backing medium; dir = hash(ref).
-      const dirName = await upperDirName(route.id);
-      const backing =
-        info?.backend === 'opfs'
-          ? {
-              kind: 'opfs' as const,
-              dir: ((await mountConfigForSpec({ type: 'opfs', dir: `.artipod/uppers/${dirName}` })) as { handle: FileSystemDirectoryHandle }).handle,
-            }
-          : { kind: 'config' as const, config: await mountConfigForSpec({ type: info?.backend ?? 'indexeddb', store: `artipod-upper::${dirName}` }) };
-      cowUpper = await encryptedStoreMount({ backing, getKey: svc.requireKey });
-    } else {
-      cowUpper = await mountConfigForSpec(
-        info?.backend === 'opfs'
-          ? { type: 'opfs', dir: `.artipod/uppers/${encodeURIComponent(route.id)}` }
-          : { type: 'indexeddb', store: `artipod-upper::${encodeURIComponent(route.id)}` },
-      );
-    }
+    cowUpper = await openWorkspaceUpper({ ref: route.id });
   }
   const blankRoot = `/work/${route.id}`;
   if (!route.isRef) await fs.promises.mkdir(blankRoot, { recursive: true }).catch(() => {});
@@ -144,6 +160,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         actor,
         remote,
       });
+      await flushFileSystem();
       if (!result.pushed) return `nothing to push for ${route.id}`;
       await io.patch(route.id, { hasChanges: false });
       return `pushed ${route.id}: ${result.overlayLayers} overlay layer(s) → ${result.manifestDigest.slice(0, 19)}…`;
@@ -179,6 +196,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     // permanent: the upper is retired below — replaceable overlay layers
     // would be STRIPPED by the next (even empty) push from this actor
     const result = await pushOverlay({ store, zfs: pod.zfs, ref: target, upperAt, deletions, actor, remote, permanent: true });
+    await flushFileSystem();
     if (route.isRef && route.mode === 'cow') {
       // a cow fork migrates; NEVER empty an rw upper (its layers mirror the head)
       for (const name of (await fs.promises.readdir(upperAt).catch(() => [])) as string[]) {
@@ -208,10 +226,10 @@ async function bootPodSession(route: Route): Promise<PodSession> {
 
   // Push retry rides the sync-machine + a NAMED task (visible in artipod ps).
   const scheduler = svc.scheduler;
+  cleanupScheduler = scheduler;
   let syncState: SyncState = { ...initialSyncState, offline: svc.forcedOffline };
   // `kill <sync:push pid>` (TERM): no more runs, no re-arming, row retired —
   // the documented close semantics, not a cancel that the next edit undoes.
-  let pushTerminated = false;
   const dispatch = (event: SyncEvent): void => {
     syncState = reduceSync(syncState, event);
     if (!pushTerminated && wantsPush(syncState, event) && event.type !== 'edit') void scheduler.run(PUSH_TASK);
@@ -224,10 +242,12 @@ async function bootPodSession(route: Route): Promise<PodSession> {
 
   const pod = await createZenFsPod(
     {
-      mounts: [{ name: 'root', path: '/', source: { kind: 'backend', backend: info?.backend ?? 'indexeddb' }, mode: 'rw' }],
+      mounts: [{ name: 'root', path: '/', source: { kind: 'backend', backend: info?.backend === 'opfs' ? 'opfs' : info?.backend === 'indexeddb' ? 'indexeddb' : 'memory' }, mode: 'rw' }],
     },
     {
       adopt: fs,
+      storage: info ?? undefined,
+      storagePolicy: 'protected',
       events,
       cwd: route.isRef ? undefined : blankRoot,
       oci: { transport: new ArtipodRegistryProxyTransport('/api/oci') },
@@ -249,7 +269,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
               encrypt: true,
               adopt: { lease: brokerLease, key: brokerKey },
               login: async () => {
-                if (!(await svc.login(actor))) throw new Error('broker login failed — is the serve still running with --encrypt?');
+                if (!(await svc.login(await actorId()))) throw new Error('broker login failed — is the serve still running with --encrypt?');
                 const lease = svc.getLease();
                 const key = svc.getKey();
                 const podId = podRef?.oci.store.getSuperblock().podId;
@@ -269,22 +289,33 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       extraCommands: [publishCmd],
     },
   );
+  cleanupPod = pod;
   podRef = pod;
   const { processes } = pod;
   const sandbox = pod.createSandbox({ confineTo: pod.basis ? pod.basis.at : blankRoot });
+  cleanupSandbox = sandbox;
+  const exec = sandbox.exec.bind(sandbox);
+  sandbox.exec = async (...args) => {
+    const result = await exec(...args);
+    await flushFileSystem();
+    return result;
+  };
   // per-artipod catalog badge: ref workspaces under a broker keep ciphertext
-  await io.patch(route.id, { encrypted: !!brokerKey && route.isRef });
+  await io.patch(route.id, { encrypted: !!info?.encrypted });
 
   // ── sync status + retry ────────────────────────────────────────────────────
   // The catalog's verdict rides push OUTCOMES, not trust in autoPush.
   // U5: every subscription is collected for close() — no page-lifetime leaks.
-  const offs: (() => void)[] = [];
+  const reportPersistenceFailure = (error: unknown): void => {
+    console.error('workspace persistence failed:', error);
+    if (!closed) workspaceStore.setState({ sync: { kind: 'failed', at: Date.now(), error: error instanceof Error ? error.message : String(error) } });
+  };
   let needsPush = route.mode === 'rw' && ((await io.read()).workspaces.find((e) => e.id === route.id)?.unsynced ?? false);
   if (needsPush) syncState = reduceSync(syncState, { type: 'push-fail' });
   offs.push(
     events.on('sync:push', (e) => {
       needsPush = !e.ok;
-      void io.patch(route.id, { unsynced: !e.ok });
+      void io.patch(route.id, { unsynced: !e.ok }).catch(reportPersistenceFailure);
       dispatch(e.ok ? { type: 'push-ok', at: Date.now() } : { type: 'push-fail' });
       workspaceStore.setState({
         sync: e.ok ? { kind: 'synced', at: Date.now(), layers: e.layers } : { kind: 'failed', at: Date.now(), error: e.error },
@@ -305,7 +336,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       // nothing pending after all — the flag was stale
       needsPush = false;
       dispatch({ type: 'push-ok', at: Date.now() });
-      void io.patch(route.id, { unsynced: false });
+      await io.patch(route.id, { unsynced: false });
     }
   });
   // Boot retry (an offline session left work behind). The slow 15 s interval
@@ -323,18 +354,32 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     if (task) pushProcess.update({ state: task.state, detail: task.lastResult ? { last: task.lastResult } : undefined });
     if (task && task.state === 'idle' && task.nextRunAt === undefined) scheduler.schedule(PUSH_TASK, 15_000);
   });
+  cleanupRearm = rearm;
   // Reconnect + lease renewal: broker snapshots drive both retry and re-key.
   const unsubBroker = brokerStore.subscribe(() => {
-    if (!pushTerminated) void scheduler.run(PUSH_TASK);
     const lease = svc.getLease();
     const key = svc.getKey();
-    if (lease && key) void pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key });
-    else if (brokerStore.getState().status === 'locked') void pod.locker.lock();
+    if (brokerStore.getState().status === 'locked') {
+      // The root is already locked, so audit persistence may fail. Revocation
+      // must happen first and must never depend on an audit write succeeding.
+      pod.keyring.revokeAll('kek:');
+      void pod.locker.lock().catch((error) => console.warn('workspace lock audit unavailable:', error));
+      return;
+    }
+    if (lease && key) void (async () => {
+      // Authenticate the renewed key with the core root before touching even
+      // cached pod metadata. A newer lease supersedes this completion.
+      await initFileSystem();
+      if (svc.getLease() !== lease || svc.getKey() !== key) return;
+      await pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key });
+    })().catch(reportPersistenceFailure);
+    if (!pushTerminated) void scheduler.run(PUSH_TASK);
   });
+
+  cleanupBroker = unsubBroker;
 
   // Track unpushed work for the catalog: probe the upper after changes/pushes.
   const upperAt = route.isRef ? `/.artipod/upper/${encodeURIComponent(route.id)}` : blankRoot;
-  let probeTimer: ReturnType<typeof setTimeout> | null = null;
   const probe = (): void => {
     if (probeTimer) clearTimeout(probeTimer);
     probeTimer = setTimeout(() => {
@@ -349,7 +394,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
         }
         const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
         await io.patch(route.id, { hasChanges: entries.length > 0 });
-      })();
+      })().catch(reportPersistenceFailure);
     }, 500);
   };
   offs.push(events.on('fs:changed', probe));
@@ -365,7 +410,8 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     list: async path => await pod.zfs.promises.readdir(path) as string[],
     stat: async path => await pod.zfs.promises.lstat(path),
   }, pod.basis ? pod.basis.at : blankRoot, { processes, detail: { pod: route.id } });
-  const stopPreview = () => runtime.stop();
+  cleanupRuntime = runtime;
+  stopPreview = () => runtime.stop();
   window.addEventListener('pagehide', stopPreview);
 
   const session: PodSession = {
@@ -387,41 +433,28 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       }
     },
     async close(): Promise<void> {
-      runtime.dispose();
-      window.removeEventListener('pagehide', stopPreview);
-      const closing = (async () => {
-        // Nothing new may start pushing from here on; then flush.
+      let failure: unknown;
+      try {
+        // Stop rearming before draining the current push. All resource releases
+        // still run if cancellation, flushing, or one release itself fails.
         pushTerminated = true;
         scheduler.cancel(PUSH_TASK);
-        // Flush-on-close (U5): a mid-flight or pending push finishes BEFORE the
-        // pod dies — `pod.pushBasis()` awaits an in-flight push plus one
-        // follow-up, so this really drains. Offline or ro: nothing to flush;
-        // the registry flag stands.
         if (route.isRef && route.mode === 'rw' && !svc.forcedOffline) {
           try {
             const result = await pod.pushBasis();
-            if (result) {
-              void io.patch(route.id, { unsynced: false });
-            }
+            if (result) await io.patch(route.id, { unsynced: false });
           } catch {
-            // server unreachable — unsynced flag remains truthful
+            // Server unreachable: the unsynced flag remains truthful.
           }
         }
-        // Unsubscribe audit: every listener this session attached comes off.
-        for (const off of offs) off();
-        unsubBroker();
-        rearm();
-        if (probeTimer) clearTimeout(probeTimer);
-        // Pod teardown: overlay/upper unmounts + proc providers (pod manifest,
-        // keys, hydration, the process namespace) unregister — the next
-        // session must not collide.
-        pod.dispose();
-        releaseWsLock?.();
-        const w = window as unknown as { __artipod?: unknown };
-        if (w.__artipod === pod) delete w.__artipod;
-      })();
-      lifecycle = lifecycle.catch(() => {}).then(() => closing);
-      return closing;
+        try { await flushFileSystem(); }
+        catch (error) { throw new FileSystemClosePersistenceError(error); }
+      } catch (error) { failure = error; }
+      // A disposal error overrides the flush-only classification and blocks
+      // the next boot. Successful disposal permits authenticated recovery.
+      disposeResources();
+      if (failure) throw failure;
+
     },
   };
 
@@ -438,4 +471,9 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   }
 
   return session;
+  } catch (error) {
+    try { disposeResources(); }
+    catch (cleanupError) { throw new SessionDisposalError(new AggregateError([error, cleanupError], 'Workspace boot and cleanup failed')); }
+    throw error;
+  }
 }

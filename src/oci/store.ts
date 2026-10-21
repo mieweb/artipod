@@ -4,7 +4,7 @@
  * every consumer (shell, tools, editor) can see the store because it IS
  * files. Layout:
  *
- *   /.artipod/superblock.json                    cleartext superblock
+ *   /.artipod/superblock.json                    logical JSON (encrypted by a protected root)
  *   /.artipod/oci/blobs/sha256/<hex>             originals (ciphertext when the pod is encrypted)
  *   /.artipod/oci/uncompressed/sha256/<hex>      decompress-once twins, addressed by diff ID
  *   /.artipod/oci/indexes/sha256/<hex>.json      published layer-index artifacts (by diff ID)
@@ -18,6 +18,7 @@ import { sha256, verifyDigest, isDigest, digestHex, type Digest } from './digest
 import { decryptBlob, encryptBlob, isEncryptedBlob } from './cipher.js';
 import { PodLockedError } from '../manager/keyring.js';
 import { makeLayerIndexArtifact, parseLayerIndexArtifact, type LayerEntry, type LayerIndexArtifact } from './tar.js';
+import { captureRawStorageAccess, resolveStorageAccess, resolveStorageContext, type StorageAccessOptions, type StorageContext } from '../storage/context.js';
 
 export const OCI_ROOT = '/.artipod/oci';
 export const SUPERBLOCK_PATH = '/.artipod/superblock.json';
@@ -39,6 +40,20 @@ export interface StoredRef {
 }
 
 const refFileName = (ref: string) => `${encodeURIComponent(ref)}.json`;
+const missing = (error: unknown): boolean => (error as { code?: string })?.code === 'ENOENT';
+
+function parseSuperblock(raw: string): PodSuperblock {
+  const value: unknown = JSON.parse(raw);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid pod superblock; saved metadata was preserved');
+  const record = value as Partial<PodSuperblock>;
+  if (record.formatVersion !== 1 || typeof record.podId !== 'string' || !record.podId ||
+      !['none', 'aes-256-gcm-chunked'].includes(record.cipher ?? '') ||
+      typeof record.createdAt !== 'string' || !Number.isFinite(Date.parse(record.createdAt)) ||
+      typeof record.updatedAt !== 'string' || !Number.isFinite(Date.parse(record.updatedAt))) {
+    throw new Error('Invalid pod superblock; saved metadata was preserved');
+  }
+  return record as PodSuperblock;
+}
 
 /** ZenFS/node readFile may hand back Buffers; normalize to plain views. */
 const asBytes = (b: Uint8Array): Uint8Array => new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
@@ -49,11 +64,28 @@ export function randomPodId(): string {
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** A fresh cleartext superblock. Exported so the CLI can pre-seed a pod dir,
+/** A fresh logical JSON (encrypted by a protected root). Exported so the CLI can pre-seed a pod dir,
  * keeping the directory name and the pod id identical. */
 export function newSuperblock(podId: string = randomPodId()): PodSuperblock {
   const now = new Date().toISOString();
   return { formatVersion: 1, podId, cipher: 'none', createdAt: now, updatedAt: now };
+}
+
+interface OciStoreBinding {
+  readonly zfs: ZenFsLike;
+  readonly options: Readonly<StorageAccessOptions>;
+  readonly assertRawAccess: () => void;
+}
+
+// Bind the actual instance at construction. Public properties, prototype
+// inheritance, and an OCI blob-encryption flag cannot establish root ownership.
+const storeBindings = new WeakMap<OciStore, OciStoreBinding>();
+
+/** Internal guard for consumers that send protected workspace data to a store. */
+export function assertOciStoreStorage(store: OciStore, storage: StorageContext): void {
+  const binding = storeBindings.get(store);
+  if (!binding || binding.options.storage !== storage) throw new Error('Protected snapshots require a store bound to the same live core storage context');
+  resolveStorageContext(storage, binding.zfs, binding.options.storagePolicy);
 }
 
 export class OciStore {
@@ -62,7 +94,20 @@ export class OciStore {
   private keySource: (() => CryptoKey) | null = null;
   private superblock: PodSuperblock | null = null;
 
-  constructor(private readonly zfs: ZenFsLike) {}
+  constructor(zfs: ZenFsLike, storageOptions: StorageAccessOptions = {}) {
+    const storage = resolveStorageAccess(zfs, storageOptions);
+    const assertRawAccess = captureRawStorageAccess(zfs);
+    assertRawAccess();
+    storeBindings.set(this, Object.freeze({ zfs, options: Object.freeze({ storage, storagePolicy: storageOptions.storagePolicy }), assertRawAccess }));
+  }
+
+  private assertAccess(): OciStoreBinding {
+    const binding = storeBindings.get(this);
+    if (!binding) throw new Error('A constructed OCI store is required');
+    binding.assertRawAccess();
+    resolveStorageAccess(binding.zfs, binding.options);
+    return binding;
+  }
 
   /** The live KEK, or null when encryption is off. Throws when locked. */
   private get key(): CryptoKey | null {
@@ -92,19 +137,23 @@ export class OciStore {
   }
 
   private get p() {
-    return this.zfs.promises;
+    return this.assertAccess().zfs.promises;
   }
 
   async init(): Promise<PodSuperblock> {
+    this.assertAccess();
+    this.superblock = null;
+    let existing: PodSuperblock | null = null;
+    try {
+      existing = parseSuperblock((await this.p.readFile(SUPERBLOCK_PATH, 'utf8')) as string);
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
     for (const dir of ['blobs/sha256', 'uncompressed/sha256', 'indexes/sha256', 'refs', 'snapshots', 'upper']) {
       await this.p.mkdir(`${OCI_ROOT}/${dir}`, { recursive: true });
     }
-    try {
-      this.superblock = JSON.parse((await this.p.readFile(SUPERBLOCK_PATH, 'utf8')) as string) as PodSuperblock;
-    } catch {
-      this.superblock = newSuperblock();
-      await this.writeSuperblock();
-    }
+    this.superblock = existing ?? newSuperblock();
+    if (!existing) await this.writeSuperblock();
     return this.superblock;
   }
 
@@ -115,6 +164,7 @@ export class OciStore {
   }
 
   getSuperblock(): PodSuperblock {
+    this.assertAccess();
     if (!this.superblock) throw new Error('store not initialized — call init()');
     return this.superblock;
   }
@@ -164,8 +214,8 @@ export class OciStore {
       try {
         await this.p.stat(path);
         return true;
-      } catch {
-        // keep looking
+      } catch (error) {
+        if (!missing(error)) throw error;
       }
     }
     return false;
@@ -177,7 +227,8 @@ export class OciStore {
     let raw: Uint8Array;
     try {
       raw = asBytes((await this.p.readFile(this.blobPath(digest))) as Uint8Array);
-    } catch {
+    } catch (error) {
+      if (!missing(error)) throw error;
       const cipherDigest = (await this.p.readFile(this.aliasPath(digest), 'utf8')) as Digest;
       raw = asBytes((await this.p.readFile(this.blobPath(cipherDigest))) as Uint8Array);
       await verifyDigest(raw, cipherDigest, 'ciphertext blob');
@@ -205,7 +256,8 @@ export class OciStore {
   async resolveAlias(digest: Digest): Promise<Digest | null> {
     try {
       return (await this.p.readFile(this.aliasPath(digest), 'utf8')) as Digest;
-    } catch {
+    } catch (error) {
+      if (!missing(error)) throw error;
       return null;
     }
   }
@@ -249,7 +301,8 @@ export class OciStore {
     try {
       await this.p.stat(`${OCI_ROOT}/uncompressed/sha256/${digestHex(diffId)}`);
       return true;
-    } catch {
+    } catch (error) {
+      if (!missing(error)) throw error;
       return false;
     }
   }
@@ -282,7 +335,8 @@ export class OciStore {
   async getRef(ref: string): Promise<StoredRef | null> {
     try {
       return JSON.parse((await this.p.readFile(`${OCI_ROOT}/refs/${refFileName(ref)}`, 'utf8')) as string) as StoredRef;
-    } catch {
+    } catch (error) {
+      if (!missing(error)) throw error;
       return null;
     }
   }
@@ -291,7 +345,8 @@ export class OciStore {
     const file = `${OCI_ROOT}/refs/${refFileName(ref)}`;
     try {
       await this.p.stat(file);
-    } catch {
+    } catch (error) {
+      if (!missing(error)) throw error;
       return false;
     }
     await this.p.rm(file, { force: true });
@@ -302,15 +357,16 @@ export class OciStore {
     let names: string[];
     try {
       names = (await this.p.readdir(`${OCI_ROOT}/refs`)) as string[];
-    } catch {
+    } catch (error) {
+      if (!missing(error)) throw error;
       return [];
     }
     const refs: StoredRef[] = [];
     for (const name of names.sort()) {
       try {
         refs.push(JSON.parse((await this.p.readFile(`${OCI_ROOT}/refs/${name}`, 'utf8')) as string) as StoredRef);
-      } catch {
-        // skip corrupt entries
+      } catch (error) {
+        if (!missing(error)) throw error;
       }
     }
     return refs;

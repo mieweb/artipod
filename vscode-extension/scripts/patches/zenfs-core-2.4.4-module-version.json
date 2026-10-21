@@ -1,0 +1,9 @@
+{
+  "package": "@zenfs/core",
+  "version": "2.4.4",
+  "path": "dist/index.js",
+  "date": "2026-10-04",
+  "reason": "Electron Node 24.21 rejects Object.assign through an ESM namespace prototype. Define an own writable property while preserving the filesystem namespace prototype.",
+  "original": "globalThis.__zenfs__ = Object.assign(Object.create(fs), { _version: $pkg.version });",
+  "replacement": "// Modified by Artipod on 2026-10-04: define an own property above an ESM namespace prototype.\nglobalThis.__zenfs__ = Object.defineProperty(Object.create(fs), '_version', { value: $pkg.version, enumerable: true, writable: true, configurable: true });"
+}

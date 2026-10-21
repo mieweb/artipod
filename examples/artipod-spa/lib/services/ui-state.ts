@@ -1,9 +1,8 @@
 /**
  * ui-state.json IO (spa-ui-plan P6: same file, same schema as the old app —
- * additive fields only until U7). On OPFS, reads/writes go through RAW
- * handles (each tab's ZenFS caches independently; raw handles always see the
- * latest bytes) under a Web Lock with an exclusive writable as the hard
- * backstop. The medium is injected so node tests run against memory.
+ * additive fields only until U7). Production IO uses the encrypted root;
+ * one enforced vault writer owns its caches. The injected medium keeps
+ * service tests independent of browser storage.
  */
 
 export type OpenMode = 'rw' | 'cow' | 'ro';
@@ -50,58 +49,15 @@ export function memoryStateMedium(initial: string | null = null): StateMedium {
   };
 }
 
-/** Raw-OPFS medium (browser): artipod-fs/.artipod/ui-state.json + Web Lock. */
-export function opfsStateMedium(): StateMedium {
-  return {
-    async read(): Promise<string | null> {
-      try {
-        const root = await navigator.storage.getDirectory();
-        const dir = await (await root.getDirectoryHandle('artipod-fs')).getDirectoryHandle('.artipod');
-        const file = await (await dir.getFileHandle('ui-state.json')).getFile();
-        return await file.text();
-      } catch {
-        return null;
-      }
-    },
-    async write(text: string): Promise<void> {
-      const root = await navigator.storage.getDirectory();
-      const fsDir = await root.getDirectoryHandle('artipod-fs', { create: true });
-      const dir = await fsDir.getDirectoryHandle('.artipod', { create: true });
-      const handle = await dir.getFileHandle('ui-state.json', { create: true });
-      // Exclusive writable: a racing tab's write THROWS instead of silently
-      // clobbering. Older engines ignore/reject the option — retry plain.
-      let w: FileSystemWritableFileStream;
-      try {
-        w = await (
-          handle as { createWritable(o?: { mode?: string }): Promise<FileSystemWritableFileStream> }
-        ).createWritable({ mode: 'exclusive' });
-      } catch {
-        w = await handle.createWritable();
-      }
-      await w.write(text);
-      await w.close();
-    },
-    async withLock<T>(fn: () => Promise<T>): Promise<T> {
-      try {
-        return await navigator.locks.request('artipod-ui-state', fn);
-      } catch {
-        return fn();
-      }
-    },
-  };
-}
-
 export class UiStateIO {
   constructor(private readonly medium: StateMedium) {}
 
   async read(): Promise<UiState> {
     const text = await this.medium.read();
     if (text === null) return { workspaces: [] };
-    try {
-      return JSON.parse(text) as UiState;
-    } catch {
-      return { workspaces: [] };
-    }
+    const state = JSON.parse(text) as UiState;
+    if (!Array.isArray(state.workspaces)) throw new Error('Invalid workspace registry');
+    return state;
   }
 
   private async mutate<T>(fn: (state: UiState) => T | Promise<T>): Promise<T> {
@@ -146,8 +102,5 @@ export class UiStateIO {
   }
 }
 
-/** Opaque upper-dir name for broker-mode block stores — hides WHICH refs have local forks. */
-export async function upperDirName(id: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`artipod-upper:${id}`));
-  return Array.from(new Uint8Array(digest).slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
-}
+/** Legacy source locator; core owns the migration. */
+export { upperDirName } from '@artipod/core/storage';

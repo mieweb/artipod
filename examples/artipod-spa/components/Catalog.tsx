@@ -20,6 +20,7 @@ import { OPEN_DRAFT_TIP, isOpenRef, nextDraftRef, setOpenTag, workspaceUrl, type
 import { navClick, navigateTo } from '@/lib/stores/route';
 import EncryptionBadge from '@/components/EncryptionBadge';
 import OfflineToggle from '@/components/OfflineToggle';
+import { registerFileSystemTeardown } from '@/lib/filesystem';
 
 const Terminal = dynamicImport(() => import('@/components/Terminal'), { ssr: false });
 
@@ -39,11 +40,16 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
   useEffect(() => {
     void refreshServer();
     let disposeEvents: (() => void) | null = null;
-    let disposeConsole: (() => void) | null = null;
+    let disposeConsole: (() => Promise<void>) | null = null;
     // The initializer awaits; if the catalog unmounted meanwhile (navigation
     // to a workspace), nothing may register or setState — and anything that
     // did is torn down here rather than leaking into the workspace's /proc.
     let cancelled = false;
+    const teardown = registerFileSystemTeardown(async () => {
+      cancelled = true;
+      disposeEvents?.();
+      await disposeConsole?.();
+    }, 'Catalog console');
     (async () => {
       await refreshLocal();
       if (cancelled) return;
@@ -54,6 +60,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
         const { PodEvents: Events, openConsole } = await import('@artipod/core/host');
         const { catalogInventory } = await import('@/lib/services/inventory');
         const { defineCommand } = await import('just-bash/browser');
+        let resettingStorage = false;
         // The safe alternative to rm -rf: erases ONLY artipod state and
         // reloads a factory-fresh machine. Server pods are untouched.
         const factoryReset = defineCommand('factory-reset', async (args: string[]) => {
@@ -70,28 +77,32 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
             };
           }
           try {
-            const opfsRoot = await navigator.storage.getDirectory();
-            await opfsRoot.removeEntry('artipod-fs', { recursive: true }).catch(() => {});
-            for (const db of await indexedDB.databases()) {
-              if (db.name && (db.name.startsWith('artipod') || db.name === 'browser-git-fs')) {
-                await new Promise((r) => {
-                  const req = indexedDB.deleteDatabase(db.name!);
-                  req.onsuccess = req.onerror = req.onblocked = r;
-                });
-              }
-            }
-          } finally {
+            resettingStorage = true;
+            const { resetFileSystem } = await import('@/lib/filesystem');
+            const result = await resetFileSystem();
             setTimeout(() => window.location.reload(), 500);
+            return {
+              stdout: 'local artipod data erased — reloading a factory-fresh machine…\n',
+              stderr: result.warnings.length ? `${result.warnings.join('\n')}\n` : '',
+              exitCode: 0,
+            };
+          } catch (error) {
+            const message = `factory-reset failed: ${error instanceof Error ? error.message : String(error)}`;
+            // Dropping the key locks the page and can hide this console. Keep
+            // the failed erasure visible without implying a completed reset.
+            window.alert(`${message}\nReload this page to recover browser storage access.`);
+            return { stdout: '', stderr: `${message}\n`, exitCode: 1 };
           }
-          return { stdout: 'local artipod data erased — reloading a factory-fresh machine…\n', stderr: '', exitCode: 0 };
         });
         const consoleEvents = new Events();
         if (cancelled) return;
         let timer: ReturnType<typeof setTimeout> | null = null;
-        disposeEvents = consoleEvents.on('fs:changed', () => {
+        const offEvents = consoleEvents.on('fs:changed', () => {
+          if (resettingStorage || cancelled) return;
           if (timer) clearTimeout(timer);
           timer = setTimeout(() => void refreshLocal().then(refreshVerdicts), 300);
         });
+        disposeEvents = () => { offEvents(); if (timer) clearTimeout(timer); };
         // A pod-less console (D18): its own small PID namespace (nothing runs
         // here but this shell), images / volumes / artipod over the page's rows.
         const rootConsole = openConsole({
@@ -99,14 +110,14 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
           identity: { kind: 'catalog', name: 'catalog', version: process.env.NEXT_PUBLIC_ARTIPOD_VERSION },
           extraCommands: [factoryReset],
         });
-        disposeConsole = () => { void rootConsole.dispose(); };
-        if (cancelled) { disposeConsole(); return; }
+        disposeConsole = async () => { await rootConsole.dispose(); };
+        if (cancelled) { await disposeConsole(); return; }
         setRootSandbox(rootConsole.sandbox);
       } catch {
         // fs init failed — no console
       }
     })();
-    return () => { cancelled = true; disposeEvents?.(); disposeConsole?.(); };
+    return () => { void teardown().catch(error => console.error('catalog close failed:', error)); };
   }, []);
 
   // Ancestry verdicts follow server refs + local heads.
@@ -139,7 +150,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
     !encryptionInPlay ? null : state === 'plaintext' ? (
       <span
         className="rounded bg-gray-800 px-1.5 py-0.5 text-gray-500"
-        title="stored unencrypted — content written before --encrypt (or a blank scratch tree); republish to encrypt"
+        title="server data is plaintext or this local workspace is memory-only; persistent browser workspaces require encryption"
       >
         plaintext
       </span>

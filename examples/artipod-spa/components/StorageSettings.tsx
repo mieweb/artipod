@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { MigrationProgress, StorageBackend, StorageUsage } from '@artipod/core/sandbox';
+import type { StorageBackend, StorageUsage } from '@artipod/core/sandbox';
 
 interface StorageSettingsProps {
   backend: StorageBackend;
@@ -18,7 +18,6 @@ function formatBytes(n: number): string {
 export default function StorageSettings({ backend, isPrimaryTab }: StorageSettingsProps) {
   const [usage, setUsage] = useState<StorageUsage | null>(null);
   const [opfsOk, setOpfsOk] = useState(false);
-  const [progress, setProgress] = useState<MigrationProgress | null>(null);
   const [status, setStatus] = useState('');
 
   useEffect(() => {
@@ -36,29 +35,13 @@ export default function StorageSettings({ backend, isPrimaryTab }: StorageSettin
     setUsage(await storage.getStorageUsage());
   };
 
-  const handleMigrate = async (to: StorageBackend) => {
-    if (!isPrimaryTab) return;
-    const storage = await import('@artipod/core/sandbox');
-    setStatus(`Migrating to ${to}…`);
-    try {
-      const { files, bytes } = await storage.migrateStorage(to, setProgress);
-      setStatus(`Migrated ${files} files (${formatBytes(bytes)}). Reloading…`);
-      setTimeout(() => window.location.reload(), 800);
-    } catch (e) {
-      setProgress(null);
-      setStatus(`Migration failed: ${(e as Error).message}`);
-    }
-  };
-
-  const otherBackend: StorageBackend = backend === 'opfs' ? 'indexeddb' : 'opfs';
-  const canMigrate = isPrimaryTab && (otherBackend !== 'opfs' || opfsOk);
-
   return (
     <section
       aria-label="Storage settings"
       className="h-full w-full bg-[#1e1e1e] text-white p-6 overflow-auto"
     >
       <h2 className="text-lg font-bold mb-4">Storage</h2>
+      <p className="mb-4 text-sm text-gray-300">Encrypted storage keeps its current backing across reloads. Switching backends is unavailable here.</p>
 
       {!isPrimaryTab && (
         <div role="alert" className="mb-4 rounded bg-yellow-900 p-3 text-sm">
@@ -99,21 +82,8 @@ export default function StorageSettings({ backend, isPrimaryTab }: StorageSettin
         >
           Request persistence
         </button>
-        <button
-          onClick={() => handleMigrate(otherBackend)}
-          disabled={!canMigrate}
-          className="px-3 py-1.5 text-sm bg-blue-700 rounded hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed"
-          aria-label={`Migrate storage to ${otherBackend}`}
-        >
-          Migrate to {otherBackend}
-        </button>
       </div>
 
-      {progress && (
-        <div className="text-sm text-gray-300 mb-2" aria-live="polite">
-          {progress.copied}/{progress.total} — <span className="font-mono">{progress.currentPath}</span>
-        </div>
-      )}
       {status && (
         <p className="text-sm text-gray-300" aria-live="polite">
           {status}

@@ -1,38 +1,64 @@
-/**
- * ZenFS bootstrap — thin wrapper over @artipod/core/sandbox storage (backend
- * selection, OPFS/IndexedDB/memory, migration, multi-tab guard). Async-only:
- * the OPFS backend is async-mixin based, so no *Sync calls anywhere.
- */
-import type { InitResult, StorageBackend, ZenFsLike } from '@artipod/core/sandbox';
+/** App bindings only. Core owns storage policy, custody, migration and lifecycle. */
+import { createStorageSession, StorageClosePersistenceError, type StorageSession, type StorageSessionInfo, type StorageSessionSnapshot } from '@artipod/core/storage';
+import type { StorageBackend, ZenFsLike } from '@artipod/core/sandbox';
+import { loadBackendPref } from '@artipod/core/sandbox';
+import { keys } from './boot';
 
 export type ZenFs = ZenFsLike;
-
-/** Live binding, assigned by initFileSystem(). Use only after init resolves. */
 export let fs: ZenFs;
+export let fsInfo: StorageSessionInfo | null = null;
+let session: StorageSession | undefined;
+const closedSnapshot: StorageSessionSnapshot = Object.freeze({ status: 'closed', needsRecovery: false });
+const listeners = new Set<() => void>();
+let unsubscribeSession: (() => void) | undefined;
 
-/** Backend + primary-tab info from the last successful init. */
-export let fsInfo: InitResult | null = null;
-
-let initPromise: Promise<InitResult> | null = null;
-
-export function initFileSystem(pref?: StorageBackend): Promise<InitResult | null> {
-  if (typeof window === 'undefined') return Promise.resolve(null);
-  if (!initPromise) {
-    initPromise = init(pref).catch((e) => {
-      initPromise = null; // allow retry after a failed init
-      throw e;
-    });
-  }
-  return initPromise;
+function observeSession(): void {
+  if (session && listeners.size && !unsubscribeSession) unsubscribeSession = session.subscribe(() => {
+    for (const listener of listeners) listener();
+  });
 }
 
-async function init(pref?: StorageBackend): Promise<InitResult> {
-  const storage = await import('@artipod/core/sandbox');
-  const result = await storage.initFileSystem(pref);
-  // Adopt the instance the package configured — importing '@zenfs/core' here
-  // would bind a SECOND singleton under file:/link installs (disjoint stores).
-  fs = result.zfs;
-  fsInfo = result;
-  console.log(`FileSystem initialized (${result.backend}${result.isPrimaryTab ? '' : ', secondary tab'})`);
+function storage(pref?: StorageBackend): StorageSession {
+  const backend = pref ?? loadBackendPref();
+  if (!session) {
+    session = createStorageSession({ policy: 'broker', keys: keys(), backend: backend === 'opfs' || backend === 'indexeddb' ? backend : undefined });
+    observeSession();
+  }
+  return session;
+}
+
+export { StorageClosePersistenceError as FileSystemClosePersistenceError };
+/** Observe core lifecycle without creating storage before its caller chooses a backend. */
+export function subscribeFileSystem(listener: () => void): () => void {
+  listeners.add(listener);
+  observeSession();
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) { unsubscribeSession?.(); unsubscribeSession = undefined; }
+  };
+}
+export function getFileSystemSnapshot(): StorageSessionSnapshot { return session?.getSnapshot() ?? closedSnapshot; }
+export function getServerFileSystemSnapshot(): StorageSessionSnapshot { return closedSnapshot; }
+export function registerFileSystemTeardown(close: () => Promise<void>, source?: string): () => Promise<void> { return storage().registerTeardown(close, source); }
+export function fileSystemNeedsRecovery(): boolean { return session?.needsRecovery() ?? false; }
+export async function initFileSystem(pref?: StorageBackend): Promise<StorageSessionInfo | null> {
+  if (typeof window === 'undefined') return null;
+  const info = await storage(pref).open();
+  fs = info.zfs; fsInfo = info;
+  return info;
+}
+export async function recoverFileSystem(pref?: StorageBackend): Promise<{ info: StorageSessionInfo; warning: string }> {
+  const result = await storage(pref).recover();
+  fs = result.info.zfs; fsInfo = result.info;
   return result;
 }
+export async function flushFileSystem(): Promise<void> { await session?.flush(); }
+export async function resetFileSystem() {
+  try { return await storage().reset(); }
+  finally { fsInfo = null; }
+}
+export async function closeFileSystem(): Promise<void> {
+  try { await session?.close(); }
+  finally { fsInfo = null; }
+}
+export async function openFileSystemWorkspaceUpper(ref: string) { return storage().openWorkspaceUpper(ref); }

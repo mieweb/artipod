@@ -3,10 +3,10 @@
  * the host view (the Phase 3 contract), cow isolation, /proc/pod projection,
  * tools + agent tools over the realized mount table.
  */
-import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, mkdir, chmod, symlink, readlink, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { umount, mounts as zenMounts } from '@zenfs/core';
 import { createZenFsPod, realizeZenFs } from './zenfs.js';
 import type { ZenFsPod } from './zenfs.js';
@@ -54,7 +54,7 @@ const hostManifest = (): PodManifest => ({
 
 describe('realizeZenFs + createZenFsPod', () => {
   it('same manifest, same file view: sandbox find matches the host walk (contract)', async () => {
-    const pod = await createZenFsPod(hostManifest());
+    const pod = await createZenFsPod(hostManifest(), { storagePolicy: 'plaintext' });
     pods.push(pod);
     const sandbox = pod.createSandbox();
 
@@ -77,7 +77,7 @@ describe('realizeZenFs + createZenFsPod', () => {
         { name: 'work', path: '/', source: { kind: 'backend', backend: 'memory' }, mode: 'rw' },
         { name: 'src', path: '/context/src', source: { kind: 'hostDir', dir: hostDir }, mode: 'cow' },
       ],
-    });
+    }, { storagePolicy: 'plaintext' });
     pods.push(pod);
     const sandbox = pod.createSandbox();
 
@@ -93,7 +93,7 @@ describe('realizeZenFs + createZenFsPod', () => {
   });
 
   it('projects the manifest into /proc/pod/manifest.json for shell + model', async () => {
-    const pod = await createZenFsPod(hostManifest());
+    const pod = await createZenFsPod(hostManifest(), { storagePolicy: 'plaintext' });
     pods.push(pod);
     const sandbox = pod.createSandbox();
     const r = await sandbox.exec('cat /proc/pod/manifest.json');
@@ -104,7 +104,7 @@ describe('realizeZenFs + createZenFsPod', () => {
   });
 
   it('pod file tools + agent tools resolve over the manifest mount table', async () => {
-    const pod = await createZenFsPod(hostManifest());
+    const pod = await createZenFsPod(hostManifest(), { storagePolicy: 'plaintext' });
     pods.push(pod);
     const fileTools = pod.createFileTools();
     const tools = new Map<string, (typeof fileTools)[number]>(fileTools.map((t) => [t.name, t]));
@@ -133,7 +133,7 @@ describe('realizeZenFs + createZenFsPod', () => {
   });
 
   it('adopt mode wraps an existing fs without remounting', async () => {
-    const first = await createZenFsPod(hostManifest());
+    const first = await createZenFsPod(hostManifest(), { storagePolicy: 'plaintext' });
     pods.push(first);
     await first.zfs.promises.writeFile('/existing.txt', 'kept');
 
@@ -153,7 +153,64 @@ describe('realizeZenFs + createZenFsPod', () => {
       }),
     ).rejects.toThrow(/Phase 4/);
     await expect(
-      realizeZenFs({ root: { image: 'alpine' }, mounts: hostManifest().mounts }),
+      realizeZenFs({ root: { image: 'alpine' }, mounts: hostManifest().mounts }, { storagePolicy: 'plaintext' }),
     ).rejects.toThrow(/Phase 4/);
+  });
+});
+
+describe('core storage policy', () => {
+  const manifest: PodManifest = { mounts: [{ name: 'workspace', path: '/repo', mode: 'rw', source: { kind: 'backend', backend: 'memory' } }] };
+
+  it('rejects a missing or forged protected context before creating workspace or OCI metadata', async () => {
+    const mkdir = vi.fn();
+    const writeFile = vi.fn();
+    const zfs = { promises: { mkdir, writeFile } } as unknown as import('../sandbox/types.js').ZenFsLike;
+    const forged = { zfs, protection: 'encrypted' as const, backend: 'indexeddb', assertAccess() {}, async flush() {} };
+    await expect(createZenFsPod(manifest, { adopt: zfs, storagePolicy: 'protected' })).rejects.toThrow('core storage context');
+    await expect(createZenFsPod(manifest, { storage: forged, storagePolicy: 'protected' })).rejects.toThrow('core storage context');
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('requires an explicit plaintext choice before opening persistent manifest backends', async () => {
+    for (const backend of ['indexeddb', 'opfs'] as const) {
+      await expect(realizeZenFs({ mounts: [{ name: 'root', path: '/', mode: 'rw', source: { kind: 'backend', backend } }] })).rejects.toThrow('storagePolicy: plaintext');
+    }
+    await expect(createZenFsPod(hostManifest())).rejects.toThrow('storagePolicy: plaintext');
+  });
+});
+
+
+describe('single native hostDir snapshot checkout', () => {
+  it('CLI checkout preserves native symlinks and modes and refuses to overwrite an occupied destination', async () => {
+    await writeFile(join(hostDir, 'source'), 'binary\0content');
+    await chmod(join(hostDir, 'source'), 0o751);
+    await symlink('source', join(hostDir, 'link'));
+    await symlink('missing', join(hostDir, 'dangling'));
+    await chmod(join(hostDir, 'sub'), 0o555);
+    const pod = await createZenFsPod({ mounts: [{ name: 'root', path: '/', mode: 'rw', source: { kind: 'hostDir', dir: hostDir } }] }, { proc: false, storagePolicy: 'plaintext' });
+    pods.push(pod);
+    const snapshot = (await pod.snapshots.create())!;
+    const sandbox = pod.createSandbox();
+    try {
+      const checked = await sandbox.exec(`artipod snapshot checkout ${snapshot.id}`);
+      expect(checked.exitCode).toBe(0);
+      const branch = join(hostDir, 'branches', snapshot.id);
+      expect(await readFile(join(branch, 'source'), 'utf8')).toBe('binary\0content');
+      expect((await lstat(join(branch, 'source'))).mode & 0o777).toBe(0o751);
+      expect((await lstat(join(branch, 'link'))).isSymbolicLink()).toBe(true);
+      expect(await readlink(join(branch, 'link'))).toBe('source');
+      expect(await readlink(join(branch, 'dangling'))).toBe('missing');
+      expect((await lstat(join(branch, 'sub'))).mode & 0o777).toBe(0o555);
+      await writeFile(join(branch, 'source'), 'precious branch work');
+      const refused = await sandbox.exec(`artipod snapshot checkout ${snapshot.id}`);
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.stderr).toContain('empty');
+      expect(await readFile(join(branch, 'source'), 'utf8')).toBe('precious branch work');
+      await chmod(join(branch, 'sub'), 0o755);
+    } finally {
+      sandbox.dispose();
+      await chmod(join(hostDir, 'sub'), 0o755);
+    }
   });
 });

@@ -18,7 +18,8 @@ const date = git('git show -s --format=%cI HEAD') ?? new Date().toISOString();
 
 // Auto-bumped version: latest tag, plus the commits since it (0.3.1+5).
 let version = null;
-const described = git('git describe --tags --long');
+// Extension releases have independent versions and must not rename the CLI.
+const described = git('git describe --tags --long --exclude "vscode-v*"');
 const m = described?.match(/^(.+)-(\d+)-g[0-9a-f]+$/);
 if (m) version = Number(m[2]) > 0 ? `${m[1]}+${m[2]}` : m[1];
 

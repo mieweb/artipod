@@ -13,6 +13,7 @@
  */
 
 import type { ZenFsLike } from './types.js';
+import { activateStorageRoot, assertRawStorageOperation, beginRawStorageOperation, reserveStorageRoot, resolveStorageContext, type StorageAccessOptions } from '../storage/context.js';
 
 export type StorageBackend = 'opfs' | 'indexeddb' | 'memory';
 
@@ -83,7 +84,19 @@ export interface MountSpec {
 
 /** Resolve a MountSpec to a ZenFS mount config (what `mount -t` uses; also
  * the right way to place overlay uppers on the same backend as the app). */
-export async function mountConfigForSpec(spec: MountSpec): Promise<MountConfig> {
+export async function mountConfigForSpec(spec: MountSpec, options: StorageAccessOptions = {}): Promise<MountConfig> {
+  const release = beginRawStorageOperation('Persistent mounts must use the encrypted browser vault', { allowProtectedRoot: spec.type === 'memory' });
+  try { return await resolveMountSpec(spec, options); }
+  finally { release(); }
+}
+
+async function resolveMountSpec(spec: MountSpec, options: StorageAccessOptions): Promise<MountConfig> {
+  if (options.storage) resolveStorageContext(options.storage, undefined, options.storagePolicy);
+  else if (options.storagePolicy === 'protected' || options.storagePolicy === 'memory') throw new Error('A live core storage context is required for the requested storage policy');
+  if (spec.type !== 'memory') {
+    assertRawStorageOperation('Persistent mounts must use the encrypted browser vault');
+    if (options.storage || options.storagePolicy !== 'plaintext') throw new Error('Raw persistent mounts require an explicit storagePolicy: plaintext choice');
+  }
   const { InMemory } = await import('@zenfs/core');
   if (spec.type === 'memory') return { backend: InMemory };
   const { IndexedDB, WebAccess } = await import('@zenfs/dom');
@@ -102,21 +115,27 @@ export async function mountConfigForSpec(spec: MountSpec): Promise<MountConfig> 
  * already exists as a directory underneath, and the mkdir has to happen before
  * the mount or it lands inside the new filesystem instead.
  */
-export async function mountBackend(path: string, spec: MountSpec): Promise<void> {
-  const { fs, mount, mounts, resolveMountConfig } = await import('@zenfs/core');
-  if (!path.startsWith('/')) throw new Error(`mount point must be absolute: ${path}`);
-  if (mounts.has(path)) throw new Error(`mount point is already in use: ${path}`);
-  const resolved = await resolveMountConfig(await mountConfigForSpec(spec));
-  if (path !== '/' && !(await fs.promises.exists(path))) {
-    await fs.promises.mkdir(path, { recursive: true });
-  }
-  mount(path, resolved);
+export async function mountBackend(path: string, spec: MountSpec, options: StorageAccessOptions = {}): Promise<void> {
+  const operation = path === '/' ? 'Close the owning storage session before replacing its root' : 'Persistent mounts must use the encrypted browser vault';
+  const release = beginRawStorageOperation(operation, { allowProtectedRoot: path !== '/' && spec.type === 'memory' });
+  try {
+    const { fs, mount, mounts, resolveMountConfig } = await import('@zenfs/core');
+    if (!path.startsWith('/')) throw new Error(`mount point must be absolute: ${path}`);
+    if (mounts.has(path)) throw new Error(`mount point is already in use: ${path}`);
+    const resolved = await resolveMountConfig(await resolveMountSpec(spec, options));
+    if (path !== '/' && !(await fs.promises.exists(path))) await fs.promises.mkdir(path, { recursive: true });
+    mount(path, resolved);
+    if (path === '/') activateStorageRoot(resolved, fs);
+  } finally { release(); }
 }
 
 export async function unmountBackend(path: string): Promise<void> {
-  const { mounts, umount } = await import('@zenfs/core');
-  if (!mounts.has(path)) throw new Error(`not mounted: ${path}`);
-  umount(path);
+  const release = beginRawStorageOperation('Close the owning storage session before unmounting its root', { allowProtectedRoot: path !== '/' });
+  try {
+    const { mounts, umount } = await import('@zenfs/core');
+    if (!mounts.has(path)) throw new Error(`not mounted: ${path}`);
+    umount(path);
+  } finally { release(); }
 }
 
 /** The backend kind currently mounted at `path`, or null when nothing is. */
@@ -186,6 +205,10 @@ async function moveLegacyRootEntries(
 
 export interface InitResult {
   backend: StorageBackend;
+  /** The application mounted an encrypted root instead of the legacy raw backend. */
+  encrypted?: boolean;
+  /** No persistent encryption key was available; edits live only in memory. */
+  memoryOnly?: boolean;
   /** False when another tab already owns the filesystem. Advisory: writes are not blocked. */
   isPrimaryTab: boolean;
   /**
@@ -195,6 +218,23 @@ export interface InitResult {
    * two disjoint filesystems.
    */
   zfs: ZenFsLike;
+}
+
+/** Configure a caller-owned root using this package's ZenFS singleton. */
+export async function configureStorageRoot(root: import('@zenfs/core').FileSystem, options?: { protectedPersistence?: boolean; storagePolicy?: StorageAccessOptions['storagePolicy'] }): Promise<ZenFsLike> {
+  const rollback = reserveStorageRoot(root, options?.protectedPersistence, options?.storagePolicy);
+  try {
+    const { configure, fs } = await import('@zenfs/core');
+    await configure({ mounts: { '/': root } });
+    activateStorageRoot(root, fs);
+    return fs as unknown as ZenFsLike;
+  } catch (error) { rollback(); throw error; }
+}
+
+/** A volatile root for applications that cannot obtain a persistent encryption key. */
+export async function createMemoryStorageRoot(): Promise<import('@zenfs/core').FileSystem> {
+  const { InMemory, resolveMountConfig } = await import('@zenfs/core');
+  return resolveMountConfig({ backend: InMemory });
 }
 
 let releaseLock: (() => void) | null = null;
@@ -222,26 +262,29 @@ async function acquireSingleWriterLock(): Promise<boolean> {
   });
 }
 
-export async function initFileSystem(pref?: StorageBackend): Promise<InitResult> {
-  const requested = pref ?? loadBackendPref() ?? 'opfs';
-  const backend: StorageBackend =
-    requested === 'opfs' && !(await supportsOpfs()) ? 'indexeddb' : requested;
-
-  const isPrimaryTab = await acquireSingleWriterLock();
-
-  const { configure, fs } = await import('@zenfs/core');
+export async function initFileSystem(pref?: StorageBackend, options: StorageAccessOptions = {}): Promise<InitResult> {
+  if (options.storage) {
+    const context = resolveStorageContext(options.storage, undefined, options.storagePolicy);
+    return { backend: context.backend as StorageBackend, zfs: context.zfs, isPrimaryTab: true, encrypted: context.protection === 'encrypted', memoryOnly: context.protection === 'volatile' };
+  }
+  if (options.storagePolicy === 'protected' || options.storagePolicy === 'memory') throw new Error('A live core storage context is required for the requested storage policy');
+  const release = beginRawStorageOperation('The encrypted root is already configured; legacy raw storage cannot replace it');
   try {
-    await configure({ mounts: { '/': await mountConfigFor(backend) } });
-  } catch (e) {
-    if (!(e instanceof Error) || !e.message.includes('Mount point is already in use')) {
-      throw e;
+    const requested = pref ?? loadBackendPref() ?? 'opfs';
+    if (requested !== 'memory' && options.storagePolicy !== 'plaintext') throw new Error('Raw persistent storage requires an explicit storagePolicy: plaintext choice');
+    const backend: StorageBackend = requested === 'opfs' && !(await supportsOpfs()) ? 'indexeddb' : requested;
+    const isPrimaryTab = await acquireSingleWriterLock();
+    const { configure, fs, mounts } = await import('@zenfs/core');
+    try {
+      await configure({ mounts: { '/': await mountConfigFor(backend) } });
+    } catch (e) {
+      if (!(e instanceof Error) || !e.message.includes('Mount point is already in use')) throw e;
     }
-  }
-  await adoptExistingData(backend);
-  if (!(await fs.promises.exists('/repo'))) {
-    await fs.promises.mkdir('/repo');
-  }
-  return { backend, isPrimaryTab, zfs: fs };
+    activateStorageRoot(mounts.get('/')!, fs);
+    await adoptExistingData(backend);
+    if (!(await fs.promises.exists('/repo'))) await fs.promises.mkdir('/repo');
+    return { backend, isPrimaryTab, zfs: fs };
+  } finally { release(); }
 }
 
 /**
@@ -299,18 +342,21 @@ export interface MigrationProgress {
 export async function migrateStorage(
   to: StorageBackend,
   onProgress?: (p: MigrationProgress) => void,
+  options: StorageAccessOptions = {},
 ): Promise<{ files: number; bytes: number }> {
-  const { fs, mount, resolveMountConfig, umount } = await import('@zenfs/core');
-
-  // Attach the target as a nested mount, then walk-copy (skipping the mount itself).
-  mount(MIGRATE_MOUNT, await resolveMountConfig(await mountConfigFor(to)));
+  const release = beginRawStorageOperation('Use encrypted vault migration; raw backend migration would expose plaintext');
   try {
-    const result = await copyTree(fs, '/', MIGRATE_MOUNT, onProgress);
-    saveBackendPref(to);
-    return result;
-  } finally {
-    umount(MIGRATE_MOUNT);
-  }
+    if (options.storage || options.storagePolicy === 'protected' || options.storagePolicy === 'memory') throw new Error('Use the owning core storage session to migrate protected storage');
+    if (to !== 'memory' && options.storagePolicy !== 'plaintext') throw new Error('Raw persistent migration requires an explicit storagePolicy: plaintext choice');
+    const { fs, mount, resolveMountConfig, umount } = await import('@zenfs/core');
+    // The reservation remains held until the target is unmounted, even on failure.
+    mount(MIGRATE_MOUNT, await resolveMountConfig(await mountConfigFor(to)));
+    try {
+      const result = await copyTree(fs, '/', MIGRATE_MOUNT, onProgress);
+      saveBackendPref(to);
+      return result;
+    } finally { umount(MIGRATE_MOUNT); }
+  } finally { release(); }
 }
 
 type ZenFs = (typeof import('@zenfs/core'))['fs'];
