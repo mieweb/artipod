@@ -430,7 +430,7 @@ describe.skipIf(process.platform === 'win32')('native snapshot root modes', () =
     }
   });
 
-  it.each([
+  it.for([
     { link: 'link', alias: 'LINK' },
     { link: 'café', alias: 'cafe\u0301' },
   ])('rejects filesystem-equivalent snapshot paths $link and $alias before restore or checkout', async ({ link, alias }, context) => {
