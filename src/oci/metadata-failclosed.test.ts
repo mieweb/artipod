@@ -112,6 +112,49 @@ describe('private settings and snapshot metadata', () => {
     }
   });
 
+  it.each(['missing parent', 'self cycle', 'parent cycle'])('does not sweep any saved bytes when a non-HEAD snapshot has a %s', async kind => {
+    const { zfs, store, snapshots } = await fixture();
+    await zfs.promises.writeFile('/repo/ancestor.csv', 'recoverable parent payload');
+    const ancestor = (await snapshots.create())!;
+    await zfs.promises.writeFile('/repo/child.csv', 'child payload');
+    const child = (await snapshots.create())!;
+    await zfs.promises.writeFile('/repo/current.csv', 'current payload');
+    const head = (await snapshots.create())!;
+    // The current HEAD is valid and independent. Collection must also validate
+    // the saved branch whose missing manifest could be restored from backup.
+    head.parent = null;
+    await zfs.promises.writeFile(`/.artipod/oci/snapshots/${head.id}.json`, JSON.stringify(head));
+    if (kind === 'missing parent') await zfs.promises.rm(`/.artipod/oci/snapshots/${ancestor.id}.json`);
+    else {
+      ancestor.parent = kind === 'self cycle' ? ancestor.id : child.id;
+      await zfs.promises.writeFile(`/.artipod/oci/snapshots/${ancestor.id}.json`, JSON.stringify(ancestor));
+    }
+    const collectible = await store.putBlob(bytes('unreachable bytes must survive incomplete graph'));
+    const inventory = async () => {
+      const records: Array<[string, number[]]> = [];
+      for (const directory of ['blobs/sha256', 'uncompressed/sha256', 'indexes/sha256', 'snapshots']) {
+        for (const name of (await zfs.promises.readdir(`/.artipod/oci/${directory}`) as string[]).sort()) {
+          const path = `/.artipod/oci/${directory}/${name}`;
+          records.push([path, Array.from(await zfs.promises.readFile(path) as Uint8Array)]);
+        }
+      }
+      return records;
+    };
+    const before = await inventory();
+    await expect(snapshots.gc()).rejects.toThrow(/snapshot (parent cycle|parent is missing)/);
+    expect(await inventory()).toEqual(before);
+    expect(await store.getUncompressed(ancestor.diff.diffId)).toBeInstanceOf(Uint8Array);
+    expect(await store.getBlob(collectible)).toEqual(bytes('unreachable bytes must survive incomplete graph'));
+    ancestor.parent = null;
+    await zfs.promises.writeFile(`/.artipod/oci/snapshots/${ancestor.id}.json`, JSON.stringify(ancestor));
+    const recovered = await snapshots.mount(child.id, '/mnt/recovered');
+    try {
+      expect(await zfs.promises.readFile(`${recovered.at}/repo/ancestor.csv`, 'utf8')).toBe('recoverable parent payload');
+      expect(await zfs.promises.readFile(`${recovered.at}/repo/child.csv`, 'utf8')).toBe('child payload');
+    } finally { recovered.unmount(); }
+    expect((await snapshots.gc()).deleted).toBeGreaterThan(0);
+  });
+
   it('retains the entire audit chain rather than only the head record during gc', async () => {
     const { store, snapshots } = await fixture();
     const audit = new AuditLog(store);

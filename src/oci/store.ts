@@ -18,7 +18,7 @@ import { sha256, verifyDigest, isDigest, digestHex, type Digest } from './digest
 import { decryptBlob, encryptBlob, isEncryptedBlob } from './cipher.js';
 import { PodLockedError } from '../manager/keyring.js';
 import { makeLayerIndexArtifact, parseLayerIndexArtifact, type LayerEntry, type LayerIndexArtifact } from './tar.js';
-import { resolveStorageAccess, type StorageAccessOptions } from '../storage/context.js';
+import { captureRawStorageAccess, resolveStorageAccess, resolveStorageContext, type StorageAccessOptions, type StorageContext } from '../storage/context.js';
 
 export const OCI_ROOT = '/.artipod/oci';
 export const SUPERBLOCK_PATH = '/.artipod/superblock.json';
@@ -71,14 +71,42 @@ export function newSuperblock(podId: string = randomPodId()): PodSuperblock {
   return { formatVersion: 1, podId, cipher: 'none', createdAt: now, updatedAt: now };
 }
 
+interface OciStoreBinding {
+  readonly zfs: ZenFsLike;
+  readonly options: Readonly<StorageAccessOptions>;
+  readonly assertRawAccess: () => void;
+}
+
+// Bind the actual instance at construction. Public properties, prototype
+// inheritance, and an OCI blob-encryption flag cannot establish root ownership.
+const storeBindings = new WeakMap<OciStore, OciStoreBinding>();
+
+/** Internal guard for consumers that send protected workspace data to a store. */
+export function assertOciStoreStorage(store: OciStore, storage: StorageContext): void {
+  const binding = storeBindings.get(store);
+  if (!binding || binding.options.storage !== storage) throw new Error('Protected snapshots require a store bound to the same live core storage context');
+  resolveStorageContext(storage, binding.zfs, binding.options.storagePolicy);
+}
+
 export class OciStore {
   /** Key custody (Phase 6.5): a provider so the keyring owns the KEK — an
    * expired lease makes the provider throw and the pod is simply locked. */
   private keySource: (() => CryptoKey) | null = null;
   private superblock: PodSuperblock | null = null;
 
-  constructor(private readonly zfs: ZenFsLike, private readonly storageOptions: StorageAccessOptions = {}) {
-    resolveStorageAccess(zfs, storageOptions);
+  constructor(zfs: ZenFsLike, storageOptions: StorageAccessOptions = {}) {
+    const storage = resolveStorageAccess(zfs, storageOptions);
+    const assertRawAccess = captureRawStorageAccess(zfs);
+    assertRawAccess();
+    storeBindings.set(this, Object.freeze({ zfs, options: Object.freeze({ storage, storagePolicy: storageOptions.storagePolicy }), assertRawAccess }));
+  }
+
+  private assertAccess(): OciStoreBinding {
+    const binding = storeBindings.get(this);
+    if (!binding) throw new Error('A constructed OCI store is required');
+    binding.assertRawAccess();
+    resolveStorageAccess(binding.zfs, binding.options);
+    return binding;
   }
 
   /** The live KEK, or null when encryption is off. Throws when locked. */
@@ -109,12 +137,11 @@ export class OciStore {
   }
 
   private get p() {
-    resolveStorageAccess(this.zfs, this.storageOptions);
-    return this.zfs.promises;
+    return this.assertAccess().zfs.promises;
   }
 
   async init(): Promise<PodSuperblock> {
-    resolveStorageAccess(this.zfs, this.storageOptions);
+    this.assertAccess();
     this.superblock = null;
     let existing: PodSuperblock | null = null;
     try {
@@ -137,7 +164,7 @@ export class OciStore {
   }
 
   getSuperblock(): PodSuperblock {
-    resolveStorageAccess(this.zfs, this.storageOptions);
+    this.assertAccess();
     if (!this.superblock) throw new Error('store not initialized — call init()');
     return this.superblock;
   }

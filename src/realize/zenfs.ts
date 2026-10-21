@@ -45,7 +45,7 @@ import { makeArtipodCommand } from '../oci/command.js';
 import type { OciTransport } from '../oci/transport.js';
 import { SnapshotManager } from '../oci/snapshot.js';
 import type { ToolCallingLoopOptions } from '../agent/types.js';
-import { assertRawStorageOperation, assertStorageProjection, guardStorageFileSystem, resolveStorageAccess, resolveStorageContext, type StorageAccessOptions } from '../storage/context.js';
+import { activateStorageRoot, assertRawStorageOperation, beginRawStorageOperation, assertStorageProjection, guardStorageFileSystem, resolveStorageAccess, resolveStorageContext, type StorageAccessOptions, type StorageContext } from '../storage/context.js';
 
 export interface RealizedZenFsMount {
   name: string;
@@ -123,6 +123,13 @@ export async function realizeZenFs(manifest: PodManifest, options: StorageAccess
     return { zfs: context.zfs, mountTable };
   }
   assertManifestStoragePolicy(m, options);
+  const release = beginRawStorageOperation('Manifest mounting');
+  try { return await realizeRawZenFs(m); }
+  finally { release(); }
+}
+
+/** Called only while the caller holds the raw singleton reservation. */
+async function realizeRawZenFs(m: PodManifest): Promise<ZenFsRealization> {
   if (m.root) {
     throw new Error('realizeZenFs: manifest.root (OCI image roots) lands with the OCI store (Phase 4)');
   }
@@ -144,6 +151,7 @@ export async function realizeZenFs(manifest: PodManifest, options: StorageAccess
     zen.mount(mount.path, resolved);
   }
 
+  activateStorageRoot(zen.mounts.get('/')!, zfs);
   return { zfs, mountTable: m.mounts.map((x) => ({ name: x.name, path: x.path, readonly: x.mode === 'ro' })) };
 }
 
@@ -310,6 +318,12 @@ export async function createZenFsPod(
   if (storage && storage.protection !== 'plaintext' && options.sync?.basis?.upperConfig) assertStorageProjection(options.sync.basis.upperConfig, storage);
   if (!storage) assertManifestStoragePolicy(m, options);
   if (!storage && options.adopt && (options.storagePolicy === 'protected' || options.storagePolicy === 'memory')) throw new Error('A live core storage context is required for the requested storage policy');
+  const release = storage ? undefined : beginRawStorageOperation('Pod construction');
+  try { return await initializeZenFsPod(m, options, storage); }
+  finally { release?.(); }
+}
+
+async function initializeZenFsPod(m: PodManifest, options: ZenFsPodOptions, storage?: StorageContext): Promise<ZenFsPod> {
   const events = options.events ?? new PodEvents();
   const proc = options.proc ?? true;
   // captured for the sync createSandbox (bindContext-based confinement)
@@ -326,7 +340,7 @@ export async function createZenFsPod(
       }
     }
   } else {
-    ({ zfs, mountTable } = await realizeZenFs(m, options));
+    ({ zfs, mountTable } = await realizeRawZenFs(m));
   }
 
   const disposeProc = proc ? registerPodManifestProvider(m) : null;

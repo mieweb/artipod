@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Close remaining storage-boundary gaps from #119: require snapshot output stores
+  to share the protected context, enforce registered-root policies, and exclude
+  asynchronous raw storage operations from managed root replacement. Reject
+  malformed vault control records without creating an empty generation, and
+  abort garbage collection when a saved snapshot parent chain is incomplete.
 - Encrypt the browser SPA's whole persistent filesystem, including blank scratch
   workspaces, filenames in local OCI/snapshot metadata and the UI registry (#116).
   Migrate legacy OPFS/IndexedDB data through verified encrypted generations;
