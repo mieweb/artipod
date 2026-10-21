@@ -70,7 +70,35 @@ describe('UiStateIO + registryStore (write-through over the fs file)', () => {
     expect((await io.read()).workspaces).toHaveLength(10);
   });
 
-  it('upperDirName is a stable opaque hash (hides which refs have forks)', async () => {
+  it('preserves corrupt and inaccessible registries instead of replacing them as empty', async () => {
+    for (const text of ['{broken', '{"workspaces":null}']) {
+      const medium = memoryStateMedium(text);
+      const io = new UiStateIO(medium);
+      await expect(io.recordWorkspace('new', 'blank', 'rw')).rejects.toThrow();
+      expect(await medium.read()).toBe(text);
+    }
+    let writes = 0;
+    const io = new UiStateIO({
+      read: async () => { throw new Error('EACCES: locked'); },
+      write: async () => { writes += 1; },
+      withLock: async fn => fn(),
+    });
+    await expect(io.recordWorkspace('new', 'blank', 'rw')).rejects.toThrow('EACCES');
+    expect(writes).toBe(0);
+  });
+
+  it('propagates durable write errors and never retries outside the mutex', async () => {
+    let attempts = 0;
+    const io = new UiStateIO({
+      read: async () => null,
+      write: async () => { attempts += 1; throw new Error('Quota exceeded'); },
+      withLock: async fn => fn(),
+    });
+    await expect(io.recordWorkspace('new', 'blank', 'rw')).rejects.toThrow('Quota exceeded');
+    expect(attempts).toBe(1);
+  });
+
+  it('upperDirName resolves the legacy stable hash for migration', async () => {
     const name = await upperDirName('doug:_1');
     expect(name).toMatch(/^[0-9a-f]{16}$/);
     expect(await upperDirName('doug:_1')).toBe(name);

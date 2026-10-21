@@ -33,6 +33,7 @@ export const IDB_STORE = 'artipodfs';
 export const LEGACY_IDB_STORE = 'browser-git-fs';
 const MIGRATE_MOUNT = '/__migrate';
 const LEGACY_MOUNT = '/__legacy';
+let protectedRoot = false;
 /** Sandbox subtree inside OPFS — siblings (artipod-models/) stay invisible to agents. */
 export const OPFS_FS_DIR = 'artipod-fs';
 export const OPFS_MODELS_DIR = 'artipod-models';
@@ -103,6 +104,7 @@ export async function mountConfigForSpec(spec: MountSpec): Promise<MountConfig> 
  * the mount or it lands inside the new filesystem instead.
  */
 export async function mountBackend(path: string, spec: MountSpec): Promise<void> {
+  if (protectedRoot && spec.type !== 'memory') throw new Error('Persistent mounts must use the encrypted browser vault');
   const { fs, mount, mounts, resolveMountConfig } = await import('@zenfs/core');
   if (!path.startsWith('/')) throw new Error(`mount point must be absolute: ${path}`);
   if (mounts.has(path)) throw new Error(`mount point is already in use: ${path}`);
@@ -186,6 +188,10 @@ async function moveLegacyRootEntries(
 
 export interface InitResult {
   backend: StorageBackend;
+  /** The application mounted an encrypted root instead of the legacy raw backend. */
+  encrypted?: boolean;
+  /** No persistent encryption key was available; edits live only in memory. */
+  memoryOnly?: boolean;
   /** False when another tab already owns the filesystem. Advisory: writes are not blocked. */
   isPrimaryTab: boolean;
   /**
@@ -195,6 +201,20 @@ export interface InitResult {
    * two disjoint filesystems.
    */
   zfs: ZenFsLike;
+}
+
+/** Configure a caller-owned root using this package's ZenFS singleton. */
+export async function configureStorageRoot(root: import('@zenfs/core').FileSystem, options?: { protectedPersistence?: boolean }): Promise<ZenFsLike> {
+  const { configure, fs } = await import('@zenfs/core');
+  await configure({ mounts: { '/': root } });
+  protectedRoot = options?.protectedPersistence === true;
+  return fs as unknown as ZenFsLike;
+}
+
+/** A volatile root for applications that cannot obtain a persistent encryption key. */
+export async function createMemoryStorageRoot(): Promise<import('@zenfs/core').FileSystem> {
+  const { InMemory, resolveMountConfig } = await import('@zenfs/core');
+  return resolveMountConfig({ backend: InMemory });
 }
 
 let releaseLock: (() => void) | null = null;
@@ -223,6 +243,7 @@ async function acquireSingleWriterLock(): Promise<boolean> {
 }
 
 export async function initFileSystem(pref?: StorageBackend): Promise<InitResult> {
+  if (protectedRoot) throw new Error('The encrypted root is already configured; legacy raw storage cannot replace it');
   const requested = pref ?? loadBackendPref() ?? 'opfs';
   const backend: StorageBackend =
     requested === 'opfs' && !(await supportsOpfs()) ? 'indexeddb' : requested;
@@ -300,6 +321,7 @@ export async function migrateStorage(
   to: StorageBackend,
   onProgress?: (p: MigrationProgress) => void,
 ): Promise<{ files: number; bytes: number }> {
+  if (protectedRoot) throw new Error('Use encrypted vault migration; raw backend migration would expose plaintext');
   const { fs, mount, resolveMountConfig, umount } = await import('@zenfs/core');
 
   // Attach the target as a nested mount, then walk-copy (skipping the mount itself).

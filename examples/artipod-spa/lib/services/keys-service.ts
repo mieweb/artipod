@@ -26,6 +26,7 @@ import { settingsStore } from '../stores/settings';
 const LEASE_HEADER = 'x-artipod-lease';
 const OFFLINE_KEY = 'artipod-forced-offline';
 const META_KEY = 'artipod-broker-meta';
+const RELEASED_KEY = 'artipod-lease-released';
 export const RENEW_TASK = 'keys:renew';
 
 export class KeysService {
@@ -34,6 +35,12 @@ export class KeysService {
   private currentLease: Lease | null = null;
   private podKeys: Record<string, CryptoKey> = {};
   private probePromise: Promise<KeysMeta | null> | null = null;
+  private policy: 'encrypted' | 'plaintext' | 'unknown' = 'unknown';
+  private lastProbeError: string | null = null;
+  private expiryTimer: ReturnType<typeof setTimeout> | null = null;
+  private leaseGeneration = 0;
+  /** Authentication challenges contain no usable key material and may survive lock. */
+  private readonly keyChecks = new Map<string, { iv: ArrayBuffer; ciphertext: ArrayBuffer }>();
   private installed = false;
   /** Explicit lease release — suppresses the 401 auto-relogin until the next login. */
   private released = false;
@@ -45,6 +52,7 @@ export class KeysService {
     private readonly adapters: ServiceAdapters,
     readonly scheduler: TaskScheduler = new TaskScheduler(adapters.now),
   ) {
+    this.released = adapters.mirror.get(RELEASED_KEY) === '1';
     settingsStore.setState({ forcedOffline: adapters.mirror.get(OFFLINE_KEY) === '1' });
     scheduler.register(RENEW_TASK, async () => {
       if (this.principal) await this.login(await this.principal());
@@ -65,16 +73,25 @@ export class KeysService {
     return settingsStore.getState().forcedOffline;
   }
 
+  /** Only a successful broker probe or a definitive 404 establishes policy. */
+  get storagePolicy(): 'encrypted' | 'plaintext' | 'unknown' {
+    return this.policy;
+  }
+
+  get probeError(): string | null {
+    return this.lastProbeError;
+  }
+
   // ── keys (never in a store) ──────────────────────────────────────────────
 
   /** The live lease document (for adopting into a pod's keyring), or null. */
   getLease(): Lease | null {
-    return this.currentLease && this.state.status === 'leased' ? this.currentLease : null;
+    return this.hasLiveLease() ? this.currentLease : null;
   }
 
   /** The broker KEK for the served store (non-extractable), or null when locked. */
   getKey(): CryptoKey | null {
-    if (this.state.status !== 'leased') return null;
+    if (!this.hasLiveLease()) return null;
     const first = this.state.meta?.podIds[0];
     return (first && this.podKeys[first]) || Object.values(this.podKeys)[0] || null;
   }
@@ -85,6 +102,45 @@ export class KeysService {
     if (!key) throw new Error('EACCES: pod locked — no live broker lease in this tab (login to restore)');
     return key;
   };
+
+  private hasLiveLease(): boolean {
+    if (!this.currentLease || this.state.status !== 'leased') return false;
+    const expiresAt = Date.parse(this.currentLease.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= this.adapters.now()) {
+      this.dropLease();
+      return false;
+    }
+    return true;
+  }
+
+  private dropLease(): void {
+    this.leaseGeneration += 1;
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = null;
+    this.scheduler.cancel(RENEW_TASK);
+    this.leaseB64 = null;
+    this.currentLease = null;
+    this.podKeys = {};
+    void this.adapters.kv.put('session', undefined).catch(() => {});
+    this.setState({ status: 'locked', meta: this.state.meta, lastRenewedAt: this.state.lastRenewedAt });
+  }
+
+  /** Expiry is independent of renewal: offline tabs must lock on time too. */
+  private armExpiry(): void {
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    if (!this.currentLease) return;
+    const remaining = Date.parse(this.currentLease.expiresAt) - this.adapters.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      this.dropLease();
+      return;
+    }
+    this.expiryTimer = setTimeout(() => {
+      this.expiryTimer = null;
+      if (this.hasLiveLease()) this.armExpiry();
+    }, Math.min(remaining, 2_147_483_647));
+    // Node service consumers need not keep their process alive for a lease.
+    (this.expiryTimer as unknown as { unref?: () => void }).unref?.();
+  }
 
   // ── forced offline ───────────────────────────────────────────────────────
 
@@ -113,32 +169,42 @@ export class KeysService {
    * rest is untouched — login restores. Drops the persisted grant too.
    */
   release(): void {
+    // IndexedDB deletion is asynchronous. A synchronous opaque tombstone
+    // prevents an immediate reload from restoring the grant being removed.
+    this.adapters.mirror.set(RELEASED_KEY, '1');
     this.released = true;
-    this.scheduler.cancel(RENEW_TASK);
-    this.leaseB64 = null;
-    this.currentLease = null;
-    this.podKeys = {};
-    void this.adapters.kv.put('session', undefined).catch(() => {});
-    if (this.state.status !== 'none') {
-      this.setState({ status: 'locked', meta: this.state.meta, lastRenewedAt: this.state.lastRenewedAt });
-    }
+    if (this.state.status !== 'none' || this.policy === 'encrypted') this.dropLease();
   }
 
   private async probe(): Promise<KeysMeta | null> {
-    this.probePromise ??= (async () => {
+    const pending = this.probePromise ??= (async () => {
       try {
         const res = await this.rawFetch('/api/keys');
-        if (!res.ok) return null; // definitive: not a broker serve
+        if (res.status === 404) {
+          this.policy = 'plaintext';
+          this.lastProbeError = null;
+          return null;
+        }
+        if (!res.ok) throw new Error(`Key broker unavailable (HTTP ${res.status})`);
         const meta = (await res.json()) as KeysMeta;
+        if (
+          typeof meta.authority !== 'string' || typeof meta.publicKey !== 'string' ||
+          !Array.isArray(meta.podIds) || !meta.podIds.every((id) => typeof id === 'string') ||
+          !Number.isFinite(meta.capTtlMs) || meta.capTtlMs <= 0
+        ) throw new Error('Key broker returned invalid metadata');
+        this.policy = 'encrypted';
+        this.lastProbeError = null;
         this.adapters.mirror.set(META_KEY, JSON.stringify(meta));
         return meta;
-      } catch {
+      } catch (error) {
         // transient (offline): DON'T cache — a later login must re-probe
-        this.probePromise = null;
+        this.lastProbeError = error instanceof Error ? error.message : 'Key broker unavailable';
         return null;
       }
     })();
-    return this.probePromise;
+    const meta = await pending;
+    if (this.lastProbeError && this.probePromise === pending) this.probePromise = null;
+    return meta;
   }
 
   /** Last-known broker metadata — lets an offline reload show 'locked' instead of nothing. */
@@ -163,7 +229,36 @@ export class KeysService {
     return record;
   }
 
+  private async validateKeys(candidate: Record<string, CryptoKey>): Promise<Record<string, CryptoKey>> {
+    const keys: Record<string, CryptoKey> = {};
+    for (const [podId, key] of Object.entries(candidate)) {
+      const proof = this.keyChecks.get(podId);
+      if (proof) {
+        try {
+          await crypto.subtle.decrypt({ name: 'AES-GCM', iv: proof.iv }, key, proof.ciphertext);
+        } catch {
+          this.lastProbeError = 'The broker encryption key changed. Browser storage remains locked; restore the original key before retrying.';
+          this.dropLease();
+          throw new Error(this.lastProbeError);
+        }
+      } else {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const challenge = crypto.getRandomValues(new Uint8Array(32));
+        const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, challenge);
+        this.keyChecks.set(podId, { iv: iv.buffer, ciphertext });
+      }
+      // Normal renewal imports an equivalent key. Preserve the live object
+      // so the vault need not interrupt every operation just to repin it.
+      keys[podId] = this.hasLiveLease() && this.podKeys[podId] ? this.podKeys[podId] : key;
+    }
+    return keys;
+  }
+
   private adopt(wire: WireWrappedLoginResult, lease: Lease, cryptoKeys: Record<string, CryptoKey>, meta: KeysMeta | null, fresh: boolean): void {
+    if (!Number.isFinite(Date.parse(lease.expiresAt)) || Date.parse(lease.expiresAt) <= this.adapters.now()) {
+      throw new Error('Key broker returned an expired lease');
+    }
+    this.policy = 'encrypted';
     this.currentLease = lease;
     this.podKeys = cryptoKeys;
     this.leaseB64 = btoa(JSON.stringify(lease));
@@ -175,6 +270,7 @@ export class KeysService {
       lastRenewedAt: fresh ? this.adapters.now() : this.state.lastRenewedAt,
     });
     this.armRenewal();
+    this.armExpiry();
   }
 
   /**
@@ -183,28 +279,36 @@ export class KeysService {
    * never persist.
    */
   private async restoreSession(): Promise<boolean> {
+    if (this.released || this.adapters.mirror.get(RELEASED_KEY) === '1') return false;
+    const generation = this.leaseGeneration;
     try {
       const wire = await this.adapters.kv.get<WireWrappedLoginResult>('session');
       if (!wire) return false;
-      if (Date.parse(wire.lease.expiresAt) <= this.adapters.now() + 5_000) {
+      if (!Number.isFinite(Date.parse(wire.lease.expiresAt)) || Date.parse(wire.lease.expiresAt) <= this.adapters.now()) {
         await this.adapters.kv.put('session', undefined);
         return false;
       }
       const device = await this.deviceKeyPair();
       const { unwrapLoginResult } = await import('@artipod/core/manager');
       const { lease, cryptoKeys } = await unwrapLoginResult(wire, device.privateKey);
-      this.adopt(wire, lease, cryptoKeys, null, false);
+      const validated = await this.validateKeys(cryptoKeys);
+      if (generation !== this.leaseGeneration || this.released) return false;
+      this.adopt(wire, lease, validated, null, false);
       return true;
     } catch {
       return false;
     }
   }
 
-  /** Login against the broker; principal is the catalog's LWW actor id. */
+  /** Login uses an opaque profile identity and must never depend on the locked filesystem. */
   async login(principal: string): Promise<boolean> {
+    // A background tab may not have run its expiry timer yet. Revoke the old
+    // grant before capturing this fresh login's cancellation generation.
+    this.hasLiveLease();
+    const generation = ++this.leaseGeneration;
+    this.released = false;
     const meta = await this.probe();
-    if (!meta) return false;
-    this.released = false; // an explicit or auto login re-arms the session
+    if (!meta || generation !== this.leaseGeneration || this.released) return false;
     this.setState({ ...this.state, meta, renewing: true });
     try {
       const device = await this.deviceKeyPair();
@@ -217,15 +321,22 @@ export class KeysService {
       const wire = (await res.json()) as WireWrappedLoginResult;
       const { unwrapLoginResult } = await import('@artipod/core/manager');
       const { lease, cryptoKeys } = await unwrapLoginResult(wire, device.privateKey);
+      const validated = await this.validateKeys(cryptoKeys);
+      if (generation !== this.leaseGeneration || this.released) return false;
       await this.adapters.kv.put('session', wire).catch(() => {}); // wrapped ciphertext only
-      this.adopt(wire, lease, cryptoKeys, meta, true);
+      if (generation !== this.leaseGeneration || this.released) return false;
+      this.adapters.mirror.set(RELEASED_KEY, null);
+      this.adopt(wire, lease, validated, meta, true);
       return true;
     } catch {
+      if (generation !== this.leaseGeneration || this.released) return false;
+      // A failed renewal does not revoke a still-valid offline grant.
+      if (this.hasLiveLease()) {
+        this.setState({ ...this.state, renewing: false });
+        return false;
+      }
       // token-gated broker (or offline): locked badge; retry via the badge
-      this.leaseB64 = null;
-      this.currentLease = null;
-      this.podKeys = {};
-      this.setState({ status: 'locked', meta, lastRenewedAt: this.state.lastRenewedAt });
+      this.dropLease();
       return false;
     }
   }
@@ -265,6 +376,7 @@ export class KeysService {
     }
     if (!this.isPodsUrl(input)) return this.adapters.fetch(input, init);
     const attempt = (): Promise<Response> => {
+      this.hasLiveLease(); // an expired header must never escape a throttled background tab
       // node's Request cannot take a relative URL (browsers resolve against
       // the page) — resolve against the adapter origin for parity.
       const resolved =
@@ -295,16 +407,19 @@ export class KeysService {
     }
     // A still-valid device-wrapped session survives reloads — ONLINE AND
     // OFFLINE alike. Falls through to a fresh login when absent/expired.
-    if (this.state.status !== 'leased') await this.restoreSession();
+    if (!this.hasLiveLease() && !this.released) await this.restoreSession();
     const meta = await this.probe();
     if (!meta) {
       // unreachable serve: a restored lease stays leased; a previously-seen
       // broker without one shows LOCKED; an unknown serve shows nothing
       const known = this.cachedMeta();
-      if (known && this.state.status === 'none') this.setState({ status: 'locked', meta: known });
+      if (known && this.policy !== 'plaintext') {
+        this.policy = 'encrypted';
+        if (this.state.status === 'none') this.setState({ status: 'locked', meta: known });
+      }
       return this.state;
     }
-    if (this.state.status !== 'leased') await this.login(await principal());
+    if (!this.hasLiveLease() && !this.released) await this.login(await principal());
     return this.state;
   }
 }

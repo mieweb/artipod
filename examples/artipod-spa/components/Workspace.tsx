@@ -41,12 +41,19 @@ export default function Workspace({ route }: { route: Route }) {
     let cancelled = false;
     let opened: PodSession | null = null;
     let offInspect: (() => void) | undefined;
+    const close = (session: PodSession): void => {
+      void session.close().catch((error) => {
+        // Teardown still disposes the pod in its finally block. Preserve the
+        // persistence failure in diagnostics instead of an unhandled promise.
+        console.error('workspace close failed:', error);
+      });
+    };
     // Show "Opening…" NOW — the boot itself queues behind the previous
     // session's serialized close (flush-push included).
     workspaceStore.setState({ ...initialWorkspace, syncActive: route.isRef && route.mode === 'rw' });
     void openPodSession(route)
       .then((session) => {
-        if (cancelled) return void session.close();
+        if (cancelled) return close(session);
         opened = session;
         sessionRef.current = session;
         setSessionTick((t) => t + 1);
@@ -75,7 +82,7 @@ export default function Workspace({ route }: { route: Route }) {
       cancelled = true;
       offInspect?.();
       sessionRef.current = null;
-      void opened?.close();
+      if (opened) close(opened);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.id, route.isRef]);

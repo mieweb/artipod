@@ -12,6 +12,7 @@ import { boundAncestry, computeVerdicts, healUnsynced } from './catalog-service'
 import { upperDirName, type LocalEntry } from './ui-state';
 import { keys, uiState } from '../boot';
 import { initFileSystem } from '../filesystem';
+import { workspaceUpperPaths } from './workspace-storage';
 
 /** Ids whose workspace tab is still alive (it holds a Web Lock for its lifetime). */
 export const wsLockName = (id: string): string => `artipod-ws-${id}`;
@@ -38,14 +39,8 @@ export async function refreshLocal(): Promise<void> {
   const swept: string[] = [];
   let changed = new Set(registry.filter((e) => e.hasChanges).map((e) => e.id));
   try {
-    const info = await initFileSystem();
+    await initFileSystem();
     const { fs } = await import('../filesystem');
-    // the toggle writes the pod setting (same file `artipod offline` uses) —
-    // without this, a reload's fs reconcile would stomp the mirror
-    keys().setOfflineWriter(async (value) => {
-      const { writePodSettings } = await import('@artipod/core/oci');
-      await writePodSettings(fs as unknown as Parameters<typeof writePodSettings>[0], { offline: value });
-    });
     // shells write the offline setting into the pod fs — adopt it (chip flips live)
     try {
       const { readPodSettings } = await import('@artipod/core/oci');
@@ -54,8 +49,8 @@ export async function refreshLocal(): Promise<void> {
     } catch {
       // fs not initialized yet — the boot mirror stands
     }
-    // local heads for the digest-verified synced badge (refs are cleartext
-    // pointers — readable without a key even on encrypted stores)
+    // Local heads for the digest-verified synced badge. Their logical JSON
+    // records and names are protected by the encrypted root.
     try {
       const { OciStore } = await import('@artipod/core/oci');
       const store = new OciStore(fs as unknown as ConstructorParameters<typeof OciStore>[0]);
@@ -128,25 +123,25 @@ export async function refreshLocal(): Promise<void> {
     } catch {
       // offline or no server — reconciliation is best-effort
     }
-    // Physical cow uppers: legacy plaintext dirs are named by ref; broker-mode
-    // block stores are hash-named and OPAQUE — the physical dir only vetoes
-    // (gone/empty = no changes), the registry flag is the verdict.
-    if (info?.backend === 'opfs') {
+    // Inspect logical protected uppers on either backend. Legacy uppers stay
+    // readable until their per-ref migration completes.
+    {
       changed = new Set<string>();
       const modeById = new Map(registry.map((e) => [e.id, e.mode]));
-      const upperNames = new Set((await fs.promises.readdir('/.artipod/uppers').catch(() => [])) as string[]);
       for (const e of registry) {
+        if (e.kind !== 'pod') continue;
         if (modeById.get(e.id) === 'rw') continue; // autoPush keeps rw synced
         const legacy = encodeURIComponent(e.id);
         const hashed = await upperDirName(e.id);
-        const name = upperNames.has(legacy) ? legacy : upperNames.has(hashed) ? hashed : null;
-        if (!name) continue;
-        const entries = (await fs.promises.readdir(`/.artipod/uppers/${name}`).catch(() => [])) as string[];
+        const candidates = [workspaceUpperPaths(e.id).directory, `/.artipod/uppers/${legacy}`, `/.artipod/uppers/${hashed}`];
+        const directory = (await Promise.all(candidates.map(async path => await fs.promises.exists(path) ? path : null))).find(Boolean);
+        if (!directory) continue;
+        const entries = await fs.promises.readdir(directory);
         if (entries.length === 0) continue;
-        if (name === legacy || e.hasChanges) changed.add(e.id);
+        if (directory !== candidates[2] || e.hasChanges) changed.add(e.id);
       }
       for (const e of registry) {
-        if (e.hasChanges && !changed.has(e.id)) await io.patch(e.id, { hasChanges: false });
+        if (e.kind === 'pod' && e.mode !== 'rw' && e.hasChanges && !changed.has(e.id)) await io.patch(e.id, { hasChanges: false });
       }
     }
   } catch {
