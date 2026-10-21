@@ -29,7 +29,7 @@ process.once('message', async (message: Operation) => {
       if (error.code !== 'ENOENT') throw error;
       return undefined;
     });
-    if (existing) {
+    if (existing !== undefined) {
       const sb = JSON.parse(existing);
       if (sb.formatVersion !== 1 || !/^[a-f0-9]{16}$/.test(sb.podId) || sb.cipher !== 'none') throw new Error('Workspace checkpoints require a valid unencrypted local Artipod');
       if (message.rootId && message.rootId !== sb.podId) throw new Error('Artipod workspace root binding does not match');

@@ -8,6 +8,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
 import { ArtipodWorkspace } from '../dist/checkpoint-workspace.js';
+import { sha256 } from '../dist/oci/digest.js';
+import { indexTar, makeLayerIndexArtifact, writeTar } from '../dist/oci/tar.js';
 
 const exec = promisify(execFile);
 
@@ -21,6 +23,131 @@ async function fixture(t) {
   await fs.writeFile(path.join(workspacePath, 'a'), 'baseline');
   return { base, workspacePath, storePath, workspace };
 }
+
+for (const explicitRootId of [false, true]) {
+  test(`rejects a zero-byte superblock before reopening ${explicitRootId ? 'with' : 'without'} an explicit root ID`, async t => {
+    const { workspacePath, storePath, workspace } = await fixture(t);
+    const checkpoint = await workspace.create({ label: 'preserve this checkpoint' });
+    const checkpoints = await workspace.list();
+    const superblockPath = path.join(workspacePath, '.artipod/superblock.json');
+    const superblock = await fs.readFile(superblockPath);
+    const metadata = path.join(workspacePath, '.artipod/oci/snapshots');
+    const snapshotFiles = (await fs.readdir(metadata)).sort();
+    const snapshotBytes = await Promise.all(snapshotFiles.map(name => fs.readFile(path.join(metadata, name))));
+    const mappingDirectory = path.join(storePath, workspace.rootId);
+    await fs.mkdir(mappingDirectory);
+    const mappingPath = path.join(mappingDirectory, 'request.json');
+    const mapping = JSON.stringify({ rootId: workspace.rootId, checkpointId: checkpoint.checkpointId });
+    await fs.writeFile(mappingPath, mapping);
+    await fs.writeFile(path.join(workspacePath, 'a'), 'current work');
+    await fs.writeFile(superblockPath, '');
+
+    await assert.rejects(ArtipodWorkspace.open({
+      workspacePath, storePath, ...(explicitRootId ? { rootId: workspace.rootId } : {}),
+    }), /JSON/);
+    assert.equal((await fs.lstat(superblockPath)).size, 0);
+    assert.equal(await fs.readFile(superblockPath, 'utf8'), '');
+    assert.deepEqual((await fs.readdir(metadata)).sort(), snapshotFiles);
+    assert.deepEqual(await Promise.all(snapshotFiles.map(name => fs.readFile(path.join(metadata, name)))), snapshotBytes);
+    assert.deepEqual(await fs.readdir(storePath), [workspace.rootId]);
+    assert.equal(await fs.readFile(mappingPath, 'utf8'), mapping);
+    assert.equal(await fs.readFile(path.join(workspacePath, 'a'), 'utf8'), 'current work');
+    await assert.rejects(fs.access(path.join(workspacePath, '.artipod/checkpoint-lock')), { code: 'ENOENT' });
+
+    // Repair only the caller-truncated bytes: reopening must retain the same
+    // identity and make its existing mapping and checkpoint usable again.
+    await fs.writeFile(superblockPath, superblock);
+    const reopened = await ArtipodWorkspace.open({ workspacePath, storePath });
+    assert.equal(reopened.rootId, workspace.rootId);
+    assert.deepEqual(await reopened.list(), checkpoints);
+    await reopened.restore(checkpoint.checkpointId);
+    assert.equal(await fs.readFile(path.join(workspacePath, 'a'), 'utf8'), 'baseline');
+  });
+}
+
+for (const operation of ['restore', 'fork']) {
+  test(`${operation} rejects an imported empty symlink target before materializing payload or deleting live files`, async t => {
+    const { base, workspacePath, workspace } = await fixture(t);
+    const checkpoint = await workspace.create();
+    await fs.writeFile(path.join(workspacePath, 'a'), 'current work');
+    await fs.mkdir(path.join(workspacePath, 'keep'));
+    await fs.writeFile(path.join(workspacePath, 'keep', 'valuable'), 'keep this nested file');
+    const current = await workspace.create();
+    const metadata = path.join(workspacePath, '.artipod/oci');
+    const manifestPath = path.join(metadata, 'snapshots', `${checkpoint.checkpointId}.json`);
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    const payload = new TextEncoder().encode('must not materialize');
+    const entries = [
+      { path: '/payload', type: 'file', mode: 0o644, content: payload },
+      { path: '/z-empty-link', type: 'symlink', mode: 0o777, linkTarget: '' },
+    ];
+    const tar = writeTar(entries);
+    const diffId = await sha256(tar);
+    await fs.writeFile(path.join(metadata, 'uncompressed/sha256', diffId.slice(7)), tar);
+    await fs.writeFile(path.join(metadata, 'indexes/sha256', `${diffId.slice(7)}.json`), JSON.stringify(makeLayerIndexArtifact(indexTar(tar))));
+    manifest.diff = { diffId, size: tar.length, entryCount: entries.length };
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    await fs.writeFile(path.join(metadata, 'snapshots', `${checkpoint.checkpointId}.index.json`), JSON.stringify({
+      formatVersion: 1,
+      files: {
+        '/payload': { type: 'file', mode: 0o644, size: payload.length, contentDigest: await sha256(payload) },
+        '/z-empty-link': { type: 'symlink', mode: 0o777, size: 0, linkTarget: '' },
+      },
+    }));
+    const headPath = path.join(metadata, 'snapshots/HEAD');
+    const head = await fs.readFile(headPath, 'utf8');
+    assert.equal(head.trim(), current.checkpointId);
+    if (operation === 'restore') {
+      await assert.rejects(workspace.restore(checkpoint.checkpointId), /Invalid Artipod snapshot symlink/);
+    } else {
+      const destination = path.join(base, 'fork');
+      await fs.mkdir(destination);
+      await assert.rejects(workspace.fork(checkpoint.checkpointId, { workspacePath: destination }), /Invalid Artipod snapshot symlink/);
+      assert.deepEqual((await fs.readdir(destination)).filter(name => name !== '.artipod'), []);
+      await assert.rejects(fs.access(path.join(destination, '.artipod/checkpoint-lock')), { code: 'ENOENT' });
+    }
+    assert.equal(await fs.readFile(path.join(workspacePath, 'a'), 'utf8'), 'current work');
+    assert.equal(await fs.readFile(path.join(workspacePath, 'keep', 'valuable'), 'utf8'), 'keep this nested file');
+    assert.equal(await fs.readFile(headPath, 'utf8'), head);
+    await assert.rejects(fs.lstat(path.join(workspacePath, 'payload')), { code: 'ENOENT' });
+    await assert.rejects(fs.access(path.join(workspacePath, '.artipod/checkpoint-lock')), { code: 'ENOENT' });
+  });
+}
+
+test('capture rejects a native empty-target symlink without changing prior checkpoint metadata or mappings', async t => {
+  const { workspacePath, storePath, workspace } = await fixture(t);
+  const checkpoint = await workspace.create();
+  const link = path.join(workspacePath, 'empty-link');
+  try { await fs.symlink('', link); }
+  catch (error) {
+    if (!['ENOENT', 'EINVAL'].includes(error.code)) throw error;
+    t.skip('The native filesystem does not support empty-target symlinks.');
+    return;
+  }
+  await fs.writeFile(path.join(workspacePath, 'a'), 'current work');
+  const metadata = path.join(workspacePath, '.artipod/oci/snapshots');
+  const snapshotFiles = (await fs.readdir(metadata)).sort();
+  const snapshotBytes = await Promise.all(snapshotFiles.map(name => fs.readFile(path.join(metadata, name))));
+  const mappingDirectory = path.join(storePath, workspace.rootId);
+  await fs.mkdir(mappingDirectory);
+  const mappingPath = path.join(mappingDirectory, 'request.json');
+  const mapping = JSON.stringify({ rootId: workspace.rootId, checkpointId: checkpoint.checkpointId });
+  await fs.writeFile(mappingPath, mapping);
+
+  await assert.rejects(workspace.create(), /Invalid Artipod snapshot symlink/);
+  assert.deepEqual((await fs.readdir(metadata)).sort(), snapshotFiles);
+  assert.deepEqual(await Promise.all(snapshotFiles.map(name => fs.readFile(path.join(metadata, name)))), snapshotBytes);
+  assert.deepEqual(await fs.readdir(storePath), [workspace.rootId]);
+  assert.equal(await fs.readFile(mappingPath, 'utf8'), mapping);
+  assert.equal(await fs.readFile(path.join(workspacePath, 'a'), 'utf8'), 'current work');
+  assert.equal((await fs.lstat(link)).isSymbolicLink(), true);
+  assert.equal(await fs.readlink(link), '');
+  await assert.rejects(fs.access(path.join(workspacePath, '.artipod/checkpoint-lock')), { code: 'ENOENT' });
+
+  await workspace.restore(checkpoint.checkpointId);
+  assert.equal(await fs.readFile(path.join(workspacePath, 'a'), 'utf8'), 'baseline');
+  await assert.rejects(fs.lstat(link), { code: 'ENOENT' });
+});
 
 for (const relative of ['.artipod/oci', '.artipod/oci/snapshots', '.artipod/oci/uncompressed/sha256', '.artipod/superblock.json']) {
   test(`rejects redirected ${relative} before opening or capturing a pod`, async t => {

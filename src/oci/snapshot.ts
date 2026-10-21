@@ -103,6 +103,7 @@ function snapshotId(): string {
 }
 
 const asBytes = (b: Uint8Array): Uint8Array => new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+const validSymlinkTarget = (target: unknown): target is string => typeof target === 'string' && target.length > 0 && !target.includes('\0');
 
 export class SnapshotManager {
   private readonly zfs: ZenFsLike;
@@ -145,8 +146,24 @@ export class SnapshotManager {
 
   // --- workspace walk ---------------------------------------------------------
 
-  private async walk(filesystem = this.workspaceFs): Promise<Map<string, FileRecord & { bytes?: Uint8Array }>> {
+  private async walk(filesystem = this.workspaceFs, { allowEmptySymlinkTargets = false } = {}): Promise<Map<string, FileRecord & { bytes?: Uint8Array }>> {
     const p = filesystem.promises;
+    // A saved tree can be valid while a live root has been redirected. Check
+    // every root component before readdir/readFile can follow it outside the
+    // capture boundary, and before restore can delete any enumerated entries.
+    const directories = new Set(['/']);
+    for (const root of this.roots) {
+      let prefix = '';
+      for (const component of root.split('/').slice(1)) {
+        if (!component) continue;
+        prefix += `/${component}`;
+        directories.add(prefix);
+      }
+    }
+    for (const directory of directories) {
+      const info = await p.lstat(directory);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Snapshot root and ancestors must be real directories: ${directory}`);
+    }
     const out = new Map<string, FileRecord & { bytes?: Uint8Array }>();
     const visit = async (dir: string): Promise<void> => {
       for (const name of (await p.readdir(dir) as string[]).sort()) {
@@ -157,7 +174,9 @@ export class SnapshotManager {
         const stat = await p.lstat(path);
         const mode = stat.mode & 0o777;
         if (stat.isSymbolicLink()) {
-          out.set(path, { type: 'symlink', size: 0, mode, linkTarget: await p.readlink(path) as string });
+          const linkTarget = await p.readlink(path);
+          if (!validSymlinkTarget(linkTarget) && !(allowEmptySymlinkTargets && linkTarget === '')) throw new Error(`Invalid Artipod snapshot symlink: ${path}`);
+          out.set(path, { type: 'symlink', size: 0, mode, linkTarget });
         } else if (stat.isDirectory()) {
           out.set(path, { type: 'dir', size: 0, mode });
           await visit(path);
@@ -487,7 +506,7 @@ export class SnapshotManager {
         if (ancestor ? ancestor.type !== 'dir' : !implicitDirectories.has(parent)) throw new Error(`Invalid Artipod snapshot parent: ${parent}`);
         parent = parent.slice(0, parent.lastIndexOf('/')) || '/';
       }
-      if (entry.type === 'symlink' && (typeof entry.linkTarget !== 'string' || entry.linkTarget.includes('\0'))) throw new Error(`Invalid Artipod snapshot symlink: ${path}`);
+      if (entry.type === 'symlink' && !validSymlinkTarget(entry.linkTarget)) throw new Error(`Invalid Artipod snapshot symlink: ${path}`);
     }
     const index = await this.cumulativeIndex(id);
     if (index.formatVersion !== 1 || !index.files || Object.keys(index.files).length !== target.size) throw new Error('Invalid Artipod snapshot cumulative index');
@@ -508,13 +527,17 @@ export class SnapshotManager {
    * Restore the captured roots in place. All OCI bytes and target topology are
    * checked before the first live mutation; callers must quiesce writers.
    * The root directory is retained so native watchers remain attached.
-   * Callers holding locks beneath a root may defer its final mode until after
-   * releasing those locks; they must apply every returned root mode themselves.
+   * Callers holding locks beneath a root may defer final modes until after
+   * releasing those locks. The returned rootModes includes captured roots and
+   * ordinary ancestors of those roots, ordered deepest first; deferred callers
+   * must apply every returned mode in that order.
    */
   async restore(id: string, options: { deferRootModes?: boolean } = {}): Promise<{ changes: SnapshotRestoreChange[]; rootModes: Record<string, number> }> {
     const { head, target } = await this.validatedSnapshot(id);
     const p = this.workspaceFs.promises;
-    const current = await this.walk();
+    // A valid saved tree may repair a native empty-target link in live work;
+    // these entries can be unlinked safely but must never enter new snapshots.
+    const current = await this.walk(this.workspaceFs, { allowEmptySymlinkTargets: true });
     const changes: SnapshotRestoreChange[] = [];
     const kind = (r: FileRecord): SnapshotRestoreChange['kind'] => r.type === 'dir' ? 'directory' : r.type;
     const same = (a: FileRecord, b: FileRecord) => a.type === b.type && a.mode === b.mode && a.contentDigest === b.contentDigest && a.linkTarget === b.linkTarget;
@@ -533,6 +556,13 @@ export class SnapshotManager {
       rootModes.set(root, head.rootModes?.[root] ?? mode);
       if (mode !== rootModes.get(root)) changes.push({ path: root, type: 'changed', kind: 'directory' });
       if ((mode & 0o700) !== 0o700) await p.chmod(root, mode | 0o700);
+    }
+    // Ordinary ancestors must remain traversable until nested captured roots
+    // and caller locks are finalized, just like the captured roots themselves.
+    for (const [path, record] of target) {
+      if (record.type === 'dir' && !rootModes.has(path) && this.roots.some(root => root.startsWith(`${path}/`))) {
+        rootModes.set(path, record.mode);
+      }
     }
     const byDepth = (a: string, b: string) => a.split('/').length - b.split('/').length || a.localeCompare(b);
     for (const [path, record] of [...current].sort(([a], [b]) => byDepth(a, b))) {
@@ -559,16 +589,14 @@ export class SnapshotManager {
       }
     }
     for (const [path, record] of [...target].sort(([a], [b]) => byDepth(b, a))) {
-      // Overlapping roots also appear in target, but only the root-mode phase
-      // (or its caller) may finalize them after HEAD and lock bookkeeping.
+      // Roots and their ancestors are finalized after HEAD/lock bookkeeping.
       if (record.type === 'dir' && !rootModes.has(path)) await p.chmod(path, record.mode);
     }
     // HEAD can live below a root whose captured mode prevents traversal.
     await this.writeHead(id);
-    if (!options.deferRootModes) {
-      for (const [root, mode] of [...rootModes].sort(([a], [b]) => byDepth(b, a))) await p.chmod(root, mode);
-    }
-    return { changes, rootModes: Object.fromEntries(rootModes) };
+    const finalModes = [...rootModes].sort(([a], [b]) => byDepth(b, a));
+    if (!options.deferRootModes) for (const [root, mode] of finalModes) await p.chmod(root, mode);
+    return { changes, rootModes: Object.fromEntries(finalModes) };
   }
 
   /** Copy a verified snapshot chain into another pod's OCI store for a fork. */

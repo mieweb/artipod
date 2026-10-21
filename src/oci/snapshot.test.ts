@@ -402,6 +402,50 @@ describe('in-place snapshot restore', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('native snapshot root modes', () => {
+  it.each([
+    { redirect: 'root', operation: 'capture' },
+    { redirect: 'ancestor', operation: 'capture' },
+    { redirect: 'root', operation: 'restore' },
+    { redirect: 'ancestor', operation: 'restore' },
+  ])('rejects a live $redirect symlink before $operation reads or changes the redirected tree', async ({ redirect, operation }) => {
+    const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-live-root-'));
+    try {
+      const workspace = path.join(directory, 'workspace');
+      const outside = path.join(directory, 'outside');
+      const root = redirect === 'root' ? '/repo' : '/parent/repo';
+      const liveRoot = path.join(workspace, root);
+      const redirected = path.join(workspace, redirect === 'root' ? 'repo' : 'parent');
+      const outsideRoot = redirect === 'root' ? outside : path.join(outside, 'repo');
+      await nativeFs.mkdir(liveRoot, { recursive: true });
+      await nativeFs.mkdir(outsideRoot, { recursive: true });
+      await nativeFs.writeFile(path.join(liveRoot, 'file'), 'snapshot contents');
+      await nativeFs.writeFile(path.join(outsideRoot, 'file'), 'precious outside file');
+      await nativeFs.writeFile(path.join(outsideRoot, 'extra'), 'precious outside extra');
+      const filesystem = createNativeWorkspaceFs(workspace);
+      const store = new OciStore(filesystem);
+      await store.init();
+      const snapshots = new SnapshotManager({ zfs: filesystem, store, roots: [root] });
+      const before = (await snapshots.create())!;
+      const metadata = path.join(workspace, '.artipod/oci/snapshots');
+      const head = await nativeFs.readFile(path.join(metadata, 'HEAD'), 'utf8');
+      const manifest = await nativeFs.readFile(path.join(metadata, `${before.id}.json`), 'utf8');
+      const savedEntries = (await nativeFs.readdir(metadata)).sort();
+      await nativeFs.rename(redirected, `${redirected}-saved`);
+      await nativeFs.symlink(outside, redirected);
+
+      await expect(operation === 'capture' ? snapshots.create() : snapshots.restore(before.id)).rejects.toThrow(/Snapshot root and ancestors must be real directories/);
+      expect(await nativeFs.readFile(path.join(outsideRoot, 'file'), 'utf8')).toBe('precious outside file');
+      expect(await nativeFs.readFile(path.join(outsideRoot, 'extra'), 'utf8')).toBe('precious outside extra');
+      expect((await nativeFs.readdir(outsideRoot)).sort()).toEqual(['extra', 'file']);
+      expect(await nativeFs.readlink(redirected)).toBe(outside);
+      expect(await nativeFs.readFile(path.join(metadata, 'HEAD'), 'utf8')).toBe(head);
+      expect(await nativeFs.readFile(path.join(metadata, `${before.id}.json`), 'utf8')).toBe(manifest);
+      expect((await nativeFs.readdir(metadata)).sort()).toEqual(savedEntries);
+    } finally {
+      await nativeFs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('rejects native aliases of reserved roots without changing metadata or workspace files', async context => {
     const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-reserved-alias-'));
     try {
@@ -583,6 +627,74 @@ describe.skipIf(process.platform === 'win32')('native snapshot root modes', () =
       expect((await nativeFs.stat(directory)).mode & 0o777).toBe(0o500);
     } finally {
       for (const path of [directory, repo, ordinary]) {
+        await nativeFs.chmod(path, 0o700).catch(error => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      }
+      await nativeFs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])('finalizes a restrictive ordinary ancestor after nested roots (deferRootModes=%s)', async deferRootModes => {
+    const directory = await nativeFs.mkdtemp(path.join(os.tmpdir(), 'artipod-ancestor-modes-'));
+    const repo = path.join(directory, 'repo');
+    const nested = path.join(repo, 'nested');
+    const lock = path.join(nested, 'checkpoint-lock');
+    try {
+      const filesystem = createNativeWorkspaceFs(directory);
+      const store = new OciStore(filesystem);
+      await store.init();
+      await nativeFs.mkdir(nested, { recursive: true });
+      for (const path of [repo, nested]) await nativeFs.chmod(path, 0o700);
+      await nativeFs.writeFile(path.join(nested, 'file'), 'before');
+      const snapshots = new SnapshotManager({ zfs: filesystem, store, roots: ['/', '/repo/nested'], exclude: ['/repo/nested/checkpoint-lock'] });
+      const before = (await snapshots.create())!;
+      await nativeFs.writeFile(path.join(nested, 'file'), 'after');
+      await snapshots.create();
+      if (deferRootModes) await nativeFs.mkdir(lock);
+
+      // Import a consistent snapshot with a non-searchable ordinary ancestor;
+      // it cannot be captured while traversing the same native workspace.
+      const content = new TextEncoder().encode('before');
+      const entries: TarWriteEntry[] = [
+        { path: '/repo', type: 'dir', mode: 0o400 },
+        { path: '/repo/nested', type: 'dir', mode: 0o500 },
+        { path: '/repo/nested/file', type: 'file', mode: 0o644, content },
+      ];
+      const tar = writeTar(entries);
+      const diffId = await sha256(tar);
+      await store.putUncompressed(diffId, tar);
+      await store.putLayerIndex(diffId, indexTar(tar));
+      before.diff = { diffId, size: tar.length, entryCount: entries.length };
+      before.rootModes = { '/': 0o500, '/repo/nested': 0o500 };
+      const files = Object.fromEntries(await Promise.all(entries.map(async entry => [entry.path, {
+        type: entry.type, mode: entry.mode, size: entry.content?.length ?? 0,
+        ...(entry.content ? { contentDigest: await sha256(entry.content) } : {}),
+      }])));
+      const metadata = path.join(directory, '.artipod/oci/snapshots');
+      await nativeFs.writeFile(path.join(metadata, `${before.id}.json`), JSON.stringify(before));
+      await nativeFs.writeFile(path.join(metadata, `${before.id}.index.json`), JSON.stringify({ formatVersion: 1, files }));
+
+      const result = await snapshots.restore(before.id, { deferRootModes });
+      expect(result.rootModes).toEqual({ '/repo/nested': 0o500, '/repo': 0o400, '/': 0o500 });
+      expect(Object.keys(result.rootModes)).toEqual(['/repo/nested', '/repo', '/']);
+      expect(await nativeFs.readFile(path.join(metadata, 'HEAD'), 'utf8')).toBe(before.id);
+      if (deferRootModes) {
+        for (const path of [directory, repo, nested]) expect((await nativeFs.stat(path)).mode & 0o777).toBe(0o700);
+        await nativeFs.rmdir(lock);
+        // Deferred callers receive ancestors as well as roots, in safe order.
+        for (const [root, mode] of Object.entries(result.rootModes)) {
+          await nativeFs.chmod(root === '/' ? directory : path.join(directory, root), mode);
+        }
+      }
+      expect((await nativeFs.stat(directory)).mode & 0o777).toBe(0o500);
+      expect((await nativeFs.stat(repo)).mode & 0o777).toBe(0o400);
+      await nativeFs.chmod(directory, 0o700);
+      await nativeFs.chmod(repo, 0o700);
+      expect((await nativeFs.stat(nested)).mode & 0o777).toBe(0o500);
+      expect(await nativeFs.readFile(path.join(nested, 'file'), 'utf8')).toBe('before');
+    } finally {
+      for (const path of [directory, repo, nested]) {
         await nativeFs.chmod(path, 0o700).catch(error => {
           if (error.code !== 'ENOENT') throw error;
         });
