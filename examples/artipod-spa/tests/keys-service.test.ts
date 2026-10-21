@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Authority } from '@artipod/core/manager';
+import { KeysService as CoreKeysService } from '@artipod/core/storage';
 import { createKeysHandler } from '@artipod/core/server';
 import { KeysService, RENEW_TASK } from '../lib/services/keys-service';
 import { nodeAdapters, type ServiceAdapters } from '../lib/services/adapters';
@@ -38,6 +39,34 @@ beforeEach(() => {
 });
 
 describe('KeysService', () => {
+  it('bridges core snapshots without treating offline changes as broker changes', async () => {
+    adapters.fetch = await realBroker();
+    const svc = new KeysService(adapters);
+    expect(svc).toBeInstanceOf(CoreKeysService);
+    await svc.login('tester');
+    expect(brokerStore.getState()).toBe(svc.getSnapshot());
+    expect(settingsStore.getState()).toBe(svc.getSettingsSnapshot());
+    const brokerChanged = vi.fn();
+    const settingsChanged = vi.fn();
+    const offBroker = brokerStore.subscribe(brokerChanged);
+    const offSettings = settingsStore.subscribe(settingsChanged);
+    try {
+      svc.setForcedOffline(true);
+      expect(settingsChanged).toHaveBeenCalledOnce();
+      expect(brokerChanged).not.toHaveBeenCalled();
+      expect(settingsStore.getState()).toBe(svc.getSettingsSnapshot());
+      settingsChanged.mockClear();
+      svc.release();
+      expect(brokerChanged).toHaveBeenCalledOnce();
+      expect(settingsChanged).not.toHaveBeenCalled();
+      expect(brokerStore.getState()).toBe(svc.getSnapshot());
+    } finally {
+      offBroker();
+      offSettings();
+      svc.scheduler.dispose();
+    }
+  });
+
   it('drains pending grant writes and blocks later renewal/device persistence during reset', async () => {
     adapters.fetch = await realBroker();
     const svc = new KeysService(adapters);

@@ -4,7 +4,6 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop, artipod ]
 
 jobs:
   build:
@@ -158,3 +157,25 @@ jobs:
         name: encrypted-browser-server-log
         path: ${{ runner.temp }}/artipod-browser-server.log
         if-no-files-found: ignore
+
+  storage-consumer:
+    name: Packed public storage consumer
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 22.x
+        cache: npm
+    - run: npm ci
+    - name: Install the pinned browser test runtime
+      run: |
+        npm install --prefix "$RUNNER_TEMP/artipod-storage-tests" --no-save --package-lock=false playwright@1.62.1
+        "$RUNNER_TEMP/artipod-storage-tests/node_modules/.bin/playwright" install --with-deps chromium
+    - name: Verify the published package in Node and Chromium
+      env:
+        PLAYWRIGHT_MODULE_PATH: ${{ runner.temp }}/artipod-storage-tests/node_modules/playwright
+      run: npm run test:storage-consumer

@@ -298,7 +298,7 @@ const makeMountCommand = () =>
     const { store, dir } = parseMountOptions(options);
     const path = ctx.fs.resolvePath(ctx.cwd, rest[0]);
     try {
-      await mountBackend(path, { type: backend, store: store || undefined, dir: dir || undefined });
+      await mountBackend(path, { type: backend, store: store || undefined, dir: dir || undefined }, { storagePolicy: 'plaintext' });
     } catch (e) {
       return fail('mount', (e as Error).message);
     }

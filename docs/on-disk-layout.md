@@ -5,7 +5,7 @@
 Two distinct things share the `.artipod` name:
 
 1. **`~/.artipod/`** — the CLI's home directory: kept pods + a local OCI store.
-2. **`/.artipod/`** *inside each pod* — the pod's own superblock and blob store (hidden; `tree -a` to see it). Browser pods use these logical paths inside the encrypted browser vault described below.
+2. **`/.artipod/`** *inside each pod* — the pod's own superblock and blob store (hidden; `tree -a` to see it). Managed browser and native storage sessions use these logical paths inside the encrypted root described in [encryption.md](encryption.md#managed-local-storage-boundary). The CLI host-directory path remains an explicit plaintext compatibility choice.
 
 ## The CLI home (`~/.artipod`)
 

@@ -15,13 +15,16 @@
  */
 
 import type { ZenFsLike } from '../sandbox/types.js';
-import { sha256, type Digest } from './digest.js';
+import { sha256, isDigest, type Digest } from './digest.js';
 import { gzip } from './gzip.js';
 import { indexTar, writeTar, whiteoutPathFor, makeLayerIndexArtifact, ANNOTATION_HYDRATION, ANNOTATION_LAYER_INDEX, ANNOTATION_LAYER_GROUP, type TarWriteEntry } from './tar.js';
 import { OciStore, OCI_ROOT } from './store.js';
+import { ANNOTATION_PARENTS } from './file-layer.js';
+import { AUDIT_MEDIA_TYPE } from '../manager/audit.js';
 import { mergeLayerEntries, mountOciView } from './view.js';
 import type { ImageManifest } from './pull.js';
 import { pathGlobMatch } from '../manager/hydration.js';
+import { resolveStorageAccess, type StorageAccessOptions } from '../storage/context.js';
 
 export const SNAPSHOT_MEDIA_TYPE = 'application/vnd.artipod.snapshot.v1+json';
 export const VOLUME_CONFIG_MEDIA_TYPE = 'application/vnd.artipod.volume.v1+json';
@@ -61,7 +64,7 @@ export interface SnapshotDiff {
   deleted: string[];
 }
 
-export interface SnapshotManagerOptions {
+export interface SnapshotManagerOptions extends StorageAccessOptions {
   zfs: ZenFsLike;
   store: OciStore;
   /** Workspace roots to capture (the pod's rw mount paths). */
@@ -103,6 +106,7 @@ function snapshotId(): string {
 }
 
 const asBytes = (b: Uint8Array): Uint8Array => new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+const missing = (error: unknown): boolean => (error as { code?: string })?.code === 'ENOENT';
 const validSymlinkTarget = (target: unknown): target is string => typeof target === 'string' && target.length > 0 && !target.includes('\0');
 
 export class SnapshotManager {
@@ -110,18 +114,28 @@ export class SnapshotManager {
   private readonly store: OciStore;
   private readonly roots: string[];
   private readonly exclude: string[];
-  private readonly workspaceFs: SnapshotFilesystem;
+  private readonly heldWorkspaceFs: SnapshotFilesystem;
+  private readonly storageOptions: StorageAccessOptions;
 
   constructor(options: SnapshotManagerOptions) {
+    const storage = resolveStorageAccess(options.zfs, options);
+    if (storage && storage.protection !== 'plaintext' && options.workspaceFs && options.workspaceFs !== options.zfs) throw new Error('Protected snapshots must use the owning core storage filesystem');
     this.zfs = options.zfs;
+    this.storageOptions = { storage: options.storage, storagePolicy: options.storagePolicy };
     this.store = options.store;
     this.roots = options.roots;
     this.exclude = [...(options.defaultExcludes === false ? RESERVED_ROOTS : DEFAULT_EXCLUDE), ...(options.exclude ?? [])];
-    this.workspaceFs = options.workspaceFs ?? options.zfs;
+    this.heldWorkspaceFs = options.workspaceFs ?? options.zfs;
   }
 
   private get p() {
+    resolveStorageAccess(this.zfs, this.storageOptions);
     return this.zfs.promises;
+  }
+
+  private get workspaceFs(): SnapshotFilesystem {
+    resolveStorageAccess(this.zfs, this.storageOptions);
+    return this.heldWorkspaceFs;
   }
 
   /** Create directory components without following an existing symlink alias. */
@@ -223,8 +237,11 @@ export class SnapshotManager {
 
   private async readHead(): Promise<string | null> {
     try {
-      return ((await this.p.readFile(`${SNAP_DIR}/HEAD`, 'utf8')) as string).trim() || null;
-    } catch {
+      const id = ((await this.p.readFile(`${SNAP_DIR}/HEAD`, 'utf8')) as string).trim();
+      this.validateId(id);
+      return id;
+    } catch (error) {
+      if (!missing(error)) throw error;
       return null;
     }
   }
@@ -235,7 +252,14 @@ export class SnapshotManager {
 
   async get(id: string): Promise<SnapshotManifest> {
     const manifest = JSON.parse(await this.p.readFile(this.manifestPath(id), 'utf8') as string) as SnapshotManifest;
-    if (manifest.formatVersion !== 1 || manifest.mediaType !== SNAPSHOT_MEDIA_TYPE || manifest.id !== id || !Array.isArray(manifest.roots) || !manifest.diff) {
+    if (!manifest || manifest.formatVersion !== 1 || manifest.mediaType !== SNAPSHOT_MEDIA_TYPE || manifest.id !== id ||
+        !Array.isArray(manifest.roots) || !manifest.roots.every(root => typeof root === 'string') ||
+        (manifest.parent !== null && (typeof manifest.parent !== 'string' || !/^snap-[a-f0-9]{12}$/.test(manifest.parent))) ||
+        typeof manifest.createdAt !== 'string' || !Number.isFinite(Date.parse(manifest.createdAt)) ||
+        !['manual', 'agent-turn', 'compact'].includes(manifest.origin) || !manifest.diff ||
+        typeof manifest.diff.diffId !== 'string' || !isDigest(manifest.diff.diffId) ||
+        !Number.isSafeInteger(manifest.diff.size) || manifest.diff.size < 0 ||
+        !Number.isSafeInteger(manifest.diff.entryCount) || manifest.diff.entryCount < 0) {
       throw new Error(`Invalid Artipod snapshot manifest: ${id}`);
     }
     return manifest;
@@ -249,17 +273,14 @@ export class SnapshotManager {
     let names: string[];
     try {
       names = (await this.p.readdir(SNAP_DIR)) as string[];
-    } catch {
+    } catch (error) {
+      if (!missing(error)) throw error;
       return [];
     }
     const out: SnapshotManifest[] = [];
     for (const name of names) {
       if (!name.endsWith('.json') || name.endsWith('.index.json')) continue;
-      try {
-        out.push(JSON.parse((await this.p.readFile(`${SNAP_DIR}/${name}`, 'utf8')) as string) as SnapshotManifest);
-      } catch {
-        // skip corrupt
-      }
+      out.push(await this.get(name.slice(0, -'.json'.length)));
     }
     return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
@@ -739,50 +760,92 @@ export class SnapshotManager {
   /** Mark-and-sweep unreachable digests; returns reclaimed byte counts. */
   async gc(): Promise<{ deleted: number; reclaimedBytes: number }> {
     const reachableHex = new Set<string>();
-    const markDigest = (d: string | undefined) => {
-      if (d?.startsWith('sha256:')) reachableHex.add(d.slice(7));
+    const markDigest = (value: unknown): Digest => {
+      if (typeof value !== 'string' || !isDigest(value)) throw new Error('Cannot collect storage with an invalid reachable digest');
+      reachableHex.add(value.slice(7));
+      return value;
     };
+    const snapshots = await this.list();
+    const head = await this.readHead();
+    if (head && !snapshots.some(snapshot => snapshot.id === head)) throw new Error('Cannot collect storage with a missing snapshot HEAD');
+    for (const snap of snapshots) markDigest(snap.diff.diffId);
 
-    for (const snap of await this.list()) markDigest(snap.diff.diffId);
-
+    // Finish the entire reachability graph before issuing any deletion. An
+    // unreadable manifest, config, parent or audit record makes sweeping unsafe.
     const decoder = new TextDecoder();
+    const imageQueue: Digest[] = [];
     for (const ref of await this.store.listRefs()) {
-      markDigest(ref.manifestDigest);
-      try {
-        const manifest = JSON.parse(decoder.decode(await this.store.getBlob(ref.manifestDigest))) as ImageManifest;
-        markDigest(manifest.config?.digest);
-        for (const layer of manifest.layers ?? []) markDigest(layer.digest);
-        const config = JSON.parse(decoder.decode(await this.store.getBlob(manifest.config.digest))) as {
-          rootfs?: { diff_ids?: string[] };
-        };
-        for (const d of config.rootfs?.diff_ids ?? []) markDigest(d);
-      } catch {
-        // unreadable manifests keep only themselves
+      const digest = markDigest(ref.manifestDigest);
+      if (ref.mediaType === AUDIT_MEDIA_TYPE) {
+        const seen = new Set<string>();
+        let cursor: Digest | null = digest;
+        while (cursor) {
+          if (seen.has(cursor)) throw new Error('Cannot collect storage with an audit parent cycle');
+          seen.add(cursor);
+          const record = JSON.parse(decoder.decode(await this.store.getBlob(cursor))) as { prev?: unknown; event?: unknown } | null;
+          if (!record || typeof record !== 'object' || !record.event || (record.prev !== null && typeof record.prev !== 'string')) {
+            throw new Error('Cannot collect storage with an invalid audit record');
+          }
+          cursor = record.prev === null ? null : markDigest(record.prev);
+        }
+      } else imageQueue.push(digest);
+    }
+    const images = new Set<string>();
+    while (imageQueue.length) {
+      const digest = imageQueue.pop()!;
+      if (images.has(digest)) continue;
+      images.add(digest);
+      markDigest(digest);
+      const manifest = JSON.parse(decoder.decode(await this.store.getBlob(digest))) as ImageManifest | null;
+      if (!manifest || manifest.schemaVersion !== 2 || !manifest.config || !Array.isArray(manifest.layers)) {
+        throw new Error('Cannot collect storage with an invalid or unsupported image manifest');
+      }
+      const configDigest = markDigest(manifest.config.digest);
+      for (const layer of manifest.layers) {
+        if (!layer || typeof layer !== 'object') throw new Error('Cannot collect storage with an invalid layer descriptor');
+        markDigest(layer.digest);
+        const index = layer.annotations?.[ANNOTATION_LAYER_INDEX];
+        if (index !== undefined) markDigest(index);
+      }
+      const config = JSON.parse(decoder.decode(await this.store.getBlob(configDigest))) as { rootfs?: { diff_ids?: unknown[] } } | null;
+      if (!config || !config.rootfs || !Array.isArray(config.rootfs.diff_ids)) throw new Error('Cannot collect storage with an invalid image config');
+      for (const diffId of config.rootfs.diff_ids) markDigest(diffId);
+      const parents = manifest.annotations?.[ANNOTATION_PARENTS];
+      if (parents !== undefined) {
+        const values: unknown = JSON.parse(parents);
+        if (!Array.isArray(values)) throw new Error('Cannot collect storage with invalid image parents');
+        for (const parent of values) imageQueue.push(markDigest(parent));
       }
     }
+    // Blob refs are plaintext-addressed even when aliases point at ciphertext.
+    for (const hex of [...reachableHex]) {
+      const alias = await this.store.resolveAlias(`sha256:${hex}`);
+      if (alias !== null) markDigest(alias);
+    }
 
-    let deleted = 0;
-    let reclaimedBytes = 0;
+    const candidates: Array<{ path: string; size: number }> = [];
     for (const dir of ['blobs/sha256', 'uncompressed/sha256', 'indexes/sha256']) {
       let names: string[];
-      try {
-        names = (await this.p.readdir(`${OCI_ROOT}/${dir}`)) as string[];
-      } catch {
-        continue;
-      }
+      try { names = (await this.p.readdir(`${OCI_ROOT}/${dir}`)) as string[]; }
+      catch (error) { if (missing(error)) continue; throw error; }
       for (const name of names) {
         const hex = name.replace(/\.(json|alias)$/, '');
+        if (!/^[a-f0-9]{64}$/.test(hex)) throw new Error('Cannot collect storage with an unrecognized backing record');
         if (reachableHex.has(hex)) continue;
         const path = `${OCI_ROOT}/${dir}/${name}`;
         try {
           const stat = await this.p.stat(path);
-          reclaimedBytes += stat.size;
-          await this.p.rm(path, { force: true });
-          deleted++;
-        } catch {
-          // already gone
-        }
+          if (!stat.isFile()) throw new Error('Cannot collect storage with a non-file backing record');
+          candidates.push({ path, size: stat.size });
+        } catch (error) { if (!missing(error)) throw error; }
       }
+    }
+    let deleted = 0;
+    let reclaimedBytes = 0;
+    for (const candidate of candidates) {
+      await this.p.rm(candidate.path, { force: true });
+      deleted += 1;
+      reclaimedBytes += candidate.size;
     }
     return { deleted, reclaimedBytes };
   }
