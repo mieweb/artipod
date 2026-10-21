@@ -22,6 +22,7 @@ import type { PodStore } from './pod-store.js';
 import type { StoredRef } from '../oci/store.js';
 import { storeTransport } from './sync.js';
 import type { ProcProvider, ProcTree } from '../proc/registry.js';
+import { assertStorageProjection, resolveStorageAccess } from '../storage/context.js';
 
 const HYDRATION_DIR = '/.artipod/oci/hydration';
 const PARTIAL_DIR = '/.artipod/oci/partial';
@@ -470,6 +471,8 @@ export class Hydrator {
    * the page.
    */
   async openOverlay(ref: string, at: string, opts?: { upperConfig?: unknown }): Promise<void> {
+    const storage = resolveStorageAccess(this.options.zfs);
+    if (storage && storage.protection !== 'plaintext' && opts?.upperConfig) assertStorageProjection(opts.upperConfig, storage);
     const { layers, layerBytes } = await this.loadView(ref);
     const view = buildOciView({ layers, layerBytes, name: `basis:${ref}`, onDehydrated: this.onDemandHook(ref) });
     const zen = await import('@zenfs/core');

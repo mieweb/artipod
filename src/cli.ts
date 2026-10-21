@@ -462,6 +462,7 @@ async function bootPod(args: RunArgs, dir?: string): Promise<ZenFsPod> {
     version: await coreVersion(),
   };
   return createZenFsPod(manifest, {
+    storagePolicy: 'plaintext',
     proc: true,
     cwd: '/',
     sync: { remote: store },

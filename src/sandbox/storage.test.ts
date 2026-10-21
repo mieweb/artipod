@@ -4,9 +4,20 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fs as zfs, umount } from '@zenfs/core';
-import { configureStorageRoot, createMemoryStorageRoot, initFileSystem, migrateStorage, mountBackend, unmountBackend, type MigrationProgress } from './storage.js';
+import { configureStorageRoot, createMemoryStorageRoot, initFileSystem, migrateStorage, mountBackend, mountConfigForSpec, unmountBackend, type MigrationProgress } from './storage.js';
+import { registerStorageRoot } from '../storage/context.js';
+
+let ownsRoot = false;
+
+async function protectRoot(): Promise<void> {
+  const root = await createMemoryStorageRoot();
+  ownsRoot = true;
+  registerStorageRoot(root, { protection: 'volatile', isOwned: () => ownsRoot, assertAccess() {} });
+  await configureStorageRoot(root, { protectedPersistence: true });
+}
 
 beforeEach(async () => {
+  ownsRoot = false;
   try {
     umount('/');
   } catch {
@@ -17,19 +28,23 @@ beforeEach(async () => {
 
 describe('protected browser root', () => {
   it('rejects raw persistence and replacement before opening a backing device', async () => {
-    await configureStorageRoot(await createMemoryStorageRoot(), { protectedPersistence: true });
+    await protectRoot();
     await zfs.promises.writeFile('/private-name.txt', 'private contents');
 
     await expect(mountBackend('/raw-opfs', { type: 'opfs' })).rejects.toThrow('encrypted browser vault');
     await expect(mountBackend('/raw-idb', { type: 'indexeddb' })).rejects.toThrow('encrypted browser vault');
+    await expect(mountConfigForSpec({ type: 'opfs' }, { storagePolicy: 'plaintext' })).rejects.toThrow('encrypted browser vault');
     await expect(migrateStorage('opfs')).rejects.toThrow('expose plaintext');
     await expect(initFileSystem('memory')).rejects.toThrow('legacy raw storage cannot replace');
+    await expect(unmountBackend('/')).rejects.toThrow('owning storage session');
+    await expect(mountBackend('/', { type: 'memory' })).rejects.toThrow('owning storage session');
     expect(await zfs.promises.readFile('/private-name.txt', 'utf8')).toBe('private contents');
     expect(await zfs.promises.readdir('/')).toEqual(['private-name.txt']);
+    await expect(configureStorageRoot(await createMemoryStorageRoot())).rejects.toThrow('owns the root');
   });
 
   it('still permits volatile nested scratch mounts', async () => {
-    await configureStorageRoot(await createMemoryStorageRoot(), { protectedPersistence: true });
+    await protectRoot();
     await mountBackend('/tmp', { type: 'memory' });
     try {
       await zfs.promises.writeFile('/tmp/transient.txt', 'volatile');
@@ -37,6 +52,18 @@ describe('protected browser root', () => {
     } finally {
       await unmountBackend('/tmp');
     }
+  });
+
+  it('does not trust a public protectedPersistence boolean', async () => {
+    await expect(configureStorageRoot(await createMemoryStorageRoot(), { protectedPersistence: true })).rejects.toThrow('core-owned');
+    expect(await zfs.promises.readdir('/')).toEqual([]);
+  });
+
+  it('requires an explicit plaintext choice for legacy persistent initialization', async () => {
+    await expect(initFileSystem('indexeddb')).rejects.toThrow('storagePolicy: plaintext');
+    await expect(mountConfigForSpec({ type: 'opfs' })).rejects.toThrow('storagePolicy: plaintext');
+    await expect(initFileSystem('memory', { storagePolicy: 'protected' })).rejects.toThrow('core storage context');
+    expect(await zfs.promises.readdir('/')).toEqual([]);
   });
 });
 

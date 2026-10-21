@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Public `@artipod/core/storage` sessions own protected persistence, key leases,
+  workspace migration, durability, teardown, recovery and reset outside the SPA
+  (#118). Persistent sessions require encryption by default; explicit memory and
+  plaintext modes report their actual protection. A native encrypted-directory
+  adapter shares the lifecycle through `@artipod/core/storage/node`.
+- Validate protected pod, adopted filesystem and metadata contexts before
+  initialization writes. Raw persistent manifests and browser initialization now
+  require `storagePolicy: 'plaintext'`; existing sandbox storage exports remain
+  deprecated compatibility aliases. See `docs/encryption.md` for the upgrade path.
+- Test an independently installed npm tarball in Node and Chromium, scanning raw
+  write history and final native/OPFS/IndexedDB backing for private names and data.
+
 ### Fixed
 
 - Encrypt the browser SPA's whole persistent filesystem, including blank scratch

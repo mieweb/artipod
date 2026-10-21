@@ -202,7 +202,9 @@ Single package, ESM subpath exports (browser/node split via export conditions):
 @artipod/core            ArtiPod, ArtiMount, pod manifest, pod events
 @artipod/core/tools      VS Code-schema tools + bash, OpenAI & MCP serializers
 @artipod/core/prompts    prompt templates + buildPrompt
-@artipod/core/sandbox    just-bash isolate, ZenFS adapter, storage backends
+@artipod/core/sandbox    just-bash isolate, ZenFS adapter, legacy storage aliases
+@artipod/core/storage    protected sessions, key leases, encrypted browser persistence
+@artipod/core/storage/node  native encrypted-directory backing (node-only)
 @artipod/core/agent      tool-calling loop, OpenAI-compatible + local ONNX clients
 @artipod/core/proc       /proc providers (host state as files)
 @artipod/core/host       headless UI controllers (terminal session, file buffer, tree)

@@ -102,8 +102,5 @@ export class UiStateIO {
   }
 }
 
-/** Legacy upper locator only. An unkeyed ref hash is not an encryption boundary. */
-export async function upperDirName(id: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`artipod-upper:${id}`));
-  return Array.from(new Uint8Array(digest).slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
-}
+/** Legacy source locator; core owns the migration. */
+export { upperDirName } from '@artipod/core/storage';

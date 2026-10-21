@@ -6,9 +6,8 @@
  */
 import { createStore } from 'zustand/vanilla';
 
-export interface SettingsSnapshot {
-  forcedOffline: boolean;
-}
+import type { SettingsSnapshot } from '@artipod/core/storage';
+export type { SettingsSnapshot } from '@artipod/core/storage';
 
 export const settingsStore = createStore<SettingsSnapshot>()(() => ({
   forcedOffline: false,

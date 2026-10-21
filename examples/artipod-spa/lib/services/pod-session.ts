@@ -91,7 +91,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   const brokerLease = svc.getLease();
   let cowUpper: unknown;
   if (route.isRef && route.mode !== 'ro') {
-    cowUpper = await openWorkspaceUpper({ fs, ref: route.id, getKey: svc.requireKey, encrypted: !!info?.encrypted, flush: flushFileSystem });
+    cowUpper = await openWorkspaceUpper({ ref: route.id });
   }
   const blankRoot = `/work/${route.id}`;
   if (!route.isRef) await fs.promises.mkdir(blankRoot, { recursive: true }).catch(() => {});
@@ -207,10 +207,12 @@ async function bootPodSession(route: Route): Promise<PodSession> {
 
   const pod = await createZenFsPod(
     {
-      mounts: [{ name: 'root', path: '/', source: { kind: 'backend', backend: info?.backend ?? 'indexeddb' }, mode: 'rw' }],
+      mounts: [{ name: 'root', path: '/', source: { kind: 'backend', backend: info?.backend === 'opfs' ? 'opfs' : info?.backend === 'indexeddb' ? 'indexeddb' : 'memory' }, mode: 'rw' }],
     },
     {
       adopt: fs,
+      storage: info ?? undefined,
+      storagePolicy: 'protected',
       events,
       cwd: route.isRef ? undefined : blankRoot,
       oci: { transport: new ArtipodRegistryProxyTransport('/api/oci') },
@@ -328,7 +330,13 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       void pod.locker.lock().catch((error) => console.warn('workspace lock audit unavailable:', error));
       return;
     }
-    if (lease && key) void pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key }).catch(reportPersistenceFailure);
+    if (lease && key) void (async () => {
+      // Authenticate the renewed key with the core root before touching even
+      // cached pod metadata. A newer lease supersedes this completion.
+      await initFileSystem();
+      if (svc.getLease() !== lease || svc.getKey() !== key) return;
+      await pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key });
+    })().catch(reportPersistenceFailure);
     if (!pushTerminated) void scheduler.run(PUSH_TASK);
   });
 

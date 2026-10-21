@@ -45,6 +45,7 @@ import { makeArtipodCommand } from '../oci/command.js';
 import type { OciTransport } from '../oci/transport.js';
 import { SnapshotManager } from '../oci/snapshot.js';
 import type { ToolCallingLoopOptions } from '../agent/types.js';
+import { assertRawStorageOperation, assertStorageProjection, guardStorageFileSystem, resolveStorageAccess, resolveStorageContext, type StorageAccessOptions } from '../storage/context.js';
 
 export interface RealizedZenFsMount {
   name: string;
@@ -70,7 +71,7 @@ async function mountConfigFor(
             'use a backend source here and sync the pod to a server for hostDir/docker execution',
         );
       }
-      const nodeFs = await import('node:fs');
+      const { nativeHostFs: nodeFs } = await import('../oci/node-workspace.js');
       base = { backend: zen.Passthrough, fs: nodeFs, prefix: source.dir };
       break;
     }
@@ -113,8 +114,15 @@ export interface ZenFsRealization {
  * Realize the manifest's mounts onto the shared ZenFS singleton of this
  * package instance and return it with the mount table.
  */
-export async function realizeZenFs(manifest: PodManifest): Promise<ZenFsRealization> {
+export async function realizeZenFs(manifest: PodManifest, options: StorageAccessOptions = {}): Promise<ZenFsRealization> {
   const m = validateManifest(manifest);
+  if (options.storage) {
+    const context = resolveStorageContext(options.storage, undefined, options.storagePolicy);
+    const mountTable = m.mounts.map((x) => ({ name: x.name, path: x.path, readonly: x.mode === 'ro' }));
+    for (const mount of mountTable) if (!mount.readonly && mount.path !== '/') await context.zfs.promises.mkdir(mount.path, { recursive: true });
+    return { zfs: context.zfs, mountTable };
+  }
+  assertManifestStoragePolicy(m, options);
   if (m.root) {
     throw new Error('realizeZenFs: manifest.root (OCI image roots) lands with the OCI store (Phase 4)');
   }
@@ -139,8 +147,15 @@ export async function realizeZenFs(manifest: PodManifest): Promise<ZenFsRealizat
   return { zfs, mountTable: m.mounts.map((x) => ({ name: x.name, path: x.path, readonly: x.mode === 'ro' })) };
 }
 
+function assertManifestStoragePolicy(manifest: PodManifest, options: StorageAccessOptions): void {
+  if (options.storagePolicy === 'protected' || options.storagePolicy === 'memory') throw new Error('A live core storage context is required for the requested storage policy');
+  assertRawStorageOperation('Manifest mounting');
+  const persistent = manifest.mounts.some(mount => mount.source.kind === 'hostDir' || (mount.source.kind === 'backend' && mount.source.backend !== 'memory'));
+  if (persistent && options.storagePolicy !== 'plaintext') throw new Error('Persistent manifest mounts require a core storage context or an explicit storagePolicy: plaintext choice');
+}
+
 export interface ZenFsPodOptions
-  extends Pick<
+  extends StorageAccessOptions, Pick<
     CreateSandboxOptions,
     'onEdit' | 'extraCommands' | 'hooks' | 'executionLimits' | 'executionLimitProfile'
   > {
@@ -289,6 +304,12 @@ export async function createZenFsPod(
   options: ZenFsPodOptions = {},
 ): Promise<ZenFsPod> {
   const m = validateManifest(manifest);
+  const storage = options.storage
+    ? resolveStorageContext(options.storage, options.adopt, options.storagePolicy)
+    : options.adopt ? resolveStorageAccess(options.adopt, options) : undefined;
+  if (storage && storage.protection !== 'plaintext' && options.sync?.basis?.upperConfig) assertStorageProjection(options.sync.basis.upperConfig, storage);
+  if (!storage) assertManifestStoragePolicy(m, options);
+  if (!storage && options.adopt && (options.storagePolicy === 'protected' || options.storagePolicy === 'memory')) throw new Error('A live core storage context is required for the requested storage policy');
   const events = options.events ?? new PodEvents();
   const proc = options.proc ?? true;
   // captured for the sync createSandbox (bindContext-based confinement)
@@ -296,8 +317,8 @@ export async function createZenFsPod(
 
   let zfs: ZenFsLike;
   let mountTable: RealizedZenFsMount[];
-  if (options.adopt) {
-    zfs = options.adopt;
+  if (storage || options.adopt) {
+    zfs = storage?.zfs ?? options.adopt!;
     mountTable = m.mounts.map((x) => ({ name: x.name, path: x.path, readonly: x.mode === 'ro' }));
     for (const mount of mountTable) {
       if (!mount.readonly && mount.path !== '/') {
@@ -305,13 +326,13 @@ export async function createZenFsPod(
       }
     }
   } else {
-    ({ zfs, mountTable } = await realizeZenFs(m));
+    ({ zfs, mountTable } = await realizeZenFs(m, options));
   }
 
   const disposeProc = proc ? registerPodManifestProvider(m) : null;
   let defaultCwd = options.cwd ?? mountTable[0]?.path ?? '/';
 
-  const ociStore = new OciStore(zfs);
+  const ociStore = new OciStore(zfs, { storage, storagePolicy: options.storagePolicy });
   await ociStore.init();
   const oci = { store: ociStore, transport: options.oci?.transport };
   // The pod's namespace (D18): identity + processes + inventory — what every
@@ -326,7 +347,7 @@ export async function createZenFsPod(
   // A simple local pod must capture/materialize native links and permissions.
   // Passthrough emulates symlinks instead of creating OS links. Keep this
   // Node-only adapter behind a dynamic import for browser realizations.
-  const hostRoot = !options.adopt && m.mounts.length === 1 && m.mounts[0].path === '/' && m.mounts[0].mode === 'rw' && m.mounts[0].source.kind === 'hostDir'
+  const hostRoot = !storage && !options.adopt && m.mounts.length === 1 && m.mounts[0].path === '/' && m.mounts[0].mode === 'rw' && m.mounts[0].source.kind === 'hostDir'
     ? m.mounts[0].source.dir : undefined;
   const snapshotWorkspaceFs = isNode && hostRoot
     ? (await import('../oci/node-workspace.js')).createNativeWorkspaceFs(hostRoot) : undefined;
@@ -337,6 +358,8 @@ export async function createZenFsPod(
     // /branches are ordinary host directories, not virtual runtime mounts.
     defaultExcludes: snapshotWorkspaceFs ? false : undefined,
     store: ociStore,
+    storage,
+    storagePolicy: options.storagePolicy,
     roots: mountTable.filter((e) => !e.readonly).map((e) => e.path),
   });
 
@@ -509,10 +532,25 @@ export async function createZenFsPod(
       // pod internals are out of reach. Courtesy isolation, not security —
       // the artipod verbs still operate on the whole pod.
       const confineTo = sandboxOpts?.confineTo;
-      const shellZfs = confineTo
-        ? ((zen as unknown as { bindContext: (o: { root: string }) => { fs: unknown } }).bindContext({ root: confineTo })
-            .fs as typeof zfs)
-        : zfs;
+      let shellZfs = zfs;
+      if (confineTo) {
+        if (storage) resolveStorageContext(storage);
+        const bound = zen.bindContext({ root: confineTo });
+        const release = () => {
+          for (const handle of bound.descriptors.values()) if (!handle.isClosed) {
+            (handle as unknown as { disposeSync(force: boolean): void }).disposeSync(true);
+          }
+          bound.descriptors.clear();
+          zen.boundContexts.delete(bound.id);
+        };
+        try {
+          const confined = bound.fs as unknown as typeof zfs;
+          // A raw bound context follows ZenFS's current global mounts. Carry
+          // the owner's gates through every operation/handle so an awaiting
+          // command cannot access a replacement root after session teardown.
+          shellZfs = storage ? guardStorageFileSystem(storage, confined, release) : confined;
+        } catch (error) { release(); throw error; }
+      }
       const sandbox: Sandbox = createSandbox({
         zfs: shellZfs,
         events,

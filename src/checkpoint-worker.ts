@@ -37,7 +37,7 @@ process.once('message', async (message: Operation) => {
       await fs.mkdir(path.dirname(superblockFile), { recursive: true });
       await fs.writeFile(superblockFile, JSON.stringify(newSuperblock(message.rootId)), { flag: 'wx' });
     }
-    pod = await createZenFsPod({ mounts: [{ name: 'work', path: '/', mode: 'rw', source: { kind: 'hostDir', dir: message.workspacePath } }] }, { proc: false, cwd: '/' });
+    pod = await createZenFsPod({ mounts: [{ name: 'work', path: '/', mode: 'rw', source: { kind: 'hostDir', dir: message.workspacePath } }] }, { proc: false, cwd: '/', storagePolicy: 'plaintext' });
     const rootId = pod.oci.store.getSuperblock().podId;
     // Native CLI/terminal and workspace API snapshots share one capture policy
     // and one HEAD, so interleaving them cannot omit ordinary workspace paths.
@@ -88,9 +88,9 @@ process.once('message', async (message: Operation) => {
         if (message.destinationRootId) {
           await fs.writeFile(path.join(destination, '.artipod/superblock.json'), JSON.stringify(newSuperblock(message.destinationRootId)), { flag: 'wx' });
         }
-        const targetStore = new OciStore(targetFs);
+        const targetStore = new OciStore(targetFs, { storagePolicy: 'plaintext' });
         const targetSuperblock = await targetStore.init();
-        const targetSnapshots = new SnapshotManager({ zfs: targetFs, store: targetStore, roots: ['/'], defaultExcludes: false });
+        const targetSnapshots = new SnapshotManager({ zfs: targetFs, store: targetStore, roots: ['/'], defaultExcludes: false, storagePolicy: 'plaintext' });
         await snapshots.copyTo(message.checkpointId!, targetSnapshots);
         const restored = await targetSnapshots.restore(message.checkpointId!, { deferRootModes: true });
         result = { rootId: targetSuperblock.podId, rootMode: restored.rootModes['/'] };

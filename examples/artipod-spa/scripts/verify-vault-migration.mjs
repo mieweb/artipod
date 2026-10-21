@@ -27,21 +27,10 @@ const bundle = await build({ stdin: { resolveDir: root, contents: `
   import {openBrowserVault,createBrowserVaultAdapters,browserVaultRequired,resetBrowserVault} from './src/sandbox/browser-vault.ts';
   import {encryptedStoreMount} from './src/sandbox/encrypted-store.ts';
   import {importBlobKey,encryptBlob,isEncryptedBlob} from './src/oci/cipher.ts';
-  import {openWorkspaceUpper,workspaceUpperPaths} from './examples/artipod-spa/lib/services/workspace-storage.ts';
-  import {upperDirName} from './examples/artipod-spa/lib/services/ui-state.ts';
-  globalThis.vaultApi={zen,IndexedDB,openBrowserVault,createBrowserVaultAdapters,browserVaultRequired,resetBrowserVault,encryptedStoreMount,importBlobKey,encryptBlob,isEncryptedBlob,openWorkspaceUpper,workspaceUpperPaths,upperDirName};
-` }, plugins: [{ name: 'storage-source-fixture', setup(build) {
-  // Exercise the SPA migration service against current core sources without
-  // bundling the shell barrel or a second copy of ZenFS from SPA dependencies.
-  build.onResolve({ filter: /^@zenfs\/core(?:\/.*)?$/ }, args => ({ path: require.resolve(args.path, { paths: [root] }) }));
-  build.onResolve({ filter: /^@artipod\/core\/sandbox$/ }, () => ({ path: 'workspace-storage-core', namespace: 'storage-fixture' }));
-  build.onLoad({ filter: /.*/, namespace: 'storage-fixture' }, () => ({
-    resolveDir: root,
-    contents: `export {directoryStore,directoryMount} from ${JSON.stringify(resolve(root, 'src/sandbox/directory-store.ts'))};
-      export {encryptedStoreMount} from ${JSON.stringify(resolve(root, 'src/sandbox/encrypted-store.ts'))};`,
-  }));
-} }],
-  bundle: true, write: false, platform: 'browser', format: 'iife', target: 'es2022' });
+  import {openWorkspaceUpper,workspaceUpperPaths,upperDirName} from './src/storage/workspace.ts';
+  import {createStorageSession} from './src/storage/session.ts';
+  globalThis.vaultApi={zen,IndexedDB,openBrowserVault,createBrowserVaultAdapters,browserVaultRequired,resetBrowserVault,encryptedStoreMount,importBlobKey,encryptBlob,isEncryptedBlob,openWorkspaceUpper,workspaceUpperPaths,upperDirName,createStorageSession};
+` },  bundle: true, write: false, platform: 'browser', format: 'iife', target: 'es2022' });
 const server = createServer((request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   response.setHeader('Content-Type', request.url === '/vault.js' ? 'text/javascript' : 'text/html');
@@ -58,6 +47,14 @@ async function installHelpers(page) {
   await page.waitForFunction(() => !!window.vaultApi);
   await page.evaluate(async marker => {
     const api = window.vaultApi;
+    window.openManagedVault = async backend => {
+      const session = api.createStorageSession({ backend, keys: {
+        getKey: () => window.key, requireKey: () => window.key,
+        storagePolicy: 'encrypted', async suspendForReset() { return () => {}; },
+      } });
+      const storage = await session.open();
+      return { storage, filesystem: api.zen.mounts.get('/'), flush: () => session.flush(), close: () => session.close() };
+    };
     window.marker = marker;
     window.secret = new Uint8Array(32).fill(7);
     window.key = await api.importBlobKey(window.secret);
@@ -212,18 +209,16 @@ try {
       }
       database.close();
       window.beginObserver();
-      let vault = await openBrowserVault({ getKey: () => window.key, backend });
+      let vault = await window.openManagedVault(backend);
       if ((await indexedDB.databases()).some(db => db.name === databaseName)) throw new Error('Legacy database cleanup did not complete');
-      await zen.configure({ mounts: { '/': vault.filesystem } });
-      const options = () => ({ fs: zen.fs, ref, encrypted: true, getKey: () => window.key, flush: () => vault.flush() });
+      const options = () => ({ storage: vault.storage, ref, getKey: () => window.key });
       const upper = await openWorkspaceUpper(options());
       const empty = (await upper.readdir('/')).length === 0;
       await window.writeLogical(upper, `/${window.marker}-first.csv`, `${window.marker}-first-body`);
       await vault.flush();
       zen.umount('/');
       await vault.close();
-      vault = await openBrowserVault({ getKey: () => window.key });
-      await zen.configure({ mounts: { '/': vault.filesystem } });
+      vault = await window.openManagedVault();
       const reopened = await openWorkspaceUpper(options());
       const value = await window.readLogical(reopened, `/${window.marker}-first.csv`);
       await vault.flush();
@@ -251,10 +246,9 @@ try {
       if (rootState === 'empty') records.push([0, new Uint8Array()]);
       await window.writeOldDatabase(`artipod-upper::${hash}`, records);
       window.beginObserver();
-      const vault = await openBrowserVault({ getKey: () => window.key });
-      await zen.configure({ mounts: { '/': vault.filesystem } });
+      const vault = await window.openManagedVault();
       let message;
-      try { await openWorkspaceUpper({ fs: zen.fs, ref, encrypted: true, getKey: () => window.key, flush: () => vault.flush() }); }
+      try { await openWorkspaceUpper({ storage: vault.storage, ref, getKey: () => window.key }); }
       catch (error) { message = error.message; }
       const legacy = `/.artipod/uppers/${hash}`;
       const saved = await window.readLogical(vault.filesystem, `${legacy}/123`);
@@ -288,9 +282,8 @@ try {
       await window.writeLogical(old, `/${window.marker}.csv`, `${window.marker}-plaintext-body`);
       await window.writeOldDatabase(`artipod-upper::${encodeURIComponent(ref)}`, old.store);
       window.beginObserver();
-      const vault = await openBrowserVault({ getKey: () => window.key });
-      await zen.configure({ mounts: { '/': vault.filesystem } });
-      const upper = await openWorkspaceUpper({ fs: zen.fs, ref, encrypted: true, getKey: () => window.key, flush: () => vault.flush() });
+      const vault = await window.openManagedVault();
+      const upper = await openWorkspaceUpper({ storage: vault.storage, ref, getKey: () => window.key });
       const value = await window.readLogical(upper, `/${window.marker}.csv`);
       await vault.flush();
       const scan = await window.scanRaw();

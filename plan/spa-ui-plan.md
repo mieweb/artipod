@@ -48,7 +48,7 @@ The rewrite is not just a new demo — it factors the monolith into four artifac
 | # | Deliverable | Home |
 |---|---|---|
 | D1 | **Sample app** demonstrating and TESTING synchronous editing: file nav, **kerebron** editor, **Ozwell** agent (replacing Monaco + the current AgentPanel) | `examples/artipod-spa` |
-| D2 | **Client lib** for in-browser AND in-node-isolate sync + key management — the services layer, packaged; scheduling made introspectable and surfaced as an **`artipod ps`** shell verb | packaging decided at U1 gate: `@artipod/core` subpath (e.g. `/client`) vs new `@artipod/client` package |
+| D2 | **Client lib** for in-browser AND in-node-isolate sync + key management — the services layer, packaged; scheduling made introspectable and surfaced as an **`artipod ps`** shell verb | `@artipod/core/storage` now ships keys, protected storage lifecycle, adapters and task scheduling; catalog/sync orchestration remains in the SPA services |
 | D3 | **Terminal shell component** for artipod-shell: embeddable xterm wrapper with a narrow attach/dispose contract | extracted at U4 |
 | D4 | **Serve mode = just the artipod API** — no UI logic server-side | already ratified (P2); dist-ui remains an optional static bundle it can host |
 
@@ -61,13 +61,13 @@ Success = the U7 parity checklist (all §5 behaviors) green against `artipod ser
 | P1 | **Framework: Next static export, SPA-style.** One client-only page (`'use client'`, `output: 'export'`), no `app/api`, no prerendered data. Keeps the known-good export pipeline (struct-minify plugin, buildinfo, `artipod import` flow). Vite was considered and declined — re-verifying the ZenFS-structs-vs-minifier landmine on a second toolchain buys nothing. |
 | P2 | **Backend: `artipod serve` only.** The demo's API routes (`app/api/pods|oci|git|exec|publish`) are NOT ported — serve does all of it natively now (keys, encrypt, seal, publish, write-back). Dev loop: `artipod serve --encrypt --publish …` on 2784 + `next dev` with rewrites proxying `/api/*` and `/v2/*` to it. Milestone UE proves the coverage first (the old app's routes collapse onto `createArtipodApp` with real UI traffic); U7's deletion finishes the job. |
 | P3 | **Migration: parallel app, swap at parity.** New app at `examples/artipod-spa`; artipod-sync keeps shipping as `dist-ui` until U7. No in-place refactor of the old monolith. |
-| P4 | **State: zustand, with a services layer.** Vanilla (`createStore`) stores so services and tests need no React; React binds via `useStore`. Stores hold SNAPSHOTS (serializable state); live objects — pods, sandboxes, CryptoKeys, Y.Docs — live in services and are looked up by id. **Never put key material or pod instances in a persisted store.** |
+| P4 | **State: zustand, with a services layer.** Vanilla (`createStore`) stores so services and tests need no React; React binds via `useStore`. Stores hold SNAPSHOTS (serializable state); live objects — pods, sandboxes, CryptoKeys, Y.Docs — live in services and are looked up by id. **Never put key material or pod instances in a persisted store.** Core `KeysService` owns its snapshots; the SPA bridge mirrors them into zustand. |
 | P5 | **Components: @mieweb/ui**, tokens and all. Tailwind stays for layout only; anything themed goes through `--mieweb-*` vars. lucide icons stay. |
-| P6 | **Durable state keeps its current homes** — this plan fixes the ACCESS layer, not the storage: registry stays in `/.artipod/ui-state.json` (cross-tab raw-OPFS IO + Web-Lock), offline stays in `/.artipod/oci/settings.json` (the `artipod offline` contract), the wrapped session + device key stay in IndexedDB, broker-meta/offline boot mirrors stay in localStorage. Stores are write-through caches over these. |
+| P6 | **Logical durable paths stay stable**: registry remains `/.artipod/ui-state.json` and offline remains `/.artipod/oci/settings.json` (the `artipod offline` contract), both inside the managed encrypted root. The wrapped session + device key stay in IndexedDB; broker-meta/offline boot mirrors stay in localStorage. Stores are write-through caches over these. Legacy raw-OPFS data migrates through the core vault protocol. |
 | P7 | **yorm is a spike, not a dependency** (owner: "consider using yorm for the multiple editor"). U6 evaluates `@yorm/*` 0.1.0 for concurrent editing of one file (the layer-plan Phase 7 "Yjs-in-a-file" slot) and for the multi-tab problem. Adoption is a separate ask-first decision with its own transport prerequisite (serve has no WebSocket today). |
 | P8 | **Editor = kerebron, not a Monaco port** (added 2026-09-02, owner clarification). The sample app is explicitly a test bed for synchronous editing, and kerebron ships `extension-yjs` natively — which reframes U6. Carries known integration constraints: `@kerebron/{editor,editor-kits,wasm}` peers (current, ≥0.8.6), wasm assets served under static export, CoreEditor mounted in a disposable child div, never CSS-transition the editor's width. |
 | P9 | **Agent = Ozwell** (added 2026-09-02, owner clarification), replacing the current AgentPanel — "instead of what is there". Integration entry point (embed/SDK/API) pinned with the owner before U4 starts; the old panel's pod-tool contract is the spec for what the agent can touch. |
-| P10 | **The services layer is a shippable client lib** (added 2026-09-02, owner clarification): sync + key management usable from the browser AND from node isolates — no DOM/window assumptions outside injected adapters. Its task scheduling (key renewal, push retry, verdict refresh) is introspectable and exposed in the pod shell as `artipod ps`. |
+| P10 | **The services layer is a shippable client lib** (added 2026-09-02, owner clarification): sync + key management usable from the browser AND from node isolates — no DOM/window assumptions outside injected adapters. Its task scheduling (key renewal, push retry, verdict refresh) is introspectable and exposed in the pod shell as `artipod ps`. Key custody, adapters, scheduler and the protected-storage lifecycle are exported from `@artipod/core/storage`; SPA services compose the remaining catalog/sync behavior. |
 | P11 | **AgentPod** (defined 2026-09-03, owner): an artipod whose artifacts ARE the agent — `AGENT.md` (instructions + frontmatter declaring requested capabilities BY NAME), `skills/*/SKILL.md`, `tools/` (sandbox-runnable modules / MCP tool manifests). Versioning, sealing, forking, encryption, provenance-by-digest all inherited from artipod. **Secrets and MCP endpoints are the USER's**, never in the pod or model context; delegation is a temporary, revocable grant (the S5.5 lease shape pointed at tool grants — TTL, release-now, renewal visible; surfaces in `artipod ps` as a delegation table). **harness-core** makes an AgentPod runnable locally: local mode approximates agent parity — same definition artifacts, different venue/model; datacenter-only server tools and model quality are the remaining gap. Capability-declaration schema belongs in ozwellai-api (one dialect for hosted agents and AgentPods); the layout convention + delegation mechanics belong here. Feeds U4 (the SPA's agent panel loads an AgentPod in local mode) and reframes U6's multi-editor spike context. Scope beyond the U4 spike is ask-first. |
 
 ## 2.5 Temporary vendor submodules
@@ -97,7 +97,7 @@ The heart of the problem: **ten kinds of state in five uncoordinated homes.** Ta
 |---|---|---|
 | Broker status, lease, renewal, `released`, re-keying | `lib/keys.ts` module vars + hand-rolled `Set<listener>` | `brokerStore` (status/expiry/principal snapshots); `KeysService` owns login/renewal/fetch-patch |
 | Device keypair + wrapped session (offline grant) | IndexedDB (`artipod-keys`) via inline IDB code | unchanged home; owned by `KeysService` (idb helpers extracted) |
-| Unwrapped KEKs (CryptoKey) | `keys.ts` module map | `KeysService` private — exposed as `getKey(podId)`; NEVER in a store |
+| Unwrapped KEKs (CryptoKey) | `keys.ts` module map | core `KeysService` private — exposed as `getKey()`; NEVER in a store |
 | Forced offline | pod settings (`/.artipod/oci/settings.json`) + localStorage boot mirror + module flag | `settingsStore` (fs-subscribed write-through; boot mirror kept) |
 | Broker metadata cache | localStorage `artipod-broker-meta` | `brokerStore` persist partialize (metadata only) |
 | Workspace registry (`LocalEntry`: mode, lastOpened, hasChanges, unsynced, encrypted) | fs `ui-state.json`, raw-OPFS IO, Web-Lock, read/patch helpers strewn through page.tsx | `registryStore` — same file, one module owns IO; optimistic cache + write-through |
@@ -115,19 +115,22 @@ The heart of the problem: **ten kinds of state in five uncoordinated homes.** Ta
                     │  useStore bindings
         zustand stores: broker · settings · registry · catalog · workspace
                     │  actions ⇄ subscribe
-        services = the CLIENT LIB (D2; framework-free, DOM-free, unit-tested;
-                   runs in browser and node isolates via injected adapters):
-          KeysService        (login/lease/fetch-patch/offline-grant, from lib/keys.ts)
-          PodSessionService  (createZenFsPod lifecycle: open/dispose/retry-push)
+        SPA composition services:
+          PodSessionService  (workspace open/dispose/retry-push)
           CatalogService     (server refs, local heads, ancestry verdicts)
-          TaskScheduler      (renewal/retry/refresh as named tasks → `artipod ps`)
-          state IO           (ui-state.json, pod settings, idb helpers)
+          state IO           (ui-state.json and pod-settings composition)
                     │
-        @artipod/core (+ /sandbox /oci /manager /host) ── artipod serve (/api, /v2)
+        @artipod/core/storage (framework-free; browser/Node adapters):
+          KeysService        (login/lease/fetch-patch/offline-grant + snapshots)
+          StorageSession     (protected root/flush/recovery/reset + live context)
+          TaskScheduler      (renewal/retry/refresh → `artipod ps`)
+                    │
+        @artipod/core (+ /oci /manager /host) ── artipod serve (/api, /v2)
 ```
 
 - **Routing**: stays URL-shaped (`/?artipod=<ref>&mode=`) for link-compat, parsed into a `route` slice. U2–U4 keep the old full-reload semantics between catalog↔workspace (the "one fs boot per page" assumption holds). U5 replaces reloads with `PodSessionService.close()` → `open()` transitions.
 - **The fetch patch** (lease header, forced-offline, 401-retry) stays exactly one chokepoint, installed by `KeysService` before anything renders — it is the part of `lib/keys.ts` that WORKED; it moves, it does not change.
+- **Storage ownership**: one managed root per JavaScript realm; pods share its live context. `protected` is the managed-session default; `memory` and persistent `plaintext` are explicit policies. Native disk uses `/storage/node` through the same encrypted lifecycle. Compatibility `/sandbox` exports remain available; raw persistent entry points require explicit plaintext intent. No plaintext host mount or native shell bridge is added.
 - **Store hygiene rules**: stores are serializable snapshots; derived data (verdicts, badges) computed in actions, selected with shallow selectors; no store-to-store imports — services compose stores.
 
 ## 5. Phases
@@ -233,7 +236,8 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 |---|---|
 | Everything being replaced (read before porting a behavior) | `examples/artipod-sync/app/page.tsx`, `lib/keys.ts`, `components/{EncryptionBadge,SyncStatus,OfflineToggle,Terminal,Editor,FileTree,AgentPanel,StorageSettings}.tsx` |
 | Pod lifecycle the session service wraps | `createZenFsPod` (`src/realize/zenfs.ts`), `ZenFsPodOptions.authority/sync/hydration` |
-| Keys/lease machinery | `@artipod/core/manager` (`unwrapLoginResult`, `PodLocker.adoptLease`, `Keyring`), serve `/api/keys` (`docs/serve.md#encrypted-pods-and-key-leases-s55`) |
+| Keys/lease machinery | `@artipod/core/storage` (`KeysService`, injected adapters, `TaskScheduler`); `/manager` cryptographic/authority primitives; serve `/api/keys` (`docs/serve.md#encrypted-pods-and-key-leases-s55`) |
+| Protected local persistence | `@artipod/core/storage` (`StorageSession`, live storage context); `/storage/node` (`createNativeStorageAdapters`); `docs/encryption.md#managed-local-storage-boundary` |
 | Encrypted uppers / offline setting / verdicts | `encryptedStoreMount` (`/sandbox`), `readPodSettings` (`/oci`), `isAncestor` (`/manager`) |
 | Build pipeline to clone | `examples/artipod-sync/scripts/export-static.mjs`, root `scripts/buildinfo.mjs`, `npm run build:ui` |
 | UE detailed spec (code, tests, acceptance, gotchas) | `dry-example-server-plan.md` (local WIP — commit with this plan when UE starts); `src/server/{app,node,publish-map}.ts` |
@@ -245,6 +249,43 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 | This week's behavior contract (what parity means) | serve-plan S5.5 worklog + addenda; repo memory: badges, verdicts, offline, lease persistence semantics |
 
 ## Worklog
+
+### Core storage and key extraction — issue #118 (2026-10-21)
+
+- Moved reusable broker/key custody, device-wrapped offline grants, renewal,
+  adapters and task scheduling into `@artipod/core/storage`. Core snapshots are
+  serializable and keep keys private; SPA wrappers only mirror those snapshots
+  into the existing stores.
+- Moved protected-root ownership, flush, consumer teardown, authenticated recovery
+  and reset into the core storage session. Hosts supply authentication, UI and
+  adapters. One managed root is active per realm; pods share a live context
+  instead of reconfiguring the root. Promise and synchronous file APIs are
+  supported (sync mutations require an explicit flush); callback APIs, streams,
+  watchers and directory iterators are rejected. Reset is terminal for its
+  controller; resumed work uses a new controller or reload.
+- Managed storage defaults to `protected`. `memory` explicitly reports volatile
+  work; persistent `plaintext` requires an explicit caller choice. A requested
+  protected policy rejects forged contexts and raw caller-supplied filesystems.
+  Existing `/sandbox` exports are deprecated compatibility aliases retained
+  throughout 0.x, with removal reserved for the next major after migration; new
+  consumers use `/storage`. The 0.12 transition requires explicit plaintext
+  intent for persistent legacy manifests. Low-level OCI callers without a live
+  context retain responsibility for their own persistence.
+- Added the native directory adapter through `/storage/node`. It keeps numbered
+  encrypted records under opaque generations and holds a directory writer lock
+  through final I/O and erasure. It does not provide a plaintext host mount,
+  FUSE/OverlayFS or a native shell bridge.
+- Catalog/sync and workspace UI composition remain SPA services. This completes
+  core storage/key packaging without claiming that every D2 service has moved.
+- Verification: 27 core key-provider tests and 13 migrated workspace-migration
+  tests pass against core contexts. The SPA's 64 tests, typecheck and lint pass;
+  bridge tests cover snapshot mirroring, root/recovery/reset routing and upper
+  routing. All four documented consumer snippets typecheck against public exports.
+- Added fail-closed checks for superblocks, settings, snapshot heads/manifests
+  and garbage collection. Corrupt or inaccessible metadata is preserved and
+  surfaced; collection resolves the complete supported reachability graph
+  before deleting, including ciphertext aliases, parent images and audit chains.
+
 
 ### Dependency maintenance — SPA lint migration (2026-10-05)
 
@@ -267,7 +308,7 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 - **Sample-site redeploy prepared**: `examples/artipod-spa/deploy/artipod-serve.service` — ONE process (`artipod serve` :3000) serves API + bundled dist-ui; no UI build on the box (dist-ui is committed); the unit documents installing itself and disabling the old `artipod-sync` unit. Runbook in the SPA's AGENTS.md (deploy = `git pull && npm ci && npm run build && systemctl restart artipod-serve`; `--publish`/`--encrypt` optional). **The box swap itself is the owner's action** — no SSH from here; steps are in the unit header.
 - Pushed to origin/main with everything U0–U7.
 
-**The plan is complete.** Deliverables: D1 sample app (kerebron editor, interim agent) — shipped as dist-ui; D2 client lib (services layer + artipod ps) — shipped in-app, core `/client` subpath move queued; D3 artipod-shell Terminal component — shipped in-app; D4 serve = pure API — shipped. Follow-ups queued outside this plan: serve `/yjs` relay phase (owner-ratified collab model), Ozwell tri-mode + AgentPod spike (await @mieweb/ui component + harness-core), `@artipod/core/client` packaging, upstream kerebron PRs.
+**The plan is complete.** Deliverables: D1 sample app (kerebron editor, interim agent) — shipped as dist-ui; D2 client lib (services layer + artipod ps) — originally shipped in-app; core storage/key subset now ships as `/storage` (issue #118); D3 artipod-shell Terminal component — shipped in-app; D4 serve = pure API — shipped. Follow-ups queued outside this plan: serve `/yjs` relay phase (owner-ratified collab model), Ozwell tri-mode + AgentPod spike (await @mieweb/ui component + harness-core), remaining catalog/sync client-lib packaging, upstream kerebron PRs.
 
 ### U7 — cutover, part 1: parity + dist-ui swap (2026-09-03)
 

@@ -1,8 +1,12 @@
 /** Native semantics for a single Node hostDir pod's snapshot filesystem. */
 import * as fs from 'node:fs/promises';
+import * as nativeHostFs from 'node:fs';
 import path from 'node:path';
 import type { ZenFsLike } from '../sandbox/types.js';
 import type { SnapshotFilesystem } from './snapshot.js';
+
+/** Keep every native realization dependency behind this browser-mapped module. */
+export { nativeHostFs };
 
 /** ZenFS Passthrough emulates symlinks; snapshot native links as native links. */
 export function createNativeWorkspaceFs(directory: string): ZenFsLike & SnapshotFilesystem {

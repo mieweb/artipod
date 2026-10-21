@@ -1,135 +1,88 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const key = {} as CryptoKey;
-  const source = { promises: { mkdir: vi.fn(async () => {}), writeFile: vi.fn(async () => {}) } };
-  const vault = {
-    filesystem: {}, backend: 'opfs', flush: vi.fn(async () => {}), close: vi.fn(async () => {}),
-    adoptKey: vi.fn(async () => {}), reset: vi.fn(async () => ({ warnings: [] as string[] })),
+  const source = { promises: { writeFile: vi.fn() } };
+  const info = { zfs: source, backend: 'opfs', encrypted: true, memoryOnly: false, isPrimaryTab: true };
+  const session = {
+    open: vi.fn(async () => info), flush: vi.fn(async () => {}),
+    close: vi.fn(async () => {}), reset: vi.fn(async () => ({ warnings: [] as string[] })),
   };
-  const finishKeys = vi.fn();
-  return {
-    key, source, vault, finishKeys,
-    svc: {
-      getKey: vi.fn((): CryptoKey | null => key), requireKey: vi.fn(() => key), storagePolicy: 'encrypted', setOfflineWriter: vi.fn(),
-      flushOfflinePreference: vi.fn(async () => {}),
-      suspendForReset: vi.fn(async () => finishKeys),
-    },
-    storage: {
-      browserVaultRequired: vi.fn(async () => false), loadBackendPref: vi.fn(() => null),
-      openBrowserVault: vi.fn(async () => vault), configureStorageRoot: vi.fn(async () => source),
-      createMemoryStorageRoot: vi.fn(async () => ({})), resetBrowserVault: vi.fn(async () => ({ warnings: [] as string[] })),
-    },
-  };
+  return { info, session, keys: vi.fn(() => ({})), create: vi.fn((_options: unknown) => session), pref: vi.fn((): string | null => null) };
 });
-
-vi.mock('@artipod/core/sandbox', () => mocks.storage);
-vi.mock('../lib/boot', () => ({ keys: () => mocks.svc }));
+vi.mock('@artipod/core/storage', () => ({ createStorageSession: mocks.create, StorageClosePersistenceError: class extends Error {} }));
+vi.mock('@artipod/core/sandbox', () => ({ loadBackendPref: mocks.pref }));
+vi.mock('../lib/boot', () => ({ keys: mocks.keys }));
 
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   vi.stubGlobal('window', {});
-  mocks.svc.getKey.mockImplementation(() => mocks.key);
-  mocks.svc.suspendForReset.mockImplementation(async () => mocks.finishKeys);
-  mocks.svc.flushOfflinePreference.mockImplementation(async () => {});
-  mocks.svc.storagePolicy = 'encrypted';
-  mocks.storage.openBrowserVault.mockImplementation(async () => mocks.vault);
-  mocks.storage.resetBrowserVault.mockImplementation(async () => ({ warnings: [] }));
-  mocks.vault.reset.mockImplementation(async () => ({ warnings: [] }));
-  mocks.vault.adoptKey.mockImplementation(async () => {});
+  mocks.pref.mockReturnValue(null);
+  mocks.session.open.mockResolvedValue(mocks.info);
+  mocks.session.reset.mockResolvedValue({ warnings: [] });
+  mocks.session.close.mockResolvedValue(undefined);
 });
+afterEach(() => { vi.unstubAllGlobals(); });
 
-describe('confirmed browser filesystem reset', () => {
-  it('adopts the resumed root key before persisting a pending reconnect preference', async () => {
+describe('SPA filesystem session binding', () => {
+  it('defers browser storage and keys during server rendering', async () => {
+    vi.stubGlobal('window', undefined);
     const filesystem = await import('../lib/filesystem');
-    await filesystem.initFileSystem();
-    const order: string[] = [];
-    let finish!: () => void;
-    const gate = new Promise<void>(resolve => { finish = resolve; });
-    mocks.vault.adoptKey.mockImplementation(async () => { order.push('adopt'); });
-    mocks.svc.flushOfflinePreference.mockImplementation(async () => { order.push('persist'); await gate; });
-    let resumed = false;
-    const reopening = filesystem.initFileSystem().then(() => { resumed = true; });
-    await vi.waitFor(() => expect(order).toEqual(['adopt', 'persist']));
-    expect(resumed).toBe(false);
-    finish();
-    await reopening;
-    expect(resumed).toBe(true);
+    expect(await filesystem.initFileSystem()).toBeNull();
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.keys).not.toHaveBeenCalled();
   });
 
-  it('uses the owned vault reset without releasing its locks via close first', async () => {
+  it('opens one broker-policy session with the chosen browser backend and publishes its bindings', async () => {
+    const filesystem = await import('../lib/filesystem');
+    const info = await filesystem.initFileSystem('indexeddb');
+    expect(mocks.create).toHaveBeenCalledExactlyOnceWith({ policy: 'broker', keys: mocks.keys.mock.results[0].value, backend: 'indexeddb' });
+    expect(info).toBe(mocks.info);
+    expect(filesystem.fs).toBe(mocks.info.zfs);
+    expect(filesystem.fsInfo).toBe(mocks.info);
+    await filesystem.initFileSystem('opfs');
+    expect(mocks.create).toHaveBeenCalledOnce();
+    expect(mocks.session.open).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses only persistent browser backend preferences when constructing the core session', async () => {
+    mocks.pref.mockReturnValue('memory');
     const filesystem = await import('../lib/filesystem');
     await filesystem.initFileSystem();
-    mocks.vault.reset.mockResolvedValue({ warnings: ['A failed write was discarded during reset'] });
-    const result = await filesystem.resetFileSystem();
-    expect(mocks.vault.reset).toHaveBeenCalledOnce();
-    expect(mocks.vault.close).not.toHaveBeenCalled();
-    expect(mocks.storage.resetBrowserVault).not.toHaveBeenCalled();
-    expect(result.warnings).toEqual(['A failed write was discarded during reset']);
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({ policy: 'broker', backend: undefined });
+  });
+
+  it('returns core reset warnings and clears the app snapshot', async () => {
+    const filesystem = await import('../lib/filesystem');
+    await filesystem.initFileSystem();
+    const result = { warnings: ['A failed write was discarded during reset'] };
+    mocks.session.reset.mockResolvedValue(result);
+    expect(await filesystem.resetFileSystem()).toBe(result);
+    expect(mocks.session.reset).toHaveBeenCalledOnce();
+    expect(mocks.session.close).not.toHaveBeenCalled();
     expect(filesystem.fsInfo).toBeNull();
-    expect(mocks.svc.setOfflineWriter).toHaveBeenLastCalledWith(null);
-    expect(mocks.svc.suspendForReset).toHaveBeenCalledOnce();
-    expect(mocks.finishKeys).toHaveBeenCalledOnce();
   });
 
-  it('takes the standalone reset lock in memory-only mode', async () => {
-    mocks.svc.getKey.mockReturnValue(null);
-    mocks.svc.storagePolicy = 'plaintext';
+  it('routes standalone reset without opening storage and forwards deletion failures', async () => {
+    const failure = new Error('Deletion failed');
+    mocks.session.reset.mockRejectedValue(failure);
     const filesystem = await import('../lib/filesystem');
-    await filesystem.initFileSystem();
-    await filesystem.resetFileSystem();
-    expect(mocks.storage.resetBrowserVault).toHaveBeenCalledOnce();
-    expect(mocks.vault.close).not.toHaveBeenCalled();
-    expect(mocks.vault.reset).not.toHaveBeenCalled();
+    await expect(filesystem.resetFileSystem()).rejects.toBe(failure);
+    expect(mocks.create).toHaveBeenCalledOnce();
+    expect(mocks.session.open).not.toHaveBeenCalled();
+    expect(filesystem.fsInfo).toBeNull();
   });
 
-  it('blocks new initialization and mutations until the reset finishes', async () => {
+  it('routes durability and close to core and clears bindings when close reports failure', async () => {
     const filesystem = await import('../lib/filesystem');
+    await filesystem.flushFileSystem();
+    expect(mocks.create).not.toHaveBeenCalled();
     await filesystem.initFileSystem();
-    let finish!: () => void;
-    const gate = new Promise<void>(resolve => { finish = resolve; });
-    mocks.vault.reset.mockImplementation(async () => { await gate; return { warnings: [] }; });
-    const resetting = filesystem.resetFileSystem();
-    await vi.waitFor(() => expect(mocks.vault.reset).toHaveBeenCalledOnce());
-    await expect(filesystem.initFileSystem()).rejects.toThrow('reset is in progress');
-    await expect(filesystem.fs.promises.writeFile('/new.csv', 'later')).rejects.toThrow('reset is in progress');
-    expect(mocks.source.promises.writeFile).not.toHaveBeenCalled();
-    const closing = filesystem.closeFileSystem();
-    finish();
-    await resetting;
-    await closing;
-    expect(mocks.vault.close).not.toHaveBeenCalled();
-  });
-
-  it('propagates deletion failures and allows an explicit standalone retry', async () => {
-    const filesystem = await import('../lib/filesystem');
-    await filesystem.initFileSystem();
-    mocks.vault.reset.mockRejectedValue(new Error('Deletion failed'));
-    await expect(filesystem.resetFileSystem()).rejects.toThrow('Deletion failed');
-    expect(mocks.vault.close).not.toHaveBeenCalled();
-    expect(mocks.finishKeys).toHaveBeenCalledOnce();
-    await filesystem.resetFileSystem();
-    expect(mocks.storage.resetBrowserVault).toHaveBeenCalledOnce();
-    await expect(filesystem.initFileSystem()).rejects.toThrow('reset is in progress');
-  });
-
-  it('drains key-service persistence before touching backing deletion and drops keys only afterward', async () => {
-    const filesystem = await import('../lib/filesystem');
-    await filesystem.initFileSystem();
-    let finishDrain!: () => void;
-    const draining = new Promise<void>(resolve => { finishDrain = resolve; });
-    mocks.svc.suspendForReset.mockImplementation(async () => { await draining; return mocks.finishKeys; });
-    mocks.vault.reset.mockImplementation(async () => {
-      expect(mocks.finishKeys).not.toHaveBeenCalled();
-      return { warnings: [] };
-    });
-    const resetting = filesystem.resetFileSystem();
-    await vi.waitFor(() => expect(mocks.svc.suspendForReset).toHaveBeenCalledOnce());
-    expect(mocks.vault.reset).not.toHaveBeenCalled();
-    finishDrain();
-    await resetting;
-    expect(mocks.vault.reset).toHaveBeenCalledOnce();
-    expect(mocks.finishKeys).toHaveBeenCalledOnce();
+    await filesystem.flushFileSystem();
+    expect(mocks.session.flush).toHaveBeenCalledOnce();
+    const failure = new Error('flush failed while closing');
+    mocks.session.close.mockRejectedValue(failure);
+    await expect(filesystem.closeFileSystem()).rejects.toBe(failure);
+    expect(filesystem.fsInfo).toBeNull();
   });
 });
