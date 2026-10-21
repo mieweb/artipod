@@ -23,11 +23,25 @@ catch (error) {
 }
 const bundle = await build({ stdin: { resolveDir: root, contents: `
   import * as zen from '@zenfs/core';
+  import {IndexedDB} from '@zenfs/dom/IndexedDB.js';
   import {openBrowserVault,createBrowserVaultAdapters,browserVaultRequired,resetBrowserVault} from './src/sandbox/browser-vault.ts';
   import {encryptedStoreMount} from './src/sandbox/encrypted-store.ts';
   import {importBlobKey,encryptBlob,isEncryptedBlob} from './src/oci/cipher.ts';
-  globalThis.vaultApi={zen,openBrowserVault,createBrowserVaultAdapters,browserVaultRequired,resetBrowserVault,encryptedStoreMount,importBlobKey,encryptBlob,isEncryptedBlob};
-` }, bundle: true, write: false, platform: 'browser', format: 'iife', target: 'es2022' });
+  import {openWorkspaceUpper,workspaceUpperPaths} from './examples/artipod-spa/lib/services/workspace-storage.ts';
+  import {upperDirName} from './examples/artipod-spa/lib/services/ui-state.ts';
+  globalThis.vaultApi={zen,IndexedDB,openBrowserVault,createBrowserVaultAdapters,browserVaultRequired,resetBrowserVault,encryptedStoreMount,importBlobKey,encryptBlob,isEncryptedBlob,openWorkspaceUpper,workspaceUpperPaths,upperDirName};
+` }, plugins: [{ name: 'storage-source-fixture', setup(build) {
+  // Exercise the SPA migration service against current core sources without
+  // bundling the shell barrel or a second copy of ZenFS from SPA dependencies.
+  build.onResolve({ filter: /^@zenfs\/core(?:\/.*)?$/ }, args => ({ path: require.resolve(args.path, { paths: [root] }) }));
+  build.onResolve({ filter: /^@artipod\/core\/sandbox$/ }, () => ({ path: 'workspace-storage-core', namespace: 'storage-fixture' }));
+  build.onLoad({ filter: /.*/, namespace: 'storage-fixture' }, () => ({
+    resolveDir: root,
+    contents: `export {directoryStore,directoryMount} from ${JSON.stringify(resolve(root, 'src/sandbox/directory-store.ts'))};
+      export {encryptedStoreMount} from ${JSON.stringify(resolve(root, 'src/sandbox/encrypted-store.ts'))};`,
+  }));
+} }],
+  bundle: true, write: false, platform: 'browser', format: 'iife', target: 'es2022' });
 const server = createServer((request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   response.setHeader('Content-Type', request.url === '/vault.js' ? 'text/javascript' : 'text/html');
@@ -171,6 +185,125 @@ async function installHelpers(page) {
 
 try {
   browser = await playwright.chromium.launch({ headless: true, ...(process.env.CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } : {}) });
+  for (const backend of ['opfs', 'indexeddb']) {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await installHelpers(page);
+    const untouched = await page.evaluate(async backend => {
+      const { zen, IndexedDB, encryptedStoreMount, openBrowserVault, openWorkspaceUpper, upperDirName } = window.vaultApi;
+      const ref = `${window.marker}-untouched:1`;
+      const hash = await upperDirName(ref);
+      const databaseName = `artipod-upper::${hash}`;
+      // Use the actual legacy config path: IndexedDB/StoreFS initializes its
+      // plaintext root before the encryption wrapper sees the backing store.
+      const config = await IndexedDB.create({ storeName: databaseName });
+      await config.ready();
+      const old = await encryptedStoreMount({ backing: { kind: 'config', config }, getKey: () => window.key });
+      if ((await old.readdir('/')).length) throw new Error('Legacy fixture must be opened but never edited');
+      await old.flush();
+      const database = config.store.db;
+      const records = await new Promise((resolve, reject) => {
+        const request = database.transaction(databaseName, 'readonly').objectStore(databaseName).getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      if (!records.length || records.some(bytes => window.vaultApi.isEncryptedBlob(new Uint8Array(bytes)))) {
+        throw new Error('Untouched legacy upper must contain only plaintext bootstrap blocks');
+      }
+      database.close();
+      window.beginObserver();
+      let vault = await openBrowserVault({ getKey: () => window.key, backend });
+      if ((await indexedDB.databases()).some(db => db.name === databaseName)) throw new Error('Legacy database cleanup did not complete');
+      await zen.configure({ mounts: { '/': vault.filesystem } });
+      const options = () => ({ fs: zen.fs, ref, encrypted: true, getKey: () => window.key, flush: () => vault.flush() });
+      const upper = await openWorkspaceUpper(options());
+      const empty = (await upper.readdir('/')).length === 0;
+      await window.writeLogical(upper, `/${window.marker}-first.csv`, `${window.marker}-first-body`);
+      await vault.flush();
+      zen.umount('/');
+      await vault.close();
+      vault = await openBrowserVault({ getKey: () => window.key });
+      await zen.configure({ mounts: { '/': vault.filesystem } });
+      const reopened = await openWorkspaceUpper(options());
+      const value = await window.readLogical(reopened, `/${window.marker}-first.csv`);
+      await vault.flush();
+      const scan = await window.scanRaw();
+      zen.umount('/');
+      await vault.close();
+      return { empty, value, scan };
+    }, backend);
+    assert.equal(untouched.empty, true);
+    assert.equal(untouched.value, `${marker}-first-body`);
+    assert.deepEqual(untouched.scan.violations, []);
+    assert.deepEqual(untouched.scan.writes, []);
+    reports.push(`Untouched plaintext-bootstrap IDB broker upper migrates through ${backend}, opens empty and preserves its first encrypted write after reopen`);
+    await context.close();
+  }
+  for (const rootState of ['missing', 'empty']) {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await installHelpers(page);
+    const damaged = await page.evaluate(async rootState => {
+      const { zen, openBrowserVault, openWorkspaceUpper, workspaceUpperPaths, upperDirName } = window.vaultApi;
+      const ref = `${window.marker}-damaged:1`;
+      const hash = await upperDirName(ref);
+      const records = [[123, new TextEncoder().encode(`${window.marker}-recoverable`)]];
+      if (rootState === 'empty') records.push([0, new Uint8Array()]);
+      await window.writeOldDatabase(`artipod-upper::${hash}`, records);
+      window.beginObserver();
+      const vault = await openBrowserVault({ getKey: () => window.key });
+      await zen.configure({ mounts: { '/': vault.filesystem } });
+      let message;
+      try { await openWorkspaceUpper({ fs: zen.fs, ref, encrypted: true, getKey: () => window.key, flush: () => vault.flush() }); }
+      catch (error) { message = error.message; }
+      const legacy = `/.artipod/uppers/${hash}`;
+      const saved = await window.readLogical(vault.filesystem, `${legacy}/123`);
+      const { directory, committed } = workspaceUpperPaths(ref);
+      const untouched = !(await vault.filesystem.exists(directory)) && !(await vault.filesystem.exists(committed));
+      const hasRoot = await vault.filesystem.exists(`${legacy}/0`);
+      await vault.flush();
+      const scan = await window.scanRaw();
+      zen.umount('/');
+      await vault.close();
+      return { message, saved, untouched, hasRoot, scan };
+    }, rootState);
+    assert.match(damaged.message, new RegExp(`root block is ${rootState}`));
+    assert.equal(damaged.saved, `${marker}-recoverable`);
+    assert.equal(damaged.untouched, true);
+    assert.equal(damaged.hasRoot, rootState === 'empty');
+    assert.deepEqual(damaged.scan.violations, []);
+    assert.deepEqual(damaged.scan.writes, []);
+    reports.push(`Damaged hashed IDB upper with ${rootState} root retains its raw records and refuses workspace migration`);
+    await context.close();
+  }
+  {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await installHelpers(page);
+    const named = await page.evaluate(async () => {
+      const { zen, openBrowserVault, openWorkspaceUpper } = window.vaultApi;
+      const ref = `${window.marker}-plaintext:1`;
+      const old = zen.InMemory.create({});
+      await old.ready();
+      await window.writeLogical(old, `/${window.marker}.csv`, `${window.marker}-plaintext-body`);
+      await window.writeOldDatabase(`artipod-upper::${encodeURIComponent(ref)}`, old.store);
+      window.beginObserver();
+      const vault = await openBrowserVault({ getKey: () => window.key });
+      await zen.configure({ mounts: { '/': vault.filesystem } });
+      const upper = await openWorkspaceUpper({ fs: zen.fs, ref, encrypted: true, getKey: () => window.key, flush: () => vault.flush() });
+      const value = await window.readLogical(upper, `/${window.marker}.csv`);
+      await vault.flush();
+      const scan = await window.scanRaw();
+      zen.umount('/');
+      await vault.close();
+      return { value, scan };
+    });
+    assert.equal(named.value, `${marker}-plaintext-body`);
+    assert.deepEqual(named.scan.violations, []);
+    assert.deepEqual(named.scan.writes, []);
+    reports.push('Named plaintext IDB upper still migrates as a logical workspace tree');
+    await context.close();
+  }
   {
     const context = await browser.newContext();
     const owner = await context.newPage();

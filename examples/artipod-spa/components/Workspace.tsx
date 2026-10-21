@@ -26,6 +26,7 @@ import AgentPanel from '@/components/AgentPanel';
 import LayersView from '@/components/LayersView';
 import { Layers as LayersIcon } from 'lucide-react';
 import { editorDrafts } from '@/lib/services/editor-drafts';
+import { registerFileSystemTeardown } from '@/lib/filesystem';
 
 const Terminal = dynamicImport(() => import('@/components/Terminal'), { ssr: false });
 
@@ -43,17 +44,20 @@ export default function Workspace({ route }: { route: Route }) {
     let cancelled = false;
     let opened: PodSession | null = null;
     let offInspect: (() => void) | undefined;
-    const close = (session: PodSession): void => {
-      void session.close().catch((error) => {
-        // Teardown still disposes the pod in its finally block. Preserve the
-        // persistence failure in diagnostics instead of an unhandled promise.
-        console.error('workspace close failed:', error);
-      });
-    };
+    let closing: Promise<void> | null = null;
+    const close = (session: PodSession): Promise<void> => closing ??= session.close();
     // Show "Opening…" NOW — the boot itself queues behind the previous
     // session's serialized close (flush-push included).
     workspaceStore.setState({ ...initialWorkspace, syncActive: route.isRef && route.mode === 'rw' });
-    void openPodSession(route)
+    const opening = openPodSession(route);
+    const teardown = registerFileSystemTeardown(async () => {
+      cancelled = true;
+      offInspect?.();
+      sessionRef.current = null;
+      const session = opened ?? await opening.catch(() => null);
+      if (session) await close(session);
+    }, 'Workspace session');
+    void opening
       .then((session) => {
         if (cancelled) return close(session);
         opened = session;
@@ -80,15 +84,12 @@ export default function Workspace({ route }: { route: Route }) {
       })
       .catch((e) => {
         console.error('workspace boot failed:', e);
-        workspaceStore.setState({ phase: 'error', error: (e as Error).message });
+        if (!cancelled) workspaceStore.setState({ phase: 'error', error: (e as Error).message });
       });
     return () => {
       // U5: leaving the route closes the session — flush-push, unsubscribe,
       // pod.dispose (overlays + proc providers), Web Lock release.
-      cancelled = true;
-      offInspect?.();
-      sessionRef.current = null;
-      if (opened) close(opened);
+      void teardown().catch(error => console.error('workspace close failed:', error));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.id, route.isRef]);

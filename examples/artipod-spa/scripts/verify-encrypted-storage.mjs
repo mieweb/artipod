@@ -452,6 +452,62 @@ try {
     assert.equal(await readSavedText(), `${names.editorDraft}\n`, 'Explicit save did not write the restored editor text');
     await audit('restored editor explicitly saved');
   });
+  for (const interruption of ['release', 'expiry']) await step(`recover a queued write interrupted by ${interruption} without losing drafts`, async () => {
+    const editable = page.locator('.ProseMirror[contenteditable="true"]:visible').first();
+    const draft = `${names.editorDraft}-${interruption}-recovery`;
+    const saved = await page.evaluate(async (names) => window.__artipod.zfs.promises.readFile(`/work/${names.workspace}/${names.editorFile}`, 'utf8'), names);
+    await editable.fill(draft);
+    await page.getByLabel('Unsaved changes', { exact: true }).waitFor();
+    if (interruption === 'expiry') {
+      await page.getByRole('button', { name: 'online', exact: true }).click();
+      await page.evaluate(() => window.__artipod.zfs.promises.mkdir('/.artipod', { recursive: true }));
+    }
+    // Hold encryption before its first backing commit so lease revocation
+    // leaves the saved generation intact while poisoning the pending queue.
+    await page.evaluate(async (names) => {
+      const encrypt = SubtleCrypto.prototype.encrypt;
+      let resume;
+      let entered;
+      const held = new Promise(resolve => { resume = resolve; });
+      const started = new Promise(resolve => { entered = resolve; });
+      SubtleCrypto.prototype.encrypt = async function (...args) {
+        entered();
+        await held;
+        return encrypt.apply(this, args);
+      };
+      window.__resumePendingEncryption = () => { SubtleCrypto.prototype.encrypt = encrypt; resume(); };
+      window.__interruptedWrite = window.__artipod.zfs.promises.writeFile(`/work/${names.workspace}/${names.editorFile}`, names.editorSaved)
+        .then(() => ({ saved: true }), error => ({ saved: false, error: error.message }));
+      await started;
+    }, names);
+    try {
+      if (interruption === 'release') await page.getByRole('button', { name: 'Release the key lease', exact: true }).click();
+      else {
+        const remaining = await page.evaluate(() => window.__artipod.locker.status()[0].expiresAt - Date.now());
+        await page.clock.fastForward(Math.max(1, remaining + 1000));
+      }
+      await page.getByRole('heading', { name: 'Browser storage is locked', exact: true }).waitFor();
+    } finally { await page.evaluate(() => window.__resumePendingEncryption()); }
+    const result = await page.evaluate(() => window.__interruptedWrite);
+    assert.equal(result.saved, false, 'A write interrupted by lease revocation was reported as saved');
+    if (interruption === 'expiry') {
+      await page.clock.setSystemTime(new Date());
+      await page.getByRole('button', { name: 'offline (forced)', exact: true }).click();
+    }
+    await page.getByRole('button', { name: /encrypted · locked — login/ }).click();
+    await page.getByRole('heading', { name: 'Browser storage could not open', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Recover saved storage', exact: true }).click();
+    await ready();
+    await page.getByRole('alert').filter({ hasText: 'Storage reopened from its saved generation after a failed write.' }).waitFor();
+    await page.getByLabel('Unsaved changes', { exact: true }).waitFor();
+    await page.waitForFunction(draft => document.querySelector('.ProseMirror[contenteditable="true"]')?.textContent === draft, draft);
+    const after = await page.evaluate(async (names) => window.__artipod.zfs.promises.readFile(`/work/${names.workspace}/${names.editorFile}`, 'utf8'), names);
+    assert.equal(after, saved, 'Recovery reported the interrupted write as durable or silently saved the draft');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByLabel('Unsaved changes', { exact: true }).waitFor({ state: 'detached' });
+    assert.equal(await page.evaluate(async (names) => window.__artipod.zfs.promises.readFile(`/work/${names.workspace}/${names.editorFile}`, 'utf8'), names), `${draft}\n`, 'The recovered draft could not be saved explicitly');
+    await audit(`queued write recovery after ${interruption}`);
+  });
   await step('publish scratch and push an overlay with filename metadata', async () => {
     const result = await page.evaluate(async (names) => {
       const pod = window.__artipod;
