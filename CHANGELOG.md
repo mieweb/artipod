@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Migrate legacy OPFS/IndexedDB data through verified encrypted generations;
   require a key lease and one writer, surface persistence errors, and offer
   clearly labeled memory-only work when no broker is configured.
+- Preserve unsaved editor drafts in tab memory through lease locking, retain
+  reset ownership until deletion completes, and preserve damaged legacy workspace
+  blocks rather than migrating them as an empty tree.
 
 ## [0.12.0] - 2026-09-14
 

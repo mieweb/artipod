@@ -37,6 +37,20 @@ export async function openWorkspaceUpper(options: {
     const hasTree = await p.exists(legacyTree);
     const hasBlocks = await p.exists(legacyBlocks);
     if (hasTree && hasBlocks) throw new Error('Conflicting legacy workspace copies require recovery before opening');
+    if (hasBlocks) {
+      // StoreFS creates an empty root when block zero is absent. A legacy
+      // upper must prove it has an existing root before mounting it so that
+      // a damaged source cannot become an empty, successfully migrated tree.
+      try {
+        const bytes = new Uint8Array(await p.readFile(`${legacyBlocks}/0`));
+        if (bytes.length === 0) throw new Error('Legacy workspace root block is empty; saved blocks were preserved');
+      } catch (error) {
+        if ((error as { code?: string }).code === 'ENOENT') {
+          throw new Error('Legacy workspace root block is missing; saved blocks were preserved');
+        }
+        throw error;
+      }
+    }
     // A directory without its commit record is an interrupted migration, not
     // a ready workspace. Its original source has not been retired yet.
     if (await p.exists(directory)) await p.rm(directory, { recursive: true });

@@ -36,6 +36,19 @@ async function seedTree() {
 }
 
 describe('workspace upper migration inside the encrypted root', () => {
+  it.each(['missing', 'empty'])('preserves a damaged legacy upper with a %s root', async kind => {
+    const { options } = await fixture();
+    const legacyBlocks = `/.artipod/uppers/${await upperDirName(REF)}`;
+    await fs.promises.mkdir(legacyBlocks, { recursive: true });
+    await fs.promises.writeFile(`${legacyBlocks}/123`, 'recoverable encrypted file block');
+    if (kind === 'empty') await fs.promises.writeFile(`${legacyBlocks}/0`, new Uint8Array());
+    await expect(openWorkspaceUpper(options)).rejects.toThrow(`root block is ${kind}`);
+    expect(await fs.promises.readFile(`${legacyBlocks}/123`, 'utf8')).toBe('recoverable encrypted file block');
+    expect(await fs.promises.exists(committed)).toBe(false);
+    expect(await fs.promises.exists(destination)).toBe(false);
+    expect(await fs.promises.exists(`${legacyBlocks}/0`)).toBe(kind === 'empty');
+  });
+
   it.each([false, true])('keeps refs ending in .ready independent (reverse order: %s)', async reverse => {
     const { options } = await fixture();
     const refs = reverse ? [`${REF}.ready`, REF] : [REF, `${REF}.ready`];

@@ -2,7 +2,7 @@ name: VS Code extension
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, artipod]
   push:
     branches: [main, develop]
     tags: ['vscode-v*']

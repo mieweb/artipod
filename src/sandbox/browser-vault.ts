@@ -28,13 +28,18 @@ export interface BrowserVaultLegacySource {
   cleanup(): Promise<void>;
 }
 type VaultBacking = Exclude<EncryptedStoreBacking, { kind: 'config' }>;
-export interface BrowserVaultAdapters {
+export interface BrowserVaultResetAdapters {
+  acquireWriter(): Promise<() => void>;
+  /** Erase private state; resolve only after deletion requests have completed. */
+  erase(): Promise<void>;
+}
+export interface BrowserVaultResetResult { warnings: string[] }
+export interface BrowserVaultAdapters extends BrowserVaultResetAdapters {
   backend: BrowserVaultBackend;
   /** Must reject storage errors; null means definitive absence. */
   readControl(): Promise<BrowserVaultControl | null>;
   /** Atomic, durable replacement (the browser adapter uses an IDB transaction). */
   writeControl(control: BrowserVaultControl): Promise<void>;
-  acquireWriter(): Promise<() => void>;
   generation(id: string, mode: 'create' | 'open'): Promise<VaultBacking>;
   removeGeneration(id: string): Promise<void>;
   legacySources(): Promise<BrowserVaultLegacySource[]>;
@@ -49,6 +54,8 @@ export interface BrowserVault {
   flush(): Promise<void>;
   /** Releases both writer locks even when flushing fails. */
   close(): Promise<void>;
+  /** Confirmed erasure retains writer ownership until deletion has finished. */
+  reset(): Promise<BrowserVaultResetResult>;
 }
 
 const JOURNAL = '/.artipod/vault-migration-v1.json';
@@ -216,6 +223,10 @@ export async function openBrowserVault(options: {
   const adapters = options.adapters ?? await createBrowserVaultAdapters(options.backend);
   const release = await adapters.acquireWriter();
   let closed = false;
+  let resetting = false;
+  let closing: Promise<void> | null = null;
+  let reset: Promise<BrowserVaultResetResult> | null = null;
+  const operations = new Set<Promise<unknown>>();
   // The lease service owns the usable key. Remember its validated identity
   // weakly so this filesystem does not keep a key alive after lease expiry.
   let validatedKey: WeakRef<CryptoKey> | null = null;
@@ -227,7 +238,15 @@ export async function openBrowserVault(options: {
     return backing;
   };
   const closeBackings = () => {
-    for (const backing of backings) if (backing.kind === 'store') (backing.store as Store & { close?: () => void }).close?.();
+    const failures: unknown[] = [];
+    for (const backing of backings) if (backing.kind === 'store') {
+      try { (backing.store as Store & { close?: () => void }).close?.(); } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Browser storage connections could not all close');
+  };
+  const assertOpen = () => {
+    if (closed) throw new Error('Browser vault is closed');
+    if (resetting) throw new Error('Browser vault reset is in progress');
   };
   const accessKey = (): CryptoKey => {
     if (closed) throw new Error('Browser vault is closed');
@@ -280,28 +299,94 @@ export async function openBrowserVault(options: {
     // the SAME secret without persisting any new plaintext or extracting keys.
     await filesystem.flush();
     const keyProof = await requireExisting(backings[backings.length - 1]);
-    const flush = async () => { assertAccess(); await filesystem.flush(); };
-    return { filesystem, encrypted: true, backend: control.backend, generation: control.generation!, flush,
+    const flush = async () => { assertOpen(); assertAccess(); await filesystem.flush(); };
+    // Stop new calls before draining existing ones during reset. Binding the
+    // methods to their original FS lets already-started operations finish;
+    // every public caller (including the mounted VFS) enters through this gate.
+    const exposed = new Proxy(filesystem, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (typeof value !== 'function' || property === 'constructor') return value;
+        return (...args: unknown[]) => {
+          assertOpen();
+          const result: unknown = Reflect.apply(value, target, args);
+          if (!result || typeof result !== 'object' || !('then' in result)) return result;
+          const pending = Promise.resolve(result);
+          operations.add(pending);
+          void pending.finally(() => operations.delete(pending)).catch(() => {});
+          return pending;
+        };
+      },
+    });
+    return { filesystem: exposed, encrypted: true, backend: control.backend, generation: control.generation!, flush,
       async adoptKey(candidate = options.getKey()) {
-        if (closed) throw new Error('Browser vault is closed');
+        assertOpen();
         if (options.getKey() !== candidate) throw new Error('Renewed key is not the current browser session key');
         if (candidate === validatedKey?.deref()) return;
         await decryptBlob(keyProof, candidate);
         if (closed || options.getKey() !== candidate) throw new Error('Browser session changed during key authentication');
         validatedKey = new WeakRef(candidate);
       },
-      async close() {
-        if (closed) return;
+      close() {
+        if (reset) return reset.then(() => {});
+        if (closing) return closing;
+        if (closed) return Promise.resolve();
+        resetting = true;
         // Unlike the public fail-fast flush wrapper, this drains in-flight
         // backing I/O even after lease expiry before ownership is released.
-        try { await filesystem.flush(); } finally { closed = true; closeBackings(); release(); }
+        closing = (async () => {
+          try { await Promise.allSettled([...operations]); await filesystem.flush(); }
+          finally { closed = true; try { closeBackings(); } finally { release(); } }
+        })();
+        return closing;
+      },
+      reset() {
+        if (reset) return reset;
+        if (closed || closing) {
+          // A closed handle no longer owns its locks. Reacquire before erasing,
+          // and refuse if a different tab has become the new owner.
+          reset = (async () => {
+            try { await closing; } catch { /* Confirmed reset may discard unsaved data. */ }
+            return resetBrowserVault({ adapters });
+          })().catch(error => { reset = null; throw error; });
+          return reset;
+        }
+        resetting = true;
+        reset = (async () => {
+          const warnings: string[] = [];
+          try {
+            // No new public operation can start. Finish all earlier VFS calls
+            // before the final persistence drain and before closing IDB handles.
+            await Promise.allSettled([...operations]);
+            try { await filesystem.flush(); }
+            catch (error) { warnings.push(`Local writes could not be saved before reset: ${error instanceof Error ? error.message : String(error)}`); }
+            closed = true;
+            try { closeBackings(); }
+            catch (error) { warnings.push(`Storage connections could not all close before reset: ${error instanceof Error ? error.message : String(error)}`); }
+            await adapters.erase();
+            return { warnings };
+          } catch (error) { reset = null; throw error; }
+          finally { closed = true; release(); }
+        })();
+        return reset;
       } };
   } catch (error) {
     // Failed copies also retain ownership until their last queued write has
     // settled. The source remains untouched and a later open can safely retry.
     try { await openedFilesystem?.flush(); } catch { /* preserve the initiating failure */ }
-    closed = true; closeBackings(); release(); throw error;
+    closed = true;
+    try { closeBackings(); } catch { /* Preserve the opening failure. */ }
+    finally { release(); }
+    throw error;
   }
+}
+
+/** Explicit reset without opening/decrypting possibly locked or corrupt state. */
+export async function resetBrowserVault(options: { adapters?: BrowserVaultResetAdapters } = {}): Promise<BrowserVaultResetResult> {
+  const adapters = options.adapters ?? { acquireWriter: acquireBrowserWriter, erase: eraseBrowserStorage };
+  const release = await adapters.acquireWriter();
+  try { await adapters.erase(); return { warnings: [] }; }
+  finally { release(); }
 }
 
 // Browser adapters: an atomic IDB bootstrap selects the generation's backing.
@@ -389,12 +474,43 @@ async function writerLock(name: string): Promise<() => void> {
     }).catch(error => { if (!acquired) reject(error); });
   });
 }
+async function acquireBrowserWriter(): Promise<() => void> {
+  const releaseVault = await writerLock('artipod-vault');
+  try {
+    const releaseLegacy = await writerLock('artipod-sync-fs');
+    return () => { releaseLegacy(); releaseVault(); };
+  } catch (error) { releaseVault(); throw error; }
+}
+async function eraseBrowserStorage(): Promise<void> {
+  const root = await browserOpfsRoot();
+  if (typeof indexedDB === 'undefined' || !indexedDB.databases) throw new Error('Browser reset requires IndexedDB database inventory support');
+  const databases = (await indexedDB.databases()).map(db => db.name).filter((name): name is string =>
+    !!name && (name.startsWith('artipod') || name === 'browser-git-fs'));
+  if (root) {
+    // Older builds used the entire origin filesystem. Preserve the explicitly
+    // public model cache; all other entries are current or legacy private state.
+    for (const [name] of await directoryEntries(root)) if (name !== 'artipod-models') await root.removeEntry(name, { recursive: true });
+  }
+  // Keep the encryption-required bootstrap until every backing has gone, so a
+  // partial failure cannot make another tab choose a fresh plaintext store.
+  databases.sort((a, b) => a === CONTROL_DB ? 1 : b === CONTROL_DB ? -1 : a.localeCompare(b));
+  for (const name of databases) await new Promise<void>((resolve, reject) => {
+    const deleting = indexedDB.deleteDatabase(name);
+    deleting.onsuccess = () => resolve();
+    deleting.onerror = () => reject(deleting.error);
+    // onblocked is nonterminal: the request can still delete the DB later.
+    // Keep BOTH writer locks until onsuccess/onerror settles that request.
+    deleting.onblocked = () => {};
+  });
+}
 async function deleteDatabase(name: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const deleting = indexedDB.deleteDatabase(name);
     deleting.onsuccess = () => resolve();
     deleting.onerror = () => reject(deleting.error);
-    deleting.onblocked = () => reject(new Error('Legacy database cleanup is blocked by another tab'));
+    // A blocked request can still delete this database later. Keep migration
+    // ownership until that deletion reaches a terminal event too.
+    deleting.onblocked = () => {};
   });
 }
 async function directoryEntries(dir: FileSystemDirectoryHandle): Promise<[string, FileSystemHandle][]> {
@@ -523,13 +639,8 @@ export async function createBrowserVaultAdapters(preferred?: BrowserVaultBackend
   }
   return {
     backend, readControl: readBrowserControl, writeControl: writeBrowserControl,
-    async acquireWriter() {
-      const releaseVault = await writerLock('artipod-vault');
-      try {
-        const releaseLegacy = await writerLock('artipod-sync-fs');
-        return () => { releaseLegacy(); releaseVault(); };
-      } catch (error) { releaseVault(); throw error; }
-    },
+    acquireWriter: acquireBrowserWriter,
+    erase: eraseBrowserStorage,
     async generation(id, mode) {
       if (!/^[a-f0-9]{32}$/.test(id)) throw new Error('Invalid vault generation');
       if (backend === 'opfs') {

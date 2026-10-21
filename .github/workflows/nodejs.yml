@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, develop, artipod ]
 
 jobs:
   build:
@@ -101,3 +101,60 @@ jobs:
     # export:static carries the struct-minify + baked-version assertions
     - name: Static export (with assertions)
       run: npm run export:static
+
+  browser-storage:
+    name: Encrypted browser storage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 22.x
+        cache: npm
+        cache-dependency-path: |
+          package-lock.json
+          examples/artipod-spa/package-lock.json
+
+    - name: Install core and SPA dependencies
+      run: |
+        npm ci
+        npm ci --prefix examples/artipod-spa
+
+    - name: Build the browser app
+      run: npm run build:ui
+
+    - name: Install the pinned browser test runtime
+      run: |
+        npm install --prefix "$RUNNER_TEMP/artipod-browser-tests" --no-save --package-lock=false playwright@1.62.1
+        "$RUNNER_TEMP/artipod-browser-tests/node_modules/.bin/playwright" install --with-deps chromium
+
+    - name: Verify encrypted storage and migration in Chromium
+      env:
+        PLAYWRIGHT_MODULE_PATH: ${{ runner.temp }}/artipod-browser-tests/node_modules/playwright
+        BASE_URL: http://127.0.0.1:2786
+      run: |
+        probe_dir=$(mktemp -d "$RUNNER_TEMP/artipod-browser-data.XXXXXX")
+        ARTIPOD_UI_DIR="$PWD/dist-ui" node dist/cli.js serve --port 2786 \
+          --store "$probe_dir/store" --authority "$probe_dir/authority" --encrypt --no-exec \
+          > "$RUNNER_TEMP/artipod-browser-server.log" 2>&1 &
+        server_pid=$!
+        trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+        for attempt in $(seq 1 40); do
+          if curl --fail --silent --max-time 2 "$BASE_URL/api/keys" > /dev/null; then break; fi
+          sleep 0.5
+        done
+        curl --fail --silent --max-time 2 "$BASE_URL/api/keys" > /dev/null || { cat "$RUNNER_TEMP/artipod-browser-server.log"; exit 1; }
+        node examples/artipod-spa/scripts/verify-vault-migration.mjs
+        node examples/artipod-spa/scripts/verify-encrypted-storage.mjs
+
+    - name: Save browser server diagnostics
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: encrypted-browser-server-log
+        path: ${{ runner.temp }}/artipod-browser-server.log
+        if-no-files-found: ignore

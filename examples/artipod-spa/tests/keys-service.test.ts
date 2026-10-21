@@ -38,6 +38,47 @@ beforeEach(() => {
 });
 
 describe('KeysService', () => {
+  it('drains pending grant writes and blocks later renewal/device persistence during reset', async () => {
+    adapters.fetch = await realBroker();
+    const svc = new KeysService(adapters);
+    await svc.install(async () => 'tester');
+    const liveKey = svc.getKey();
+    const put = adapters.kv.put;
+    let started!: () => void;
+    const pendingWrite = new Promise<void>(resolve => { started = resolve; });
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    let writes = 0;
+    adapters.kv.put = async (key, value) => {
+      writes += 1;
+      started();
+      await gate;
+      await put(key, value);
+    };
+    const renewal = svc.login('tester');
+    await pendingWrite;
+    let suspended = false;
+    const resetting = svc.suspendForReset().then(result => { suspended = true; return result; });
+    await Promise.resolve();
+    expect(suspended).toBe(false);
+    expect(svc.getKey()).toBe(liveKey); // The owned vault can still flush.
+    finish();
+    const forgetKeys = await resetting;
+    expect(await renewal).toBe(false);
+    await put('session', undefined); // The reset erases storage only after draining.
+    await put('keypair', undefined);
+    const before = writes;
+    expect(await svc.login('tester')).toBe(false);
+    await svc.scheduler.run(RENEW_TASK);
+    forgetKeys();
+    expect(svc.getKey()).toBeNull();
+    await expect(svc.install(async () => 'tester')).rejects.toThrow('suspended for browser reset');
+    expect(await adapters.kv.get('session')).toBeUndefined();
+    expect(await adapters.kv.get('keypair')).toBeUndefined();
+    expect(writes).toBe(before);
+    svc.scheduler.dispose();
+  });
+
   it('logs in via ECDH: leased snapshot, non-extractable key, no key material in any store', async () => {
     adapters.fetch = await realBroker();
     const svc = new KeysService(adapters);
@@ -209,8 +250,10 @@ describe('KeysService', () => {
       : put(key, value);
     first.release();
     expect(await adapters.kv.get('session')).toBeDefined(); // The old grant still exists.
+    brokerStore.setState({ status: 'none', meta: null }, true); // Real reload resets the module store.
     const second = new KeysService(adapters);
     expect((await second.install(async () => 'tester')).status).toBe('locked');
+    expect(brokerStore.getState().meta?.podIds).toEqual([POD_ID]);
     expect(second.getKey()).toBeNull();
     expect(adapters.mirror.get('artipod-lease-released')).toBe('1');
     finishDelete();
@@ -251,6 +294,56 @@ describe('KeysService', () => {
     adapters.mirror.set('artipod-forced-offline', '1');
     const svc = new KeysService(adapters);
     expect(settingsStore.getState().forcedOffline).toBe(true);
+    svc.scheduler.dispose();
+  });
+
+  it('retains an explicit reconnect after a locked write fails and retries before stale settings can win', async () => {
+    const svc = new KeysService(adapters);
+    let locked = true;
+    let saved = true;
+    svc.setOfflineWriter(async value => {
+      if (locked) throw new Error('EACCES: pod locked');
+      saved = value;
+    });
+    svc.reconcileOffline(true);
+    svc.setForcedOffline(false);
+    await expect(svc.flushOfflinePreference()).rejects.toThrow('pod locked');
+    svc.reconcileOffline(saved);
+    expect(svc.forcedOffline).toBe(false);
+    expect(adapters.mirror.get('artipod-forced-offline')).toBeNull();
+    expect(saved).toBe(true);
+    locked = false;
+    await svc.flushOfflinePreference();
+    expect(saved).toBe(false);
+    svc.reconcileOffline(saved);
+    expect(svc.forcedOffline).toBe(false);
+    // Successful persistence clears the pending override: later shell edits
+    // are once again allowed to update the chip.
+    svc.reconcileOffline(true);
+    expect(svc.forcedOffline).toBe(true);
+    svc.scheduler.dispose();
+  });
+
+  it('serializes toggles and persists the latest choice after an in-flight write', async () => {
+    const svc = new KeysService(adapters);
+    const writes: boolean[] = [];
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const writer = vi.fn(async (value: boolean) => {
+      writes.push(value);
+      if (writes.length === 1) await gate;
+    });
+    svc.setOfflineWriter(writer);
+    svc.setForcedOffline(true);
+    await vi.waitFor(() => expect(writer).toHaveBeenCalledOnce());
+    svc.setForcedOffline(false);
+    svc.reconcileOffline(true);
+    expect(svc.forcedOffline).toBe(false);
+    expect(writes).toEqual([true]);
+    finish();
+    await svc.flushOfflinePreference();
+    expect(writes).toEqual([true, false]);
+    expect(svc.forcedOffline).toBe(false);
     svc.scheduler.dispose();
   });
 

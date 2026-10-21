@@ -2,7 +2,7 @@
  * The browser's entire logical root is an encrypted block store. Metadata,
  * scratch and catalog writes share the same persistence boundary as files.
  */
-import type { InitResult, StorageBackend, ZenFsLike } from '@artipod/core/sandbox';
+import type { BrowserVaultResetResult, InitResult, StorageBackend, ZenFsLike } from '@artipod/core/sandbox';
 
 export type ZenFs = ZenFsLike;
 
@@ -16,15 +16,20 @@ let initPromise: Promise<InitResult> | null = null;
 let flushRoot: (() => Promise<void>) | null = null;
 let closeRoot: (() => Promise<void>) | null = null;
 let adoptRootKey: (() => Promise<void>) | null = null;
+let resetRoot: (() => Promise<BrowserVaultResetResult>) | null = null;
+let resetPromise: Promise<BrowserVaultResetResult> | null = null;
+let resetting = false;
 
 export function initFileSystem(pref?: StorageBackend): Promise<InitResult | null> {
   if (typeof window === 'undefined') return Promise.resolve(null);
+  if (resetting) return Promise.reject(new Error('Browser storage reset is in progress; reload before opening storage'));
   if (!initPromise) {
     initPromise = init(pref).catch(async (e) => {
       try { await closeRoot?.(); } catch { /* Preserve the original opening error. */ }
       closeRoot = null;
       flushRoot = null;
       adoptRootKey = null;
+      resetRoot = null;
       fsInfo = null;
       initPromise = null; // allow retry after a failed init
       throw e;
@@ -33,6 +38,8 @@ export function initFileSystem(pref?: StorageBackend): Promise<InitResult | null
   return initPromise.then(async result => {
     await adoptRootKey?.();
     await flushRoot?.();
+    const { keys } = await import('./boot');
+    await keys().flushOfflinePreference();
     return result;
   });
 }
@@ -53,6 +60,7 @@ async function init(pref?: StorageBackend): Promise<InitResult> {
       flushRoot = vault.flush;
       closeRoot = vault.close;
       adoptRootKey = vault.adoptKey;
+      resetRoot = vault.reset;
       fs = durableFileSystem(await storage.configureStorageRoot(vault.filesystem, { protectedPersistence: true }));
     } catch (error) {
       await vault.close();
@@ -82,15 +90,46 @@ async function init(pref?: StorageBackend): Promise<InitResult> {
 
 /** Explicit durability boundary for shell, editor, publish and registry writes. */
 export async function flushFileSystem(): Promise<void> {
+  if (resetting) throw new Error('Browser storage reset is in progress');
   await flushRoot?.();
 }
 
+/** Confirmed reset holds vault ownership through erasure, including failed flushes. */
+export function resetFileSystem(): Promise<BrowserVaultResetResult> {
+  if (resetPromise) return resetPromise;
+  resetting = true;
+  const opening = initPromise;
+  resetPromise = (async () => {
+    let finishKeys: (() => void) | undefined;
+    try {
+      // If opening already started, use its eventual owned handle. A rejected
+      // open releases ownership; standalone reset must reacquire both locks.
+      try { await opening; } catch { /* Reset also works for locked/corrupt storage. */ }
+      const { keys } = await import('./boot');
+      const svc = keys();
+      svc.setOfflineWriter(null);
+      // Key/grant persistence has its own IndexedDB connections. Stop and
+      // drain those jobs too, retaining the live key until vault I/O settles.
+      finishKeys = await svc.suspendForReset();
+      if (resetRoot) return await resetRoot();
+      const storage = await import('@artipod/core/sandbox');
+      return await storage.resetBrowserVault();
+    } finally {
+      finishKeys?.();
+      closeRoot = null; flushRoot = null; adoptRootKey = null; resetRoot = null; initPromise = null; fsInfo = null;
+      resetPromise = null;
+    }
+  })();
+  return resetPromise;
+}
+
 export async function closeFileSystem(): Promise<void> {
+  if (resetPromise) { await resetPromise; return; }
   try { await closeRoot?.(); }
   finally {
     const { keys } = await import('./boot');
     keys().setOfflineWriter(null);
-    closeRoot = null; flushRoot = null; adoptRootKey = null; initPromise = null; fsInfo = null;
+    closeRoot = null; flushRoot = null; adoptRootKey = null; resetRoot = null; initPromise = null; fsInfo = null;
   }
 }
 
@@ -102,6 +141,7 @@ function durableFileSystem(source: ZenFs): ZenFs {
       if (typeof method !== 'function') return method;
       if (!mutations.has(String(property))) return method.bind(target);
       return async (...args: unknown[]) => {
+        if (resetting) throw new Error('Browser storage reset is in progress');
         const result = await method.apply(target, args);
         await flushFileSystem();
         return result;

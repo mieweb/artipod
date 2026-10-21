@@ -25,10 +25,12 @@ import StorageSettings from '@/components/StorageSettings';
 import AgentPanel from '@/components/AgentPanel';
 import LayersView from '@/components/LayersView';
 import { Layers as LayersIcon } from 'lucide-react';
+import { editorDrafts } from '@/lib/services/editor-drafts';
 
 const Terminal = dynamicImport(() => import('@/components/Terminal'), { ssr: false });
 
 export default function Workspace({ route }: { route: Route }) {
+  const editorIdentity = `${route.isRef ? 'ref' : 'scratch'}:${route.id}`;
   const snap = useStore(workspaceStore);
   const [termOpen, setTermOpen] = useState(false);
   const [termHeight, setTermHeight] = useState(300);
@@ -58,6 +60,10 @@ export default function Workspace({ route }: { route: Route }) {
         sessionRef.current = session;
         setSessionTick((t) => t + 1);
         if (route.runIntent) setView('preview');
+        else {
+          const selectedFile = editorDrafts.selectedFile(editorIdentity);
+          if (selectedFile) setEditingFile(selectedFile);
+        }
         const root = session.pod.basis?.at ?? `/work/${route.id}`;
         const inspect = async () => {
           try {
@@ -332,6 +338,7 @@ export default function Workspace({ route }: { route: Route }) {
         {snap.editingFile && (
           <div className={`absolute inset-0 ${snap.activeView === 'editor' ? 'z-10' : 'invisible z-0'}`}>
             <Editor
+              workspaceId={editorIdentity}
               filepath={snap.editingFile}
               onClose={() => {
                 setEditingFile(null);
