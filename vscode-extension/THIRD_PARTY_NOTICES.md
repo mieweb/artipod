@@ -1047,13 +1047,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-## brace-expansion@5.0.9
+## brace-expansion@5.0.12
 
 License: MIT
 
 Source: https://github.com/juliangruber/brace-expansion
 
-Package archive: https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz
+Package archive: https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz
 
 ### LICENSE
 
@@ -2746,13 +2746,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## isomorphic-git@1.41.9
+## isomorphic-git@1.42.2
 
 License: MIT
 
 Source: https://github.com/isomorphic-git/isomorphic-git
 
-Package archive: https://registry.npmjs.org/isomorphic-git/-/isomorphic-git-1.41.9.tgz
+Package archive: https://registry.npmjs.org/isomorphic-git/-/isomorphic-git-1.42.2.tgz
 
 ### LICENSE.md
 
@@ -2766,13 +2766,13 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## just-bash@3.2.0
+## just-bash@3.4.2
 
 License: Apache-2.0
 
 Source: https://github.com/vercel-labs/just-bash
 
-Package archive: https://registry.npmjs.org/just-bash/-/just-bash-3.2.0.tgz
+Package archive: https://registry.npmjs.org/just-bash/-/just-bash-3.4.2.tgz
 
 ### LICENSE
 
@@ -4281,13 +4281,13 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## undici@7.29.0
+## undici@7.29.1
 
 License: MIT
 
 Source: https://github.com/nodejs/undici
 
-Package archive: https://registry.npmjs.org/undici/-/undici-7.29.0.tgz
+Package archive: https://registry.npmjs.org/undici/-/undici-7.29.1.tgz
 
 ### LICENSE
 

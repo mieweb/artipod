@@ -266,6 +266,48 @@ describe('commit / compact / gc (done-when 4 + commit round-trip)', () => {
 });
 
 describe('in-place snapshot restore', () => {
+  it.each([
+    { roots: ['/', '/repo'], boundaryType: 'symlink' as const },
+    { roots: ['/', '/repo'], boundaryType: 'file' as const },
+    { roots: ['/', '/repo/nested'], boundaryType: 'symlink' as const },
+    { roots: ['/', '/repo/nested'], boundaryType: 'file' as const },
+  ])('rejects a $boundaryType at a captured root or its ancestor with roots $roots before mutation', async ({ roots, boundaryType }) => {
+    await zfs.promises.mkdir('/repo/nested');
+    await zfs.promises.writeFile('/repo/nested/precious', 'current work');
+    await zfs.promises.mkdir('/outside');
+    await zfs.promises.writeFile('/outside/keep', 'outside work');
+    const snapshots = new SnapshotManager({ zfs, store: pod.oci.store, roots });
+    const snapshot = (await snapshots.create())!;
+    const bytes = new TextEncoder().encode('escaped write');
+    const entries: TarWriteEntry[] = [
+      { path: '/repo', type: boundaryType, mode: 0o755, ...(boundaryType === 'symlink' ? { linkTarget: '/outside' } : { content: bytes }) },
+      { path: '/repo/nested', type: 'dir', mode: 0o755 },
+      { path: '/repo/nested/escaped', type: 'file', mode: 0o644, content: bytes },
+    ];
+    const tar = writeTar(entries);
+    const diffId = await sha256(tar);
+    await pod.oci.store.putUncompressed(diffId, tar);
+    await pod.oci.store.putLayerIndex(diffId, indexTar(tar));
+    snapshot.diff = { diffId, size: tar.length, entryCount: entries.length };
+    const files = Object.fromEntries(await Promise.all(entries.map(async entry => [entry.path, {
+      type: entry.type, mode: entry.mode, size: entry.content?.length ?? 0,
+      ...(entry.content ? { contentDigest: await sha256(entry.content) } : {}),
+      ...(entry.linkTarget ? { linkTarget: entry.linkTarget } : {}),
+    }])));
+    // Internally consistent imported bytes/index must still fail topology
+    // checks, without deleting live work, changing HEAD or creating checkout.
+    await zfs.promises.writeFile(`/.artipod/oci/snapshots/${snapshot.id}.json`, JSON.stringify(snapshot));
+    await zfs.promises.writeFile(`/.artipod/oci/snapshots/${snapshot.id}.index.json`, JSON.stringify({ formatVersion: 1, files }));
+    const head = await zfs.promises.readFile('/.artipod/oci/snapshots/HEAD', 'utf8');
+    await expect(snapshots.restore(snapshot.id)).rejects.toThrow(/Invalid Artipod snapshot (root directory|parent)/);
+    await expect(snapshots.checkout(snapshot.id, '/new-checkout')).rejects.toThrow(/Invalid Artipod snapshot (root directory|parent)/);
+    await expect(zfs.promises.lstat('/new-checkout')).rejects.toThrow();
+    expect(await zfs.promises.readFile('/repo/nested/precious', 'utf8')).toBe('current work');
+    expect(await zfs.promises.readFile('/outside/keep', 'utf8')).toBe('outside work');
+    expect(await zfs.promises.readdir('/outside')).toEqual(['keep']);
+    expect(await zfs.promises.readFile('/.artipod/oci/snapshots/HEAD', 'utf8')).toBe(head);
+  });
+
   it.each(['/.ARTIPOD/superblock.json', '/PrOc/guard'])('rejects a reserved case alias in snapshot layers before restore or checkout mutates files: %s', async reservedFile => {
     await sandbox.exec('echo baseline > /repo/a');
     await zfs.promises.mkdir('/proc', { recursive: true });
@@ -334,6 +376,19 @@ describe('in-place snapshot restore', () => {
     await pod.snapshots.restore(before.id);
     expect(await zfs.promises.readlink('/repo/link')).toBe('/outside');
     expect((await zfs.promises.stat('/repo/a')).mode & 0o777).toBe(0o644);
+  });
+
+  it('restores and checks out long ASCII and multibyte symlink targets without truncating them', async () => {
+    const targets = ['x'.repeat(100), 'x'.repeat(101), '目标/'.repeat(25)];
+    for (const [i, target] of targets.entries()) await zfs.promises.symlink(target, `/repo/link-${i}`);
+    const snapshot = (await pod.snapshots.create())!;
+    for (const i of targets.keys()) await zfs.promises.unlink(`/repo/link-${i}`);
+    await pod.snapshots.restore(snapshot.id);
+    const checkout = await pod.snapshots.checkout(snapshot.id);
+    for (const [i, target] of targets.entries()) {
+      expect(await zfs.promises.readlink(`/repo/link-${i}`)).toBe(target);
+      expect(await zfs.promises.readlink(`${checkout}/repo/link-${i}`)).toBe(target);
+    }
   });
 
   it('rejects corrupt OCI bytes before deleting or writing workspace files', async () => {

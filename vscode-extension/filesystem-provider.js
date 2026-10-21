@@ -87,7 +87,7 @@ class ArtipodFileSystemProvider {
 
   stat(uri) {
     return this.operation(uri, async local => {
-      const info = await fs.lstat(local);
+      let info = await fs.lstat(local);
       let type = info.isDirectory() ? this.vscode.FileType.Directory : this.vscode.FileType.File;
       if (info.isSymbolicLink()) {
         type = this.vscode.FileType.SymbolicLink;
@@ -96,6 +96,7 @@ class ArtipodFileSystemProvider {
           // broken or external link remains a visible, manageable link entry.
           const target = await fs.stat(await this.localPath(uri));
           type |= target.isDirectory() ? this.vscode.FileType.Directory : this.vscode.FileType.File;
+          info = target;
         } catch (error) {
           const converted = this.convertError(error, uri);
           if (!['FileNotFound', 'FileNotADirectory', 'NoPermissions', 'ELOOP'].includes(converted.code)) { throw converted; }
@@ -106,9 +107,12 @@ class ArtipodFileSystemProvider {
   }
 
   readDirectory(uri) {
-    return this.operation(uri, async local => (await fs.readdir(local, { withFileTypes: true })).map(entry => [
-      entry.name, entry.isDirectory() ? this.vscode.FileType.Directory : entry.isSymbolicLink() ? this.vscode.FileType.SymbolicLink : this.vscode.FileType.File
-    ]));
+    return this.operation(uri, async local => Promise.all((await fs.readdir(local, { withFileTypes: true })).map(async entry => {
+      const type = entry.isSymbolicLink()
+        ? (await this.stat(this.uri(path.relative(this.root, path.join(local, entry.name))))).type
+        : entry.isDirectory() ? this.vscode.FileType.Directory : this.vscode.FileType.File;
+      return [entry.name, type];
+    })));
   }
 
   readFile(uri) { return this.operation(uri, local => fs.readFile(local)); }

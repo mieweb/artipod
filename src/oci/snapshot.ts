@@ -446,10 +446,23 @@ export class SnapshotManager {
       if (bytes && bytes.length !== entry.size) throw new Error(`Truncated Artipod snapshot entry: ${path}`);
       target.set(path, { type: entry.type as FileRecord['type'], size: entry.size, mode: entry.mode & 0o777, linkTarget: entry.linkTarget, bytes, contentDigest: bytes ? await sha256(bytes) : undefined });
     }
+    // Captured roots can be omitted from the tar, but they and their ancestors
+    // must still be directories. Overlapping roots cannot hide an explicit
+    // symlink/file at a root boundary from the parent topology validation.
+    const implicitDirectories = new Set(['/']);
+    for (const root of this.roots) {
+      let directory = root;
+      while (directory !== '/') {
+        implicitDirectories.add(directory);
+        directory = directory.slice(0, directory.lastIndexOf('/')) || '/';
+      }
+    }
     for (const [path, entry] of target) {
+      if (implicitDirectories.has(path) && entry.type !== 'dir') throw new Error(`Invalid Artipod snapshot root directory: ${path}`);
       let parent = path.slice(0, path.lastIndexOf('/')) || '/';
-      while (!this.roots.includes(parent)) {
-        if (target.get(parent)?.type !== 'dir') throw new Error(`Invalid Artipod snapshot parent: ${parent}`);
+      while (parent !== '/') {
+        const ancestor = target.get(parent);
+        if (ancestor ? ancestor.type !== 'dir' : !implicitDirectories.has(parent)) throw new Error(`Invalid Artipod snapshot parent: ${parent}`);
         parent = parent.slice(0, parent.lastIndexOf('/')) || '/';
       }
       if (entry.type === 'symlink' && (typeof entry.linkTarget !== 'string' || entry.linkTarget.includes('\0'))) throw new Error(`Invalid Artipod snapshot symlink: ${path}`);

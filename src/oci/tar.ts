@@ -68,15 +68,15 @@ function normalizeTarPath(name: string): string {
   return p.startsWith('/') ? p : `/${p}`;
 }
 
-function parsePax(content: string): Record<string, string> {
+function parsePax(content: Uint8Array): Record<string, string> {
   const out: Record<string, string> = {};
   let i = 0;
   while (i < content.length) {
-    const space = content.indexOf(' ', i);
+    const space = content.indexOf(0x20, i);
     if (space === -1) break;
-    const total = parseInt(content.slice(i, space), 10);
+    const total = parseInt(decoder.decode(content.subarray(i, space)), 10);
     if (!Number.isFinite(total) || total <= 0) break;
-    const record = content.slice(space + 1, i + total - 1); // strip trailing \n
+    const record = decoder.decode(content.subarray(space + 1, i + total - 1)); // strip trailing \n
     const eq = record.indexOf('=');
     if (eq !== -1) out[record.slice(0, eq)] = record.slice(eq + 1);
     i += total;
@@ -116,10 +116,10 @@ export function indexTar(bytes: Uint8Array): LayerEntry[] {
 
     switch (typeflag) {
       case 'x': // PAX per-file
-        paxOverrides = { ...globalPax, ...parsePax(decoder.decode(bytes.subarray(dataOffset, dataEnd))) };
+        paxOverrides = { ...globalPax, ...parsePax(bytes.subarray(dataOffset, dataEnd)) };
         break;
       case 'g': // PAX global
-        globalPax = { ...globalPax, ...parsePax(decoder.decode(bytes.subarray(dataOffset, dataEnd))) };
+        globalPax = { ...globalPax, ...parsePax(bytes.subarray(dataOffset, dataEnd)) };
         break;
       case 'L': // GNU long name
         gnuLongName = readString(bytes, dataOffset, size);
@@ -215,7 +215,7 @@ function writeOctal(block: Uint8Array, offset: number, length: number, value: nu
 
 function tarHeader(name: string, size: number, typeflag: string, mode: number, mtimeMs: number, linkname = ''): Uint8Array {
   const block = new Uint8Array(512);
-  block.set(tarEncoder.encode(name.slice(0, 100)), 0);
+  block.set(tarEncoder.encode(name).subarray(0, 100), 0);
   writeOctal(block, 100, 8, mode & 0o7777);
   writeOctal(block, 108, 8, 0);
   writeOctal(block, 116, 8, 0);
@@ -223,7 +223,7 @@ function tarHeader(name: string, size: number, typeflag: string, mode: number, m
   writeOctal(block, 136, 12, Math.floor(mtimeMs / 1000));
   block.set(tarEncoder.encode('        '), 148);
   block[156] = typeflag.charCodeAt(0);
-  block.set(tarEncoder.encode(linkname.slice(0, 100)), 157);
+  block.set(tarEncoder.encode(linkname).subarray(0, 100), 157);
   block.set(tarEncoder.encode('ustar'), 257);
   block.set(tarEncoder.encode('00'), 263);
   let sum = 0;
@@ -235,7 +235,7 @@ function tarHeader(name: string, size: number, typeflag: string, mode: number, m
 }
 
 /**
- * Write a tar (PAX long-name records when needed). Paths are pod-absolute
+ * Write a tar (PAX long-path/linkpath records when needed). Paths are pod-absolute
  * and stored without the leading slash, the way image layers ship.
  */
 export function writeTar(entries: TarWriteEntry[]): Uint8Array {
@@ -246,18 +246,24 @@ export function writeTar(entries: TarWriteEntry[]): Uint8Array {
     const content = entry.content ?? new Uint8Array(0);
     const mtimeMs = entry.mtimeMs ?? 0;
     const mode = entry.mode ?? (entry.type === 'dir' ? 0o755 : 0o644);
-    if (name.length > 100) {
-      const record = `path=${name}\n`;
-      let len = record.length + 3;
-      if (`${len} ${record}`.length !== len) len += 1;
-      const pax = tarEncoder.encode(`${len} ${record}`);
+    const overrides: string[] = [];
+    if (tarEncoder.encode(name).length > 100) overrides.push(`path=${name}\n`);
+    if (entry.linkTarget !== undefined && tarEncoder.encode(entry.linkTarget).length > 100) overrides.push(`linkpath=${entry.linkTarget}\n`);
+    if (overrides.length) {
+      const pax = tarEncoder.encode(overrides.map(record => {
+        // PAX counts UTF-8 bytes, including the decimal length and separator.
+        const size = tarEncoder.encode(record).length;
+        let length = size + 2;
+        while (size + String(length).length + 1 !== length) length = size + String(length).length + 1;
+        return `${length} ${record}`;
+      }).join(''));
       parts.push(tarHeader('././@PaxHeader', pax.length, 'x', 0o644, mtimeMs));
       const padded = new Uint8Array(pad512(pax.length));
       padded.set(pax);
       parts.push(padded);
     }
     const typeflag = entry.type === 'dir' ? '5' : entry.type === 'symlink' ? '2' : entry.type === 'hardlink' ? '1' : '0';
-    parts.push(tarHeader(name.length > 100 ? name.slice(0, 100) : name, entry.type === 'file' ? content.length : 0, typeflag, mode, mtimeMs, entry.linkTarget ?? ''));
+    parts.push(tarHeader(name, entry.type === 'file' ? content.length : 0, typeflag, mode, mtimeMs, entry.linkTarget ?? ''));
     if (entry.type === 'file' && content.length) {
       const padded = new Uint8Array(pad512(content.length));
       padded.set(content);

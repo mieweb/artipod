@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { configure, InMemory, fs as zfs, umount } from '@zenfs/core';
 import { sha256, verifyDigest, isDigest } from './digest.js';
 import { gunzip, isGzip } from './gzip.js';
-import { indexTar, whiteoutTarget } from './tar.js';
+import { indexTar, whiteoutTarget, writeTar } from './tar.js';
 import { decryptBlob, encryptBlob, generateBlobKey, isEncryptedBlob } from './cipher.js';
 import { OciStore } from './store.js';
 import { makeTar, gzipBytes } from './test-fixtures.js';
@@ -57,6 +57,23 @@ describe('tar indexer', () => {
     const tar = makeTar([{ path: longPath, content: 'long', pax: true }]);
     const entries = indexTar(tar);
     expect(entries.find((e) => e.path === `/${longPath}`)).toMatchObject({ type: 'file', size: 4 });
+  });
+
+  it.each(['x'.repeat(101), `${'目标/'.repeat(25)}end`])('writes long link targets losslessly with byte-counted PAX records: %s', linkTarget => {
+    const path = `/${'é'.repeat(70)}/link`;
+    const tar = writeTar([
+      { path, type: 'symlink', linkTarget },
+      { path: '/hardlink', type: 'hardlink', linkTarget: `/${linkTarget}` },
+      { path: '/after', type: 'file', content: text('after links') },
+    ]);
+    // Both overrides share a header. Their byte lengths must delimit the next
+    // record correctly even when the path/target contain multibyte characters.
+    expect(tar[156]).toBe('x'.charCodeAt(0));
+    const entries = indexTar(tar);
+    expect(entries[0]).toMatchObject({ path, type: 'symlink', linkTarget });
+    expect(entries[1]).toMatchObject({ path: '/hardlink', type: 'hardlink', linkTarget: `/${linkTarget}` });
+    expect(entries[2]).toMatchObject({ path: '/after', type: 'file', size: 11 });
+    expect(new TextDecoder().decode(tar.subarray(entries[2].offset, entries[2].offset + entries[2].size))).toBe('after links');
   });
 
   it('recognizes whiteout markers', () => {

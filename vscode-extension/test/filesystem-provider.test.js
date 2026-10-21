@@ -121,7 +121,7 @@ test('restored broken and external symlinks remain visible and can be renamed or
   await assert.rejects(provider.rename(provider.uri('missing-source'), provider.uri('unused'), { overwrite: false }), { code: 'FileNotFound' });
 });
 
-test('stat keeps target type bits for valid internal symlinks', async t => {
+test('stat and directory listings keep target type bits for valid internal symlinks', async t => {
   const { provider, workspacePath, vscode } = await fixture(t);
   await fs.writeFile(path.join(workspacePath, 'target.txt'), 'inside');
   await fs.mkdir(path.join(workspacePath, 'directory'));
@@ -129,7 +129,31 @@ test('stat keeps target type bits for valid internal symlinks', async t => {
   await fs.symlink('directory', path.join(workspacePath, 'directory-link'));
   assert.equal((await provider.stat(provider.uri('file-link'))).type, vscode.FileType.SymbolicLink | vscode.FileType.File);
   assert.equal((await provider.stat(provider.uri('directory-link'))).type, vscode.FileType.SymbolicLink | vscode.FileType.Directory);
+  const entries = new Map(await provider.readDirectory(provider.uri()));
+  assert.equal(entries.get('file-link'), vscode.FileType.SymbolicLink | vscode.FileType.File);
+  assert.equal(entries.get('directory-link'), vscode.FileType.SymbolicLink | vscode.FileType.Directory);
   assert.equal((await provider.readFile(provider.uri('file-link'))).toString(), 'inside');
+});
+
+test('stat returns current target size and timestamps for a contained symlink', async t => {
+  const { provider, workspacePath, vscode } = await fixture(t);
+  const target = path.join(workspacePath, 'target.txt');
+  const link = path.join(workspacePath, 'file-link');
+  await fs.writeFile(target, 'first');
+  await fs.symlink('target.txt', link);
+  const linkInfo = await fs.lstat(link);
+  for (const [content, modified] of [['first', new Date('2020-01-01')], ['a larger updated target', new Date('2021-01-01')]]) {
+    await fs.writeFile(target, content);
+    await fs.utimes(target, modified, modified);
+    const expected = await fs.stat(target);
+    const metadata = await provider.stat(provider.uri('file-link'));
+    assert.deepEqual(metadata, {
+      type: vscode.FileType.SymbolicLink | vscode.FileType.File,
+      ctime: expected.ctimeMs, mtime: expected.mtimeMs, size: expected.size
+    });
+    assert.notEqual(metadata.mtime, linkInfo.mtimeMs);
+    assert.equal((await fs.lstat(link)).mtimeMs, linkInfo.mtimeMs, 'changing the target leaves the link itself unchanged');
+  }
 });
 
 test('rename cannot erase an ancestor or the workspace root', async t => {

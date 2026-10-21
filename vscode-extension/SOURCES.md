@@ -54,7 +54,7 @@ These archives identify the versions included or whose notices accompany the pre
 | available-typed-arrays@1.0.7 | MIT | [source](https://github.com/inspect-js/available-typed-arrays) | [archive](https://registry.npmjs.org/available-typed-arrays/-/available-typed-arrays-1.0.7.tgz) |
 | balanced-match@4.0.4 | MIT | [source](https://github.com/juliangruber/balanced-match) | [archive](https://registry.npmjs.org/balanced-match/-/balanced-match-4.0.4.tgz) |
 | base64-js@1.5.1 | MIT | [source](https://github.com/beatgammit/base64-js) | [archive](https://registry.npmjs.org/base64-js/-/base64-js-1.5.1.tgz) |
-| brace-expansion@5.0.9 | MIT | [source](https://github.com/juliangruber/brace-expansion) | [archive](https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz) |
+| brace-expansion@5.0.12 | MIT | [source](https://github.com/juliangruber/brace-expansion) | [archive](https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz) |
 | buffer@6.0.3 | MIT | [source](https://github.com/feross/buffer) | [archive](https://registry.npmjs.org/buffer/-/buffer-6.0.3.tgz) |
 | call-bind@1.0.9 | MIT | [source](https://github.com/ljharb/call-bind) | [archive](https://registry.npmjs.org/call-bind/-/call-bind-1.0.9.tgz) |
 | call-bind-apply-helpers@1.0.2 | MIT | [source](https://github.com/ljharb/call-bind-apply-helpers) | [archive](https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz) |
@@ -94,8 +94,8 @@ These archives identify the versions included or whose notices accompany the pre
 | is-typed-array@1.1.15 | MIT | [source](https://github.com/inspect-js/is-typed-array) | [archive](https://registry.npmjs.org/is-typed-array/-/is-typed-array-1.1.15.tgz) |
 | is-unsafe@2.0.2 | MIT | [source](https://github.com/NaturalIntelligence/is-unsafe) | [archive](https://registry.npmjs.org/is-unsafe/-/is-unsafe-2.0.2.tgz) |
 | isarray@2.0.5 | MIT | [source](https://github.com/juliangruber/isarray) | [archive](https://registry.npmjs.org/isarray/-/isarray-2.0.5.tgz) |
-| isomorphic-git@1.41.9 | MIT | [source](https://github.com/isomorphic-git/isomorphic-git) | [archive](https://registry.npmjs.org/isomorphic-git/-/isomorphic-git-1.41.9.tgz) |
-| just-bash@3.2.0 | Apache-2.0 | [source](https://github.com/vercel-labs/just-bash) | [archive](https://registry.npmjs.org/just-bash/-/just-bash-3.2.0.tgz) |
+| isomorphic-git@1.42.2 | MIT | [source](https://github.com/isomorphic-git/isomorphic-git) | [archive](https://registry.npmjs.org/isomorphic-git/-/isomorphic-git-1.42.2.tgz) |
+| just-bash@3.4.2 | Apache-2.0 | [source](https://github.com/vercel-labs/just-bash) | [archive](https://registry.npmjs.org/just-bash/-/just-bash-3.4.2.tgz) |
 | kerium@1.4.2 | MIT | [source](https://github.com/james-pre/kerium) | [archive](https://registry.npmjs.org/kerium/-/kerium-1.4.2.tgz) |
 | math-intrinsics@1.1.0 | MIT | [source](https://github.com/es-shims/math-intrinsics) | [archive](https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz) |
 | memium@0.3.11 | LGPL-3.0-or-later | [source](https://github.com/james-pre/memium) | [archive](https://registry.npmjs.org/memium/-/memium-0.3.11.tgz) |
@@ -127,7 +127,7 @@ These archives identify the versions included or whose notices accompany the pre
 | turndown@7.2.4 | MIT | [source](https://github.com/mixmark-io/turndown) | [archive](https://registry.npmjs.org/turndown/-/turndown-7.2.4.tgz) |
 | typed-array-buffer@1.0.3 | MIT | [source](https://github.com/inspect-js/typed-array-buffer) | [archive](https://registry.npmjs.org/typed-array-buffer/-/typed-array-buffer-1.0.3.tgz) |
 | uint8array-extras@1.5.0 | MIT | [source](https://github.com/sindresorhus/uint8array-extras) | [archive](https://registry.npmjs.org/uint8array-extras/-/uint8array-extras-1.5.0.tgz) |
-| undici@7.29.0 | MIT | [source](https://github.com/nodejs/undici) | [archive](https://registry.npmjs.org/undici/-/undici-7.29.0.tgz) |
+| undici@7.29.1 | MIT | [source](https://github.com/nodejs/undici) | [archive](https://registry.npmjs.org/undici/-/undici-7.29.1.tgz) |
 | undici-types@7.18.2 | MIT | [source](https://github.com/nodejs/undici) | [archive](https://registry.npmjs.org/undici-types/-/undici-types-7.18.2.tgz) |
 | utilium@2.8.8 | LGPL-3.0-or-later | [source](https://github.com/james-pre/utilium) | [archive](https://registry.npmjs.org/utilium/-/utilium-2.8.8.tgz) |
 | utilium@3.5.1 | LGPL-3.0-or-later | [source](https://github.com/james-pre/utilium) | [archive](https://registry.npmjs.org/utilium/-/utilium-3.5.1.tgz) |
