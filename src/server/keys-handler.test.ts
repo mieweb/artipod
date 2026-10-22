@@ -98,7 +98,10 @@ describe('blind host (keyless serve, zero broker code)', () => {
     expect(blobs.length).toBeGreaterThan(0);
     for (const name of blobs) {
       const raw = (await zfs.promises.readFile(`/serve-store/blobs/sha256/${name}`)) as Uint8Array;
-      expect(decode(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength))).not.toContain('PHI');
+      const bytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+      expect(isEncryptedBlob(bytes)).toBe(true);
+      // Random nonce text may contain short strings; scan for the full secret.
+      expect(decode(bytes)).not.toContain(marker);
     }
     // and a plaintext-addressed read on the wire is refused, not leaked
     const res = await app(new Request(`${base}/api/pods/blobs/${dLayer}`));
