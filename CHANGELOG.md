@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-22
+
 ### Added
 
+- Native workspace checkpoints through `@artipod/core/checkpoints`, backed by
+  persisted OCI snapshots with stable pod identity, restore diffs and isolated
+  workspace forks. Native folders remain ordinary host files; this API does not
+  encrypt their working trees.
+- A standalone VS Code extension with the shared Artipod shell, workspace
+  snapshots, snapshot forks and a writable filesystem mirror. Extension versions
+  and Marketplace releases remain independent of the npm packages.
 - Public `@artipod/core/storage` sessions own protected persistence, key leases,
   workspace migration, durability, teardown, recovery and reset outside the SPA
   (#118). Persistent sessions require encryption by default; explicit memory and
@@ -21,8 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test an independently installed npm tarball in Node and Chromium, scanning raw
   write history and final native/OPFS/IndexedDB backing for private names and data.
 
+### Changed
+
+- The exact `just-bash` peer dependency is now `3.4.2`; the ZenFS peers remain
+  `@zenfs/core@2.4.4` and `@zenfs/dom@1.2.5`. Update consumer peer pins together
+  with the Artipod dependency. Managed storage defaults to protected persistence;
+  see `docs/encryption.md` before upgrading legacy raw filesystem integrations.
+
 ### Fixed
 
+- Make `apply_patch` operate on ZenFS, including file deletion and moves (#111).
 - Reject native snapshot materialization across volume boundaries before changing
   live files, and retain directories needed by nested restore exclusions (#83).
 - Serialize workspace teardown before replacement boot, preserve the encrypted
