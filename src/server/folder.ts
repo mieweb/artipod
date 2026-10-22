@@ -256,9 +256,11 @@ function safeRelPath(podPath: string): string | null {
 
 /**
  * Write the ref's merged tree into a real directory: changed files land,
- * whiteout-deleted paths (vs the parent head) are removed, file mtimes come
+ * directories replace files or links at their path, whiteout-deleted paths
+ * (vs the parent head) are removed, file mtimes come
  * from the tar entries so the next publishDirectory reproduces identical
- * blobs (the D7 loop-prevention round trip).
+ * blobs (the D7 loop-prevention round trip). A host directory the head
+ * replaced with a file is left in place with a warning.
  *
  * Safety invariants (test-pinned): targets must resolve under `dir` after
  * symlink resolution of `dir` itself; traversal segments are rejected;
@@ -282,7 +284,6 @@ export async function materializeRef(store: PodStore, ref: string, dir: string):
   };
 
   for (const [podPath, entry] of [...merged.entries.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    if (entry.type === 'dir') continue;
     if (entry.type === 'symlink' || entry.type === 'hardlink') {
       warnings.push(`skipped ${entry.type}: ${podPath}`);
       skipped += 1;
@@ -295,18 +296,29 @@ export async function materializeRef(store: PodStore, ref: string, dir: string):
       skipped += 1;
       continue;
     }
+    const existing = await lstat(target).catch(() => null);
+    if (entry.type === 'dir') {
+      // Sorted order puts a directory before its children, so a file or link
+      // it replaced is cleared before they land.
+      if (existing?.isDirectory()) continue;
+      if (existing) await rm(target); // never write through a link
+      await mkdir(target, { recursive: true });
+      written += 1;
+      continue;
+    }
+    if (existing?.isDirectory()) {
+      // Removing it could also delete ignored content that was never published.
+      warnings.push(`directory not replaced by file: ${podPath}`);
+      skipped += 1;
+      continue;
+    }
     const bytes = bytesByLayer[entry.layer].subarray(entry.offset, entry.offset + entry.size);
     const mtime = new Date(entry.mtimeMs || Number(manifest.layers[entry.layer]?.annotations?.[ANNOTATION_MTIME] ?? Date.now()));
     // skip identical content so untouched files keep their timestamps
-    try {
-      const stats = await lstat(target);
-      if (stats.isSymbolicLink()) await rm(target); // never write through a link
-      else if (stats.isFile() && stats.size === bytes.length && Math.floor(stats.mtimeMs / 1000) === Math.floor(mtime.getTime() / 1000)) {
-        skipped += 1;
-        continue;
-      }
-    } catch {
-      // new file
+    if (existing?.isSymbolicLink()) await rm(target); // never write through a link
+    else if (existing?.isFile() && existing.size === bytes.length && Math.floor(existing.mtimeMs / 1000) === Math.floor(mtime.getTime() / 1000)) {
+      skipped += 1;
+      continue;
     }
     await mkdir(join(target, '..'), { recursive: true });
     await writeFile(target, bytes);

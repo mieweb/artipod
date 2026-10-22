@@ -10,8 +10,9 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sha256, type Digest } from '../oci/digest.js';
 import { gunzip, isGzip } from '../oci/gzip.js';
-import { indexTar } from '../oci/tar.js';
+import { indexTar, type TarWriteEntry } from '../oci/tar.js';
 import { mergeLayerEntries } from '../oci/view.js';
+import { ANNOTATION_PARENTS, buildFileLayer } from '../oci/file-layer.js';
 import type { ImageManifest } from '../oci/pull.js';
 import type { StoredRef } from '../oci/store.js';
 import type { PodStore } from './pod-store.js';
@@ -68,6 +69,54 @@ async function stateKey(store: PodStore, digest: Digest): Promise<string> {
   const manifest = JSON.parse(decoder.decode(await store.getBlob(digest))) as ImageManifest;
   return JSON.stringify({ config: manifest.config.digest, layers: manifest.layers.map((l) => l.digest) });
 }
+
+/** Directory paths in a head's merged view. */
+async function dirsOf(store: PodStore, digest: Digest): Promise<string[]> {
+  const manifest = JSON.parse(decoder.decode(await store.getBlob(digest))) as ImageManifest;
+  const perLayer = [];
+  for (const layer of manifest.layers) {
+    const compressed = await store.getBlob(layer.digest);
+    perLayer.push(indexTar(isGzip(compressed) ? await gunzip(compressed) : compressed));
+  }
+  return [...mergeLayerEntries(perLayer).entries].filter(([, e]) => e.type === 'dir').map(([path]) => path);
+}
+
+const encoder = new TextEncoder();
+
+/** `parent` plus one per-path layer for each entry, as an overlay push appends them. */
+async function overlayHead(parent: Digest, entries: TarWriteEntry[], actor: string): Promise<Digest> {
+  const manifest = JSON.parse(decoder.decode(await store.getBlob(parent))) as ImageManifest;
+  const config = JSON.parse(decoder.decode(await store.getBlob(manifest.config.digest))) as {
+    rootfs: { diff_ids: string[] };
+  };
+  const layers = [...manifest.layers];
+  const diffIds = [...config.rootfs.diff_ids];
+  for (const entry of entries) {
+    const built = await buildFileLayer([entry], { path: entry.path, mtimeMs: entry.mtimeMs!, actor });
+    await store.putBlob(built.compressed, built.layerDigest);
+    await store.putBlob(built.indexBytes, built.indexDigest);
+    layers.push(built.descriptor);
+    diffIds.push(built.diffId);
+  }
+  const configBytes = encoder.encode(JSON.stringify({ rootfs: { type: 'layers', diff_ids: diffIds } }));
+  const configDigest = await store.putBlob(configBytes);
+  const next: ImageManifest = {
+    ...manifest,
+    config: { ...manifest.config, digest: configDigest, size: configBytes.length },
+    layers,
+    annotations: { ...manifest.annotations, [ANNOTATION_PARENTS]: JSON.stringify([parent]) },
+  };
+  return store.putBlob(encoder.encode(JSON.stringify(next)));
+}
+
+const dirEntry = (path: string, at: Date): TarWriteEntry => ({ path, type: 'dir', mode: 0o755, mtimeMs: at.getTime() });
+const fileEntry = (path: string, content: string, at: Date): TarWriteEntry => ({
+  path,
+  type: 'file',
+  content: encoder.encode(content),
+  mode: 0o644,
+  mtimeMs: at.getTime(),
+});
 
 let dir: string;
 let store: PodStore;
@@ -208,5 +257,51 @@ describe('mergeHeads', () => {
     const editors = await headFrom(v0, { ...BASE, 'docs/b.md': 'B kept working\n' }, 'actor-c', { 'docs/b.md': T2 });
     const merged2 = await mergeHeads(store, a, editors);
     expect((await treeOf(store, merged2.manifestDigest)).get('/docs/b.md')).toBe('B kept working\n');
+  });
+
+  it.each(['empty', 'with a child'] as const)(
+    'a directory that replaced a file survives a merge with an unrelated edit (%s)',
+    async (shape) => {
+      const v0 = await headFrom(null, BASE, 'srv');
+      const entries = [dirEntry('/readme.md', T1)];
+      if (shape === 'with a child') entries.push(fileEntry('/readme.md/new.txt', 'new\n', T1));
+      const a = await overlayHead(v0, entries, 'actor-a');
+      const b = await headFrom(v0, { ...BASE, 'docs/b.md': 'beta by B\n' }, 'actor-b', { 'docs/b.md': T2 });
+
+      const ab = await mergeHeads(store, a, b);
+      const ba = await mergeHeads(store, b, a);
+      expect(ab.manifestDigest).toBe(ba.manifestDigest);
+      expect(await dirsOf(store, ab.manifestDigest)).toContain('/readme.md');
+      const tree = await treeOf(store, ab.manifestDigest);
+      expect(tree.has('/readme.md')).toBe(false);
+      expect(tree.get('/docs/b.md')).toBe('beta by B\n');
+      if (shape === 'with a child') expect(tree.get('/readme.md/new.txt')).toBe('new\n');
+    }
+  );
+
+  it('file vs replacing directory: the newer side wins the path and its subtree', async () => {
+    const v0 = await headFrom(null, BASE, 'srv');
+    const replace = (at: Date) =>
+      overlayHead(v0, [dirEntry('/readme.md', at), fileEntry('/readme.md/new.txt', 'new\n', at)], 'actor-a');
+    const edit = (at: Date) => headFrom(v0, { ...BASE, 'readme.md': 'edited\n' }, 'actor-b', { 'readme.md': at });
+
+    // The file edit is newer: the directory's child goes with it.
+    const [olderDir, newerEdit] = [await replace(T1), await edit(T2)];
+    const fileWins = await mergeHeads(store, olderDir, newerEdit);
+    expect(fileWins.manifestDigest).toBe((await mergeHeads(store, newerEdit, olderDir)).manifestDigest);
+    expect(fileWins.lwwPaths).toEqual(['/readme.md', '/readme.md/new.txt']);
+    const fileTree = await treeOf(store, fileWins.manifestDigest);
+    expect(fileTree.get('/readme.md')).toBe('edited\n');
+    expect(fileTree.has('/readme.md/new.txt')).toBe(false);
+    expect(await dirsOf(store, fileWins.manifestDigest)).not.toContain('/readme.md');
+
+    // The directory is newer: it keeps its child and the file is gone.
+    const [newerDir, olderEdit] = [await replace(T2), await edit(T1)];
+    const dirWins = await mergeHeads(store, newerDir, olderEdit);
+    expect(dirWins.manifestDigest).toBe((await mergeHeads(store, olderEdit, newerDir)).manifestDigest);
+    const dirTree = await treeOf(store, dirWins.manifestDigest);
+    expect(dirTree.has('/readme.md')).toBe(false);
+    expect(dirTree.get('/readme.md/new.txt')).toBe('new\n');
+    expect(await dirsOf(store, dirWins.manifestDigest)).toContain('/readme.md');
   });
 });

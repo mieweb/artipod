@@ -12,7 +12,7 @@
  * parents DAG — nothing is ever lost, F adds the per-path LWW merge.
  */
 
-import { sha256, type Digest } from '../oci/digest.js';
+import { isDigest, sha256, type Digest } from '../oci/digest.js';
 import {
   buildFileLayer,
   ANNOTATION_ACTOR,
@@ -20,7 +20,15 @@ import {
   ANNOTATION_PARENTS,
   ANNOTATION_PATH,
 } from '../oci/file-layer.js';
-import { whiteoutPathFor, type TarWriteEntry } from '../oci/tar.js';
+import {
+  ANNOTATION_LAYER_INDEX,
+  parseLayerIndexArtifact,
+  whiteoutPathFor,
+  whiteoutTarget,
+  type LayerEntry,
+  type TarWriteEntry,
+} from '../oci/tar.js';
+import { mergeLayerEntries } from '../oci/view.js';
 import type { ImageManifest } from '../oci/pull.js';
 import type { OciStore } from '../oci/store.js';
 import type { ZenFsLike } from '../sandbox/types.js';
@@ -62,9 +70,12 @@ interface UpperFile {
   mtimeMs: number;
 }
 
-async function walkUpper(zfs: ZenFsLike, upperAt: string): Promise<UpperFile[]> {
+type UpperDir = Omit<UpperFile, 'content'>;
+
+async function walkUpper(zfs: ZenFsLike, upperAt: string): Promise<{ files: UpperFile[]; dirs: UpperDir[] }> {
   const p = zfs.promises;
-  const out: UpperFile[] = [];
+  const files: UpperFile[] = [];
+  const dirs: UpperDir[] = [];
   const visit = async (dir: string, rel: string): Promise<void> => {
     let names: string[];
     try {
@@ -77,10 +88,11 @@ async function walkUpper(zfs: ZenFsLike, upperAt: string): Promise<UpperFile[]> 
       const podPath = `${rel}/${name}`;
       const stats = await p.stat(full);
       if (stats.isDirectory()) {
+        dirs.push({ podPath, mode: Number(stats.mode) & 0o7777, mtimeMs: Number(stats.mtimeMs) });
         await visit(full, podPath);
       } else if (stats.isFile()) {
         const raw = (await p.readFile(full)) as Uint8Array;
-        out.push({
+        files.push({
           podPath,
           content: new Uint8Array(raw.buffer as ArrayBuffer, raw.byteOffset, raw.byteLength),
           mode: Number(stats.mode) & 0o7777,
@@ -90,7 +102,19 @@ async function walkUpper(zfs: ZenFsLike, upperAt: string): Promise<UpperFile[]> 
     }
   };
   await visit(upperAt, '');
-  return out.sort((a, b) => (a.podPath < b.podPath ? -1 : 1));
+  const byPath = (a: { podPath: string }, b: { podPath: string }) => (a.podPath < b.podPath ? -1 : 1);
+  return { files: files.sort(byPath), dirs: dirs.sort(byPath) };
+}
+
+/** A layer's index, from the local twin or its published artifact; null when neither is here. */
+async function layerEntries(store: OciStore, layer: ImageManifest['layers'][number], diffId: Digest): Promise<LayerEntry[] | null> {
+  try {
+    return (await store.getLayerIndex(diffId)).entries;
+  } catch {
+    const indexDigest = layer.annotations?.[ANNOTATION_LAYER_INDEX];
+    if (!indexDigest || !isDigest(indexDigest) || !(await store.hasBlob(indexDigest))) return null;
+    return parseLayerIndexArtifact(decoder.decode(await store.getBlob(indexDigest))).entries;
+  }
 }
 
 /**
@@ -108,11 +132,11 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
   };
   const headDiffIds = headConfig.rootfs?.diff_ids ?? [];
 
-  const upperFiles = await walkUpper(zfs, upperAt);
+  const { files: upperFiles, dirs: upperDirs } = await walkUpper(zfs, upperAt);
   // A COMPLETELY empty overlay says nothing — never let it strip previous
   // pushes (a fresh session's in-memory upper starts empty; deleting
   // everything on purpose flows through deletions/whiteouts instead).
-  if (upperFiles.length === 0 && deletions.size === 0) {
+  if (upperFiles.length === 0 && upperDirs.length === 0 && deletions.size === 0) {
     return { changed: false, manifestDigest: head.manifestDigest, overlayLayers: 0 };
   }
 
@@ -121,7 +145,7 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
   // every previously pushed file — false after the upper is emptied or a
   // fresh session begins, and it silently dropped the missing paths.
   const deleted = [...deletions.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
-  const superseded = new Set<string>(upperFiles.map((f) => f.podPath));
+  const superseded = new Set<string>([...upperFiles, ...upperDirs].map((f) => f.podPath));
   for (const [path] of deleted) superseded.add(path);
   const emitWhiteout = deleted.length > 0;
 
@@ -134,6 +158,34 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
     }
     baseLayers.push(layer);
     baseDiffIds.push(headDiffIds[i]);
+  });
+
+  // A directory that replaced a file or link (rm then mkdir, or a rename onto
+  // the deleted path) must be published itself: its children alone leave the
+  // old file in the merged view, and the path's whiteout would hide them too.
+  // Likewise a directory re-created after its deletion was already pushed:
+  // the kept whiteout layer hides it unless a later layer brings it back.
+  const baseIndexes: LayerEntry[][] = [];
+  for (const [i, layer] of baseLayers.entries()) {
+    baseIndexes.push((await layerEntries(store, layer, baseDiffIds[i] as Digest)) ?? []);
+  }
+  const baseView = mergeLayerEntries(baseIndexes).entries;
+  const whitedOutPaths = new Set<string>();
+  const whitedOutPrefixes: string[] = [];
+  for (const entry of baseIndexes.flat()) {
+    const wh = whiteoutTarget(entry.path);
+    if (wh?.kind === 'delete') {
+      whitedOutPaths.add(wh.target);
+      whitedOutPrefixes.push(`${wh.target}/`);
+    } else if (wh?.kind === 'opaque') {
+      whitedOutPrefixes.push(wh.dir === '/' ? '/' : `${wh.dir}/`);
+    }
+  }
+  const underWhiteout = (path: string) =>
+    whitedOutPaths.has(path) || whitedOutPrefixes.some((prefix) => path.startsWith(prefix));
+  const replacingDirs = upperDirs.filter((dir) => {
+    const entry = baseView.get(dir.podPath);
+    return entry === undefined ? underWhiteout(dir.podPath) : entry.type !== 'dir';
   });
 
   const layers = [...baseLayers];
@@ -155,6 +207,15 @@ export async function buildOverlayHead(options: OverlayHeadOptions): Promise<Ove
       await buildFileLayer(
         [{ path: file.podPath, type: 'file', content: file.content, mode: file.mode, mtimeMs: file.mtimeMs }],
         { path: file.podPath, mtimeMs: file.mtimeMs, actor, ...(permanent ? {} : { overlay: actor }) },
+      ),
+    );
+  }
+
+  for (const dir of replacingDirs) {
+    await putLayer(
+      await buildFileLayer(
+        [{ path: dir.podPath, type: 'dir', content: new Uint8Array(0), mode: dir.mode, mtimeMs: dir.mtimeMs }],
+        { path: dir.podPath, mtimeMs: dir.mtimeMs, actor, ...(permanent ? {} : { overlay: actor }) },
       ),
     );
   }

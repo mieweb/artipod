@@ -140,7 +140,7 @@ interface PathRegister {
   entry: LayerEntry & { layer: number };
   descriptor: ImageManifest['layers'][number];
   diffId: string;
-  /** Reusable as-is only when its layer holds exactly this file. */
+  /** Reusable as-is only when its layer holds exactly this entry. */
   soleFileInLayer: boolean;
   mtimeMs: number;
   actor: string;
@@ -186,14 +186,17 @@ async function loadHeadView(store: PodStore, digest: Digest, cache: Manifests): 
   const merged = mergeLayerEntries(perLayer);
   const files = new Map<string, PathRegister>();
   const fileCount = perLayer.map((entries) => entries.filter((e) => e.type !== 'dir' && !whiteoutTarget(e.path)).length);
+  const entryCount = perLayer.map((entries) => entries.filter((e) => !whiteoutTarget(e.path)).length);
   for (const [path, entry] of merged.entries) {
-    if (entry.type === 'dir') continue;
+    // A directory joins the merge only as its layer's sole entry, the form the
+    // overlay push gives a directory that replaced or re-created a path.
+    if (entry.type === 'dir' && entryCount[entry.layer] !== 1) continue;
     const layer = manifest.layers[entry.layer];
     files.set(path, {
       entry,
       descriptor: layer,
       diffId: diffIds[entry.layer] ?? '',
-      soleFileInLayer: fileCount[entry.layer] === 1,
+      soleFileInLayer: (entry.type === 'dir' ? entryCount : fileCount)[entry.layer] === 1,
       mtimeMs: entry.mtimeMs || Number(layer.annotations?.[ANNOTATION_MTIME] ?? 0),
       actor: layer.annotations?.[ANNOTATION_ACTOR] ?? '',
     });
@@ -273,10 +276,13 @@ export async function mergeHeads(
         winners.set(path, { reg: pick, mtimeMs: pick.mtimeMs, actor: pick.actor, mode: pick.entry.mode });
         continue;
       }
-      const glob = mergerGlobs.find(
-        // `**/x` also matches root-level `x` (the `**/` form needs a literal slash)
-        (g) => pathGlobMatch(g, path) || (g.startsWith('**/') && pathGlobMatch(g.slice(3), path)),
-      );
+      const glob =
+        a.entry.type !== 'dir' &&
+        b.entry.type !== 'dir' &&
+        mergerGlobs.find(
+          // `**/x` also matches root-level `x` (the `**/` form needs a literal slash)
+          (g) => pathGlobMatch(g, path) || (g.startsWith('**/') && pathGlobMatch(g.slice(3), path)),
+        );
       if (glob) {
         const [bytesA, bytesB] = await Promise.all([fileBytes(store, a), fileBytes(store, b)]);
         // Symmetric argument order: the register order is canonical, not A/B.
@@ -315,6 +321,22 @@ export async function mergeHeads(
     if (stamp > 0) lwwPaths.push(path);
   }
 
+  // A path won by a file drops whatever the other side put beneath it, as a
+  // file layer over a directory does in the merged view.
+  const underFile = (path: string): boolean => {
+    for (let slash = path.lastIndexOf('/'); slash > 0; slash = path.lastIndexOf('/', slash - 1)) {
+      const ancestor = winners.get(path.slice(0, slash));
+      if (ancestor && ancestor.reg?.entry.type !== 'dir') return true;
+    }
+    return false;
+  };
+  for (const path of [...winners.keys()]) {
+    if (!underFile(path)) continue;
+    winners.delete(path);
+    if (!lwwPaths.includes(path)) lwwPaths.push(path);
+  }
+  lwwPaths.sort();
+
   // Build the merged manifest: canonical path order, one layer per file.
   const layers: ImageManifest['layers'] = [];
   const diffIds: string[] = [];
@@ -328,16 +350,17 @@ export async function mergeHeads(
   };
 
   for (const [path, winner] of [...winners.entries()].sort(([x], [y]) => (x < y ? -1 : 1))) {
-    if (winner.reg && winner.reg.soleFileInLayer && winner.reg.entry.type === 'file' && winner.reg.diffId) {
-      // Zero-copy: reference the existing per-file layer.
+    const type = winner.reg?.entry.type === 'dir' ? 'dir' : 'file';
+    if (winner.reg && winner.reg.soleFileInLayer && winner.reg.entry.type === type && winner.reg.diffId) {
+      // Zero-copy: reference the existing per-path layer.
       layers.push(winner.reg.descriptor);
       diffIds.push(winner.reg.diffId);
       continue;
     }
-    // Fresh per-file layer: content merge output, or a winner split out of a multi-file layer.
-    const bytes = winner.bytes ?? (await fileBytes(store, winner.reg!));
+    // Fresh per-path layer: content merge output, or a winner split out of a multi-entry layer.
+    const bytes = type === 'dir' ? new Uint8Array(0) : (winner.bytes ?? (await fileBytes(store, winner.reg!)));
     const built = await buildFileLayer(
-      [{ path, type: 'file', content: bytes, mode: winner.mode ?? 0o644, mtimeMs: winner.mtimeMs }],
+      [{ path, type, content: bytes, mode: winner.mode ?? (type === 'dir' ? 0o755 : 0o644), mtimeMs: winner.mtimeMs }],
       { path, mtimeMs: winner.mtimeMs, actor: winner.actor },
     );
     await putIfAbsent(built.compressed, built.layerDigest);
