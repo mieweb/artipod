@@ -384,6 +384,19 @@ try {
   });
   await step('offline reload restores the wrapped unexpired grant', async () => {
     await page.getByRole('button', { name: 'online', exact: true }).click();
+    // The toggle schedules its save. This checks grant restoration after a
+    // durable preference update, rather than interrupting a multi-block write.
+    await page.waitForFunction(async () => {
+      try {
+        return JSON.parse(await window.__artipod.zfs.promises.readFile('/.artipod/oci/settings.json', 'utf8')).offline === true;
+      } catch (error) {
+        if (error?.code === 'ENOENT') return false;
+        throw error;
+      }
+    });
+    // This existing directory is stable while settings replacement moves its
+    // primary name. Awaited managed mutations drain protected persistence.
+    await page.evaluate(() => window.__artipod.zfs.promises.mkdir('/.artipod', { recursive: true }));
     await page.reload({ waitUntil: 'domcontentloaded' });
     await ready();
     await checkFiles();
