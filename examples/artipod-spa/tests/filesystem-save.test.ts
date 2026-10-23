@@ -223,7 +223,7 @@ describe('saveFileSystem production composition', () => {
     dispose();
   });
 
-  it('awaits server refresh through inline verdict healing without a React effect', async () => {
+  it('awaits server verdict refresh while preserving unsynced metadata for push acknowledgement', async () => {
     vi.resetModules();
     vi.stubGlobal('window', {});
     const { initFileSystem, saveFileSystem } = await import('../lib/filesystem');
@@ -256,6 +256,7 @@ describe('saveFileSystem production composition', () => {
     expect(complete).toBe(false);
     finish();
     await Promise.all([refreshing, saving]);
-    expect(durable).toMatchObject({ workspaces: [{ id: 'private:_1', unsynced: false }] });
+    expect(durable).toMatchObject({ workspaces: [{ id: 'private:_1', unsynced: true }] });
+    expect(catalogStore.getState().verdicts).toEqual({ 'private:_1': 'synced' });
   });
 });

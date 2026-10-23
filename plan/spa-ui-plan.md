@@ -266,10 +266,22 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
   six catalog ownership/disposal cases; both fixes passed independent review.
 - Added `saveFileSystem()` / `window.__artipodSave()` as the host completion
   boundary for intentional reloads. It drains registry mutations, debounced
-  probes, catalog refreshes through registry healing, automatic/retry pushes
+  probes, catalog refreshes through ancestry verdict publication, automatic/retry pushes
   and lease adoption, then key-service and filesystem persistence. Automatic
   edit pushes retain their two-second debounce but are scheduled by the host
   instead of the core pod's independent timer, making accepted work drainable.
+- Catalog refreshes preserve durable `unsynced` and `hasChanges` flags when
+  publishing cached-head verdicts. Server requests and local scans share the
+  catalog lifetime; superseded scans cannot publish or sweep after a newer
+  scan starts. Published-blank reconciliation filters the view and preserves
+  local workspaces. Empty inactive blanks are also hidden only in the view;
+  catalog scans retain all local bytes and registry entries. SPA lint,
+  typecheck and 122 tests pass, including stale-response, overlapping-scan and
+  workspace-retention regressions.
+- Workspace probes dispatch online/offline only on state transitions, allowing
+  local saves to finish with `unsynced: true` during persistent remote failure.
+  Probes run in order so held older reads cannot overwrite newer edit flags;
+  interval/reconnect retries and later retries after probe failures still work.
 - Core key saves include active renewal principal lookup, authentication,
   serialized device/grant writes and the latest offline preference. Failures
   reject saves, and disposed producers release stale save obligations.

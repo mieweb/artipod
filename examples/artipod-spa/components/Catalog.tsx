@@ -12,10 +12,10 @@ import { useStore } from 'zustand';
 import { Terminal as LucideTerminal, Plus, Server, HardDrive, Play } from 'lucide-react';
 import { executableStore, refreshExecutables } from '@/lib/services/executable-catalog';
 import type { Sandbox } from '@artipod/core/sandbox';
-import { catalogStore, refreshServer, E2E_MEDIA_TYPE } from '@/lib/stores/catalog';
+import { catalogStore, E2E_MEDIA_TYPE } from '@/lib/stores/catalog';
 import { registryStore } from '@/lib/stores/registry';
 import { brokerStore } from '@/lib/stores/broker';
-import { createLocalCatalogRefresh } from '@/lib/services/catalog-refresh';
+import { createCatalogRefresh } from '@/lib/services/catalog-refresh';
 import { OPEN_DRAFT_TIP, isOpenRef, nextDraftRef, setOpenTag, workspaceUrl, type OpenMode } from '@/lib/boot';
 import { navClick, navigateTo } from '@/lib/stores/route';
 import EncryptionBadge from '@/components/EncryptionBadge';
@@ -38,8 +38,8 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
   useEffect(() => { void refreshExecutables(); }, [serverRefs, local, brokerStatus]);
 
   useEffect(() => {
-    const localRefresh = createLocalCatalogRefresh();
-    void refreshServer();
+    const localRefresh = createCatalogRefresh();
+    void localRefresh.refreshServer();
     let disposeEvents: (() => void) | null = null;
     let disposeConsole: (() => Promise<void>) | null = null;
     // The initializer awaits; if the catalog unmounted meanwhile (navigation

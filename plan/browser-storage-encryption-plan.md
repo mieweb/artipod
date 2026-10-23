@@ -83,6 +83,11 @@ markers only. Final command results are recorded with the pull request.
   stale failures from nested catalog producers. A trailing key drain and one
   lifecycle-owned catalog scan producer close both gaps. SPA lint/typecheck and
   108 tests pass, including held renewal and pending-rescan disposal regressions.
+- Further review closed an immediate remote-push retry loop and serialized
+  workspace probes so an older read cannot overwrite a newer edit. Catalog
+  inventory is observational: stale results cannot clear durable flags or
+  delete files/registry entries. SPA lint/typecheck and 122 tests pass, covering
+  persistent remote failure, reconnect retries and stale/overlapping scans.
 - Deterministically reproduced the original implementation in Chromium by
   destroying a page immediately after creating numeric record `129129`.
   Its backing length was zero with no envelope header; the existing root and

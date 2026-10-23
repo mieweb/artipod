@@ -218,6 +218,12 @@ Hosts should finish their own application operations and stop admitting new
 edits while preparing a reload. Work started after save completion belongs to
 the next save.
 
+Catalog verdicts describe cached heads and do not clear durable `unsynced` or
+`hasChanges` flags. Workspace operations own those acknowledgements. Matching a
+published blank or finding an empty inactive blank filters the catalog view
+while retaining local bytes and registry entries; a stale catalog response
+cannot authorize their deletion.
+
 ### Explicit memory and plaintext choices
 
 `memory` needs no key, reports `memoryOnly: true`, and loses its data when closed.

@@ -404,17 +404,29 @@ async function bootPodSession(route: Route): Promise<PodSession> {
 
   // Track unpushed work for the catalog: probe the upper after changes/pushes.
   const upperAt = route.isRef ? `/.artipod/upper/${encodeURIComponent(route.id)}` : blankRoot;
-  const updateProbe = async (): Promise<void> => {
-    // `artipod offline on|off` in this shell flips the chip live
-    try {
-      const { readPodSettings } = await import('@artipod/core/oci');
-      svc.reconcileOffline((await readPodSettings(fs as unknown as Parameters<typeof readPodSettings>[0])).offline === true);
-      dispatch({ type: svc.forcedOffline ? 'offline' : 'online' });
-    } catch {
-      // fs hiccup — mirror stands
-    }
-    const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
-    await io.patch(route.id, { hasChanges: entries.length > 0 });
+  let probeTail: Promise<void> = Promise.resolve();
+  const updateProbe = (): Promise<void> => {
+    // A fresh probe can be admitted while the old read is still pending.
+    // Preserve enqueue order, while allowing an explicit retry after failure.
+    const operation = probeTail.catch(() => {}).then(async () => {
+      if (closed) return;
+      // `artipod offline on|off` in this shell flips the chip live
+      try {
+        const { readPodSettings } = await import('@artipod/core/oci');
+        const offline = (await readPodSettings(fs as unknown as Parameters<typeof readPodSettings>[0])).offline === true;
+        if (closed) return;
+        svc.reconcileOffline(offline);
+        // A status probe is not a reconnect. Re-dispatching online after each
+        // failed push would immediately retry and queue another probe forever.
+        if (svc.forcedOffline !== syncState.offline) dispatch({ type: svc.forcedOffline ? 'offline' : 'online' });
+      } catch {
+        // fs hiccup — mirror stands
+      }
+      const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
+      if (!closed) await io.patch(route.id, { hasChanges: entries.length > 0 });
+    });
+    probeTail = operation;
+    return operation;
   };
   releaseProbe = () => hostSave.forget(updateProbe);
   const probe = (): void => {

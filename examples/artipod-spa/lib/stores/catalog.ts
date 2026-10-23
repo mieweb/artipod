@@ -43,24 +43,28 @@ export const catalogStore = createStore<CatalogSnapshot>()(() => ({
 }));
 
 /** Server list refresh (the UI artifact is infrastructure — filtered out). */
-export function refreshServer(fetchImpl?: typeof fetch): Promise<void> {
+export function refreshServer(fetchImpl?: typeof fetch, isActive: () => boolean = () => true): Promise<void> {
   return hostSave.run(async () => {
-    await loadServerRefs(fetchImpl);
-    // Registry healing is part of this producer's completion. A React effect
-    // reacting to serverRefs could otherwise start it after save returned.
-    await (await import('../services/catalog-refresh')).refreshVerdicts();
+    if (!isActive()) return;
+    await loadServerRefs(fetchImpl, isActive);
+    if (!isActive()) return;
+    // Verdict publication is part of this producer's completion. A React
+    // effect could otherwise start more host work after save returned.
+    await (await import('../services/catalog-refresh')).refreshVerdicts(isActive);
   });
 }
 
-async function loadServerRefs(fetchImpl?: typeof fetch): Promise<void> {
+async function loadServerRefs(fetchImpl: typeof fetch | undefined, isActive: () => boolean): Promise<void> {
   const doFetch = fetchImpl ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args));
   catalogStore.setState({ status: 'loading', error: undefined });
   try {
     const res = await doFetch('/api/pods/refs');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const refs = (await res.json()) as ServerRef[];
+    if (!isActive()) return;
     catalogStore.setState({ serverRefs: refs.filter((r) => !r.ref.startsWith('artipod-ui:')), status: 'ready' });
   } catch (err) {
+    if (!isActive()) return;
     catalogStore.setState({
       serverRefs: catalogStore.getState().serverRefs ?? [],
       status: 'error',
