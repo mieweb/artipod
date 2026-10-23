@@ -282,6 +282,11 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
   local saves to finish with `unsynced: true` during persistent remote failure.
   Probes run in order so held older reads cannot overwrite newer edit flags;
   interval/reconnect retries and later retries after probe failures still work.
+- Key-service flush repeats its drain when new work arrives during device/grant
+  I/O before checking pending preference errors. A held preference writer must
+  finish before the save can resolve or report its actual failure. Six new
+  core regressions pass, along with core lint/build/full typecheck, 990 Vitest
+  tests, 35 checkpoint tests and all 122 SPA tests.
 - Core key saves include active renewal principal lookup, authentication,
   serialized device/grant writes and the latest offline preference. Failures
   reject saves, and disposed producers release stale save obligations.

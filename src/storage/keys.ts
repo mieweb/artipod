@@ -197,12 +197,20 @@ export class KeysService implements StorageKeyProvider {
     for (;;) {
       const revision = this.saveRevision;
       while (this.keyOperations.size) await Promise.allSettled([...this.keyOperations]);
-      await this.flushOfflinePreference();
+      let offlineFailed = false;
+      let offlineError: unknown;
+      try { await this.drainOfflinePreference(); }
+      catch (error) { offlineFailed = true; offlineError = error; }
       while (this.storageWrites.size) await Promise.allSettled([...this.storageWrites.values()]);
       while (this.storageOperations.size) await Promise.allSettled([...this.storageOperations]);
+      if (this.storageSuspended) throw new Error('Key storage is suspended for browser reset; reload to resume');
+      // A toggle, replacement writer or explicit retry may have been admitted
+      // while KV IO drained. Assess failures only after that new work settles.
+      if (revision !== this.saveRevision || this.keyOperations.size) continue;
+      if (offlineFailed) throw offlineError;
       if (this.pendingOffline) throw new Error('The offline preference has not been saved; open storage before reloading');
       if (this.persistenceFailures.size) throw this.persistenceFailures.values().next().value;
-      if (revision === this.saveRevision && !this.keyOperations.size) return;
+      return;
     }
   }
 
@@ -282,6 +290,7 @@ export class KeysService implements StorageKeyProvider {
 
   /** U3: route offline writes into the pod setting once the fs exists. */
   setOfflineWriter(writer: ((value: boolean) => Promise<void>) | null): void {
+    if (this.offlineWriter !== writer) this.saveRevision += 1;
     this.offlineWriter = writer;
   }
 
@@ -295,6 +304,12 @@ export class KeysService implements StorageKeyProvider {
 
   /** Retry after the root adopts an unlocked key, before reading saved settings. */
   flushOfflinePreference(): Promise<void> {
+    this.saveRevision += 1;
+    return this.drainOfflinePreference();
+  }
+
+  /** Internal save passes do not admit new work or invalidate concurrent saves. */
+  private drainOfflinePreference(): Promise<void> {
     const writing = this.offlineWrites.catch(() => {}).then(async () => {
       while (this.pendingOffline && this.offlineWriter && !this.storageSuspended) {
         const pending = this.pendingOffline;
