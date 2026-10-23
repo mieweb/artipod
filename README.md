@@ -244,7 +244,7 @@ Built for real disconnection profiles: a 24-hour offline clinic visit, a light-m
 
 ## Documentation
 
-See the [FAQ](docs/faq.md) for comparisons with Zarf and Skopeo, offline-readiness requirements, and OCI interoperability limits.
+See the [FAQ](docs/faq.md) for why Artipod uses OCI rather than just Git, comparisons with Zarf and Skopeo, offline-readiness requirements, and OCI interoperability limits.
 
 | Doc | Contents |
 |---|---|
