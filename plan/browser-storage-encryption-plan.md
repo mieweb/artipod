@@ -79,6 +79,10 @@ markers only. Final command results are recorded with the pull request.
   unrelated successful field updates. Matching retries, explicit deletion and
   authenticated recovery acknowledge the covered failures; recovery preserves
   its warning and newer failures. SPA lint/typecheck and 101 tests pass.
+- Automated review also identified renewal during the final storage drain and
+  stale failures from nested catalog producers. A trailing key drain and one
+  lifecycle-owned catalog scan producer close both gaps. SPA lint/typecheck and
+  108 tests pass, including held renewal and pending-rescan disposal regressions.
 - Deterministically reproduced the original implementation in Chromium by
   destroying a page immediately after creating numeric record `129129`.
   Its backing length was zero with no envelope header; the existing root and

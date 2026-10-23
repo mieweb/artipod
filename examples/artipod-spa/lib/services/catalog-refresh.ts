@@ -32,12 +32,27 @@ async function liveWorkspaceIds(): Promise<Set<string>> {
   }
 }
 
-/** Rescan "on this machine" — at load and after every console command. */
-export function refreshLocal(): Promise<void> { return hostSave.run(refreshLocalAndVerdicts); }
-
-async function refreshLocalAndVerdicts(): Promise<void> {
-  await refreshLocalState();
-  await refreshVerdicts();
+/** One catalog mount owns both its initial scan and debounced console rescans. */
+export function createLocalCatalogRefresh() {
+  let disposed = false;
+  const scan = async (): Promise<void> => {
+    if (disposed) return;
+    await refreshLocalState();
+    // The parent scan already tracks this work through completion. Registering
+    // another global producer would outlive the catalog that owns the scan.
+    if (!disposed) await refreshVerdictState();
+  };
+  return {
+    refresh(): Promise<void> { return disposed ? Promise.resolve() : hostSave.run(scan); },
+    schedule(delay: number, onError: (error: unknown) => void): void {
+      if (!disposed) hostSave.schedule(scan, delay, onError);
+    },
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      hostSave.forget(scan);
+    },
+  };
 }
 
 async function refreshLocalState(): Promise<void> {

@@ -258,6 +258,12 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
   Authenticated recovery acknowledges prior failures while preserving its
   warning and any newer failures. SPA lint/typecheck and all 101 tests pass;
   independent review reran 21 focused regression tests successfully.
+- Automated PR review follow-up: drain keys again after registry/storage I/O
+  to include renewals that start before their broker notification. Give each
+  catalog mount one producer for its initial and debounced scans, retiring it
+  synchronously on disposal so late failures cannot block a later workspace.
+  SPA lint/typecheck and 108 tests pass, including a held-renewal save test and
+  six catalog ownership/disposal cases; both fixes passed independent review.
 - Added `saveFileSystem()` / `window.__artipodSave()` as the host completion
   boundary for intentional reloads. It drains registry mutations, debounced
   probes, catalog refreshes through registry healing, automatic/retry pushes

@@ -62,6 +62,9 @@ export async function saveFileSystem(): Promise<void> {
     await keys().flush();
     await flushUiState();
     await session?.flush();
+    // Renewal can begin while either storage drain awaits, before publishing
+    // a broker snapshot. Await it too; its host callbacks trigger another pass.
+    await keys().flush();
   });
 }
 export async function resetFileSystem() {

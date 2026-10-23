@@ -73,6 +73,79 @@ describe('saveFileSystem production composition', () => {
     expect(bindings.session.flush).not.toHaveBeenCalled();
   });
 
+  it('awaits a renewal admitted during the final storage flush before its broker snapshot exists', async () => {
+    vi.resetModules();
+    vi.stubGlobal('window', {});
+    const { KeysService, RENEW_TASK, nodeAdapters } = await import('@artipod/core/storage');
+    const { Authority } = await import('@artipod/core/manager');
+    const { createKeysHandler } = await import('@artipod/core/server');
+    const { hostSave } = await import('../lib/services/host-save');
+    const { initFileSystem, saveFileSystem } = await import('../lib/filesystem');
+    const authority = await Authority.create('save-boundary-test');
+    const podId = 'pod0000000000001';
+    authority.registerPod(podId, new Uint8Array(32).fill(7));
+    const handler = createKeysHandler({ authority, podIds: [podId], capTtlMs: 3600_000 });
+    const adapters = nodeAdapters({ fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const path = url.replace(/^https?:\/\/[^/]+/, '');
+      const request = new Request(`http://broker${path}`, init ?? (input instanceof Request ? input : undefined));
+      return handler(request, path.split('/').filter(Boolean).slice(2));
+    }) as typeof fetch });
+    const service = new KeysService(adapters);
+    const originalFetch = globalThis.fetch;
+    let renewing = false;
+    let principalReady!: () => void;
+    const requestedPrincipal = new Promise<void>(resolve => { principalReady = resolve; });
+    let finishPrincipal!: () => void;
+    const principalGate = new Promise<void>(resolve => { finishPrincipal = resolve; });
+    try {
+      await service.install(async () => {
+        if (renewing) { principalReady(); await principalGate; }
+        return 'tester';
+      });
+      const grantWrite = vi.spyOn(adapters.kv, 'put');
+      const io = new UiStateIO(memoryStateMedium());
+      await io.recordWorkspace('private:_1', 'pod', 'rw');
+      bindings.keys.flush.mockReset().mockImplementation(() => service.flush());
+      bindings.registryFlush.mockImplementation(() => io.flush());
+      bindings.session.open.mockResolvedValue({ zfs: {} });
+      let brokerPublished = false;
+      service.subscribe(() => {
+        if (renewing && !brokerPublished && !service.getSnapshot().renewing) {
+          brokerPublished = true;
+          hostSave.schedule(async () => { await io.patch('private:_1', { encrypted: true }); }, 500, () => {});
+        }
+      });
+      let renewal: Promise<void> | undefined;
+      const saved: unknown[] = [];
+      bindings.session.flush.mockImplementation(async () => {
+        saved.push(await io.read());
+        if (saved.length === 1) {
+          renewing = true;
+          renewal = service.scheduler.run(RENEW_TASK);
+          await requestedPrincipal;
+        }
+      });
+      await initFileSystem();
+      let complete = false;
+      const saving = saveFileSystem().then(() => { complete = true; });
+      await requestedPrincipal;
+      await vi.waitFor(() => expect(bindings.keys.flush).toHaveBeenCalledTimes(2));
+      expect(complete).toBe(false);
+      expect(brokerPublished).toBe(false);
+      expect(grantWrite).not.toHaveBeenCalled();
+      finishPrincipal();
+      await Promise.all([saving, renewal]);
+      expect(grantWrite).toHaveBeenCalledWith('session', expect.any(Object));
+      expect(saved.at(-1)).toMatchObject({ workspaces: [{ id: 'private:_1', encrypted: true }] });
+      expect(saved.length).toBeGreaterThan(1);
+    } finally {
+      finishPrincipal();
+      service.scheduler.dispose();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('rejects a lost registry field after an unrelated save and clears it only after retry or authenticated recovery', async () => {
     vi.resetModules();
     vi.stubGlobal('window', {});

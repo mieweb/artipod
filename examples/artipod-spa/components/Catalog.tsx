@@ -15,8 +15,7 @@ import type { Sandbox } from '@artipod/core/sandbox';
 import { catalogStore, refreshServer, E2E_MEDIA_TYPE } from '@/lib/stores/catalog';
 import { registryStore } from '@/lib/stores/registry';
 import { brokerStore } from '@/lib/stores/broker';
-import { refreshLocal } from '@/lib/services/catalog-refresh';
-import { hostSave } from '@/lib/services/host-save';
+import { createLocalCatalogRefresh } from '@/lib/services/catalog-refresh';
 import { OPEN_DRAFT_TIP, isOpenRef, nextDraftRef, setOpenTag, workspaceUrl, type OpenMode } from '@/lib/boot';
 import { navClick, navigateTo } from '@/lib/stores/route';
 import EncryptionBadge from '@/components/EncryptionBadge';
@@ -39,6 +38,7 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
   useEffect(() => { void refreshExecutables(); }, [serverRefs, local, brokerStatus]);
 
   useEffect(() => {
+    const localRefresh = createLocalCatalogRefresh();
     void refreshServer();
     let disposeEvents: (() => void) | null = null;
     let disposeConsole: (() => Promise<void>) | null = null;
@@ -46,13 +46,17 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
     // to a workspace), nothing may register or setState — and anything that
     // did is torn down here rather than leaking into the workspace's /proc.
     let cancelled = false;
-    const teardown = registerFileSystemTeardown(async () => {
+    const stopRefresh = () => {
       cancelled = true;
+      localRefresh.dispose();
       disposeEvents?.();
+    };
+    const teardown = registerFileSystemTeardown(async () => {
+      stopRefresh();
       await disposeConsole?.();
     }, 'Catalog console');
     (async () => {
-      await refreshLocal();
+      await localRefresh.refresh();
       if (cancelled) return;
       // root console over the raw fs — /proc, every workspace, pod internals;
       // its commands rescan the lists (fs:changed after every exec)
@@ -97,13 +101,11 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
         });
         const consoleEvents = new Events();
         if (cancelled) return;
-        let cancelRefresh: (() => void) | undefined;
-        const refreshCatalog = async () => { await refreshLocal(); };
         const offEvents = consoleEvents.on('fs:changed', () => {
           if (resettingStorage || cancelled) return;
-          cancelRefresh = hostSave.schedule(refreshCatalog, 300, error => console.error('catalog persistence failed:', error));
+          localRefresh.schedule(300, error => console.error('catalog persistence failed:', error));
         });
-        disposeEvents = () => { offEvents(); cancelRefresh?.(); hostSave.forget(refreshCatalog); };
+        disposeEvents = offEvents;
         // A pod-less console (D18): its own small PID namespace (nothing runs
         // here but this shell), images / volumes / artipod over the page's rows.
         const rootConsole = openConsole({
@@ -117,8 +119,13 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
       } catch {
         // fs init failed — no console
       }
-    })();
-    return () => { void teardown().catch(error => console.error('catalog close failed:', error)); };
+    })().catch(error => { if (!cancelled) console.error('catalog persistence failed:', error); });
+    return () => {
+      // The registered teardown starts in a microtask; retire scan ownership
+      // synchronously so a late rejection cannot become the next page's debt.
+      stopRefresh();
+      void teardown().catch(error => console.error('catalog close failed:', error));
+    };
   }, []);
 
   // ctrl+` opens the root console here too
