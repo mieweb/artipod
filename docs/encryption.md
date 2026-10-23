@@ -85,6 +85,11 @@ installing the replacement. Recovery uses that fallback
 only when the primary name is absent; malformed or inaccessible primary JSON
 still fails visibly. Failed writes are observed independently of the broker lease
 so saved storage can be recovered without discarding tab-only editor drafts.
+The SPA retains registry save errors for the affected workspace fields;
+unrelated successful updates cannot acknowledge a lost change. A successful
+retry, explicit entry removal or authenticated recovery acknowledges only the
+covered failures. Recovery keeps its potentially-unsaved-changes warning, and
+mutations accepted after acknowledgement begins retain their own failures.
 
 The managed vault currently encrypts its blocks directly with the supplied key
 (the leased broker KEK in the SPA); it does not introduce independent per-layer

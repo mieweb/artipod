@@ -2,7 +2,7 @@
 import { createStorageSession, StorageClosePersistenceError, type StorageSession, type StorageSessionInfo, type StorageSessionSnapshot } from '@artipod/core/storage';
 import type { StorageBackend, ZenFsLike } from '@artipod/core/sandbox';
 import { loadBackendPref } from '@artipod/core/sandbox';
-import { flushUiState, keys } from './boot';
+import { acknowledgeUiStateRecovery, flushUiState, keys } from './boot';
 import { hostSave } from './services/host-save';
 
 export type ZenFs = ZenFsLike;
@@ -52,6 +52,7 @@ export async function initFileSystem(pref?: StorageBackend): Promise<StorageSess
 export async function recoverFileSystem(pref?: StorageBackend): Promise<{ info: StorageSessionInfo; warning: string }> {
   const result = await storage(pref).recover();
   fs = result.info.zfs; fsInfo = result.info;
+  await acknowledgeUiStateRecovery();
   return result;
 }
 export async function flushFileSystem(): Promise<void> { await session?.flush(); }

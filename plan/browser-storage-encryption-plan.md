@@ -75,6 +75,10 @@ markers only. Final command results are recorded with the pull request.
 
 ### Interrupted OPFS publication — issue #129 (2026-10-22)
 
+- PR review follow-up (2026-10-23): fixed registry save error retention across
+  unrelated successful field updates. Matching retries, explicit deletion and
+  authenticated recovery acknowledge the covered failures; recovery preserves
+  its warning and newer failures. SPA lint/typecheck and 101 tests pass.
 - Deterministically reproduced the original implementation in Chromium by
   destroying a page immediately after creating numeric record `129129`.
   Its backing length was zero with no envelope header; the existing root and

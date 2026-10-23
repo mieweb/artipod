@@ -87,6 +87,11 @@ export async function flushUiState(): Promise<void> {
   await (await ioSingleton)?.io.flush();
 }
 
+/** Core has reopened its saved generation and warned that old writes may be lost. */
+export async function acknowledgeUiStateRecovery(): Promise<void> {
+  await (await ioSingleton)?.io.acknowledgeRecovery();
+}
+
 let bootstrapActor: string | null = null;
 /** Opaque login principal: obtaining a key must never open/write the registry. */
 export async function actorId(): Promise<string> {

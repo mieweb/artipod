@@ -4,11 +4,12 @@ import { memoryStateMedium, UiStateIO } from '../lib/services/ui-state';
 const bindings = vi.hoisted(() => ({
   keys: { flush: vi.fn() },
   registryFlush: vi.fn(),
+  acknowledge: vi.fn(),
   uiState: vi.fn(),
-  session: { open: vi.fn(), flush: vi.fn() },
+  session: { open: vi.fn(), flush: vi.fn(), recover: vi.fn() },
 }));
 
-vi.mock('../lib/boot', () => ({ keys: () => bindings.keys, flushUiState: () => bindings.registryFlush(), uiState: () => bindings.uiState() }));
+vi.mock('../lib/boot', () => ({ keys: () => bindings.keys, flushUiState: () => bindings.registryFlush(), acknowledgeUiStateRecovery: () => bindings.acknowledge(), uiState: () => bindings.uiState() }));
 vi.mock('../lib/services/catalog-service', () => ({
   boundAncestry: async () => async () => true,
   computeVerdicts: async () => new Map([['private:_1', 'synced']]),
@@ -70,6 +71,46 @@ describe('saveFileSystem production composition', () => {
     await initFileSystem();
     await expect(saveFileSystem()).rejects.toBe(failure);
     expect(bindings.session.flush).not.toHaveBeenCalled();
+  });
+
+  it('rejects a lost registry field after an unrelated save and clears it only after retry or authenticated recovery', async () => {
+    vi.resetModules();
+    vi.stubGlobal('window', {});
+    const { initFileSystem, saveFileSystem, recoverFileSystem } = await import('../lib/filesystem');
+    const medium = memoryStateMedium();
+    const io = new UiStateIO(medium);
+    await io.recordWorkspace('private:_1', 'pod', 'rw');
+    await io.patch('private:_1', { unsynced: false });
+    bindings.keys.flush.mockResolvedValue(undefined);
+    bindings.registryFlush.mockImplementation(() => io.flush());
+    bindings.acknowledge.mockImplementation(() => io.acknowledgeRecovery());
+    bindings.session.open.mockResolvedValue({ zfs: {} });
+    bindings.session.flush.mockReset().mockResolvedValue(undefined);
+    await initFileSystem();
+    const write = medium.write;
+    const failure = new Error('EACCES: lease expired before writing the registry');
+    medium.write = async () => { throw failure; };
+    await expect(io.patch('private:_1', { unsynced: true })).rejects.toBe(failure);
+    medium.write = write;
+    await io.patch('private:_1', { hasChanges: true });
+    expect((await io.read()).workspaces[0]).toMatchObject({ unsynced: false, hasChanges: true });
+    await expect(saveFileSystem()).rejects.toBe(failure);
+    expect(bindings.session.flush).not.toHaveBeenCalled();
+    await io.patch('private:_1', { unsynced: true });
+    await saveFileSystem();
+
+    medium.write = async () => { throw failure; };
+    await expect(io.patch('private:_1', { encrypted: true })).rejects.toBe(failure);
+    medium.write = write;
+    bindings.acknowledge.mockClear();
+    bindings.session.recover.mockRejectedValueOnce(new Error('Saved generation did not authenticate'));
+    await expect(recoverFileSystem()).rejects.toThrow('did not authenticate');
+    expect(bindings.acknowledge).not.toHaveBeenCalled();
+    await expect(saveFileSystem()).rejects.toBe(failure);
+    bindings.session.recover.mockResolvedValue({ info: { zfs: {} }, warning: 'Some changes could not be saved' });
+    expect((await recoverFileSystem()).warning).toContain('could not be saved');
+    expect(bindings.acknowledge).toHaveBeenCalledOnce();
+    await saveFileSystem();
   });
 
   it.each(['scheduled', 'inflight'])('awaits a held %s automatic push before saving its registry outcome', async phase => {

@@ -252,6 +252,12 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 
 ### Interrupted browser saves — issue #129 (2026-10-22)
 
+- PR review follow-up (2026-10-23): retained registry failures by workspace and
+  field so a successful unrelated update cannot hide a lost `unsynced` change.
+  Successful retries and explicit deletion supersede only covered fields/entries.
+  Authenticated recovery acknowledges prior failures while preserving its
+  warning and any newer failures. SPA lint/typecheck and all 101 tests pass;
+  independent review reran 21 focused regression tests successfully.
 - Added `saveFileSystem()` / `window.__artipodSave()` as the host completion
   boundary for intentional reloads. It drains registry mutations, debounced
   probes, catalog refreshes through registry healing, automatic/retry pushes
