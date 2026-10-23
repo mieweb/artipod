@@ -32,6 +32,11 @@ class TestOpfsDirectory {
       this.files.set(name, new Uint8Array());
     }
     return {
+      move: async (_destination: FileSystemDirectoryHandle, nextName: string) => {
+        const bytes = this.files.get(name)!;
+        this.files.set(nextName, bytes);
+        this.files.delete(name);
+      },
       getFile: async () => {
         if (this.readError) throw this.readError;
         return { arrayBuffer: async () => this.files.get(name)!.slice().buffer };

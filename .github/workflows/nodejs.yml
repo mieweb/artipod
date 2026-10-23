@@ -148,7 +148,9 @@ jobs:
         done
         curl --fail --silent --max-time 2 "$BASE_URL/api/keys" > /dev/null || { cat "$RUNNER_TEMP/artipod-browser-server.log"; exit 1; }
         node examples/artipod-spa/scripts/verify-vault-migration.mjs
-        node examples/artipod-spa/scripts/verify-encrypted-storage.mjs
+        node examples/artipod-spa/scripts/verify-encrypted-interruption.mjs
+        TEST_STORAGE_BACKEND=opfs node examples/artipod-spa/scripts/verify-encrypted-storage.mjs
+        TEST_STORAGE_BACKEND=indexeddb node examples/artipod-spa/scripts/verify-encrypted-storage.mjs
 
     - name: Save browser server diagnostics
       if: failure()

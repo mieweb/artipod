@@ -393,6 +393,236 @@ describe('KeysService', () => {
     svc.scheduler.dispose();
   });
 
+  it('flush waits for a login that has not submitted its wrapped grant yet', async () => {
+    const broker = await realBroker();
+    let ready!: () => void;
+    const requested = new Promise<void>(resolve => { ready = resolve; });
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    adapters.fetch = (async (...args: Parameters<typeof fetch>) => {
+      const response = await broker(...args);
+      if (String(args[0]).endsWith('/api/keys/login')) { ready(); await gate; }
+      return response;
+    }) as typeof fetch;
+    const svc = new KeysService(adapters);
+    const login = svc.login('tester');
+    await requested;
+    let saved = false;
+    const saving = svc.flush().then(() => { saved = true; });
+    await Promise.resolve();
+    expect(saved).toBe(false);
+    expect(await adapters.kv.get('session')).toBeUndefined();
+    finish();
+    await saving;
+    expect(await login).toBe(true);
+    expect(await adapters.kv.get('session')).toBeDefined();
+    svc.scheduler.dispose();
+  });
+
+  it('flush waits for the renewal principal lookup before its login starts', async () => {
+    adapters.fetch = await realBroker();
+    let renewing = false;
+    let ready!: () => void;
+    const requested = new Promise<void>(resolve => { ready = resolve; });
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const svc = new KeysService(adapters);
+    await svc.install(async () => { if (renewing) { ready(); await gate; } return 'tester'; });
+    const put = vi.spyOn(adapters.kv, 'put');
+    renewing = true;
+    const renewal = svc.scheduler.run(RENEW_TASK);
+    await requested;
+    let complete = false;
+    const saving = svc.flush().then(() => { complete = true; });
+    await Promise.resolve();
+    expect(complete).toBe(false);
+    expect(put).not.toHaveBeenCalled();
+    finish();
+    await Promise.all([renewal, saving]);
+    expect(put).toHaveBeenCalledWith('session', expect.any(Object));
+    svc.scheduler.dispose();
+  });
+
+  it('serializes same-key persistence so an older success cannot clear a newer failure', async () => {
+    adapters.fetch = await realBroker();
+    const svc = new KeysService(adapters);
+    await svc.install(async () => 'tester');
+    const put = adapters.kv.put;
+    let ready!: () => void;
+    const requested = new Promise<void>(resolve => { ready = resolve; });
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const failure = new Error('The newer session write failed');
+    let writes = 0;
+    adapters.kv.put = async (key, value) => {
+      if (key === 'session') {
+        writes += 1;
+        if (writes === 1) { ready(); await gate; }
+        else throw failure;
+      }
+      await put(key, value);
+    };
+    svc.release();
+    await requested;
+    svc.release();
+    const saving = svc.flush();
+    await Promise.resolve();
+    expect(writes).toBe(1);
+    finish();
+    await expect(saving).rejects.toBe(failure);
+    expect(writes).toBe(2);
+    svc.scheduler.dispose();
+  });
+
+  it('flush drains the latest preference and reports failed grant persistence', async () => {
+    const svc = new KeysService(adapters);
+    const writes: boolean[] = [];
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    svc.setOfflineWriter(async value => { writes.push(value); if (writes.length === 1) await gate; });
+    svc.setForcedOffline(true);
+    await vi.waitFor(() => expect(writes).toEqual([true]));
+    const saving = svc.flush();
+    svc.setForcedOffline(false);
+    finish();
+    await saving;
+    expect(writes).toEqual([true, false]);
+
+    adapters.fetch = await realBroker();
+    const put = adapters.kv.put;
+    adapters.kv.put = async (key, value) => {
+      if (key === 'session' && value !== undefined) throw new Error('IndexedDB quota exceeded');
+      await put(key, value);
+    };
+    await svc.login('tester');
+    await expect(svc.flush()).rejects.toThrow('IndexedDB quota exceeded');
+    adapters.kv.put = put;
+    expect(await svc.login('tester')).toBe(true);
+    await svc.flush();
+    svc.scheduler.dispose();
+  });
+
+  it.each([false, true])('keeps flushing a new held offline preference admitted while grant IO drains (writer failure: %s)', async failWriter => {
+    adapters.fetch = await realBroker();
+    const svc = new KeysService(adapters);
+    await svc.login('tester');
+    const put = adapters.kv.put;
+    let finishGrant!: () => void;
+    const grantGate = new Promise<void>(resolve => { finishGrant = resolve; });
+    adapters.kv.put = async (key, value) => { await grantGate; await put(key, value); };
+    svc.release();
+    let finishOffline!: () => void;
+    const offlineGate = new Promise<void>(resolve => { finishOffline = resolve; });
+    let offlineStarted!: () => void;
+    const writingOffline = new Promise<void>(resolve => { offlineStarted = resolve; });
+    let storedOffline = false;
+    const failure = new Error('The latest offline preference could not be written');
+    svc.setOfflineWriter(async value => { offlineStarted(); await offlineGate; if (failWriter) throw failure; storedOffline = value; });
+    let outcome = 'pending';
+    const saving = svc.flush().then(() => { outcome = 'saved'; }, error => { outcome = 'failed'; throw error; });
+    void saving.catch(() => {});
+    try {
+      // This queued empty drain completes after flush passed its first
+      // preference drain, while the grant write still cannot finish.
+      await svc.flushOfflinePreference();
+      svc.setForcedOffline(true);
+      await writingOffline;
+      finishGrant();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(outcome).toBe('pending');
+      finishOffline();
+      if (failWriter) await expect(saving).rejects.toBe(failure);
+      else await saving;
+      expect(outcome).toBe(failWriter ? 'failed' : 'saved');
+      expect(storedOffline).toBe(!failWriter);
+    } finally {
+      finishGrant(); finishOffline(); await saving.catch(() => {}); svc.scheduler.dispose();
+    }
+  });
+
+  it.each(['replacement writer', 'explicit retry'])('uses a new %s after an old preference error while grant IO drains', async retryKind => {
+    adapters.fetch = await realBroker();
+    const svc = new KeysService(adapters);
+    await svc.login('tester');
+    const put = adapters.kv.put;
+    let finishGrant!: () => void;
+    const grantGate = new Promise<void>(resolve => { finishGrant = resolve; });
+    adapters.kv.put = async (key, value) => { await grantGate; await put(key, value); };
+    svc.release();
+    let available = false;
+    let storedOffline = false;
+    let savingStarted = false;
+    let attempted!: () => void;
+    const oldAttempt = new Promise<void>(resolve => { attempted = resolve; });
+    const failure = new Error('The old writer cannot access storage');
+    svc.setOfflineWriter(async value => {
+      if (!available) { if (savingStarted) attempted(); throw failure; }
+      storedOffline = value;
+    });
+    svc.setForcedOffline(true);
+    await expect(svc.flushOfflinePreference()).rejects.toBe(failure);
+    savingStarted = true;
+    let outcome = 'pending';
+    const saving = svc.flush().then(() => { outcome = 'saved'; }, error => { outcome = 'failed'; throw error; });
+    void saving.catch(() => {});
+    try {
+      await oldAttempt;
+      if (retryKind === 'replacement writer') svc.setOfflineWriter(async value => { storedOffline = value; });
+      else { available = true; await svc.flushOfflinePreference(); }
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(outcome).toBe('pending');
+      finishGrant();
+      await saving;
+      expect(storedOffline).toBe(true);
+    } finally { finishGrant(); await saving.catch(() => {}); svc.scheduler.dispose(); }
+  });
+
+  it('drains simultaneous flush callers without admitting new preference retries of its own', async () => {
+    const svc = new KeysService(adapters);
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const writer = vi.fn(async () => { await gate; });
+    svc.setOfflineWriter(writer);
+    svc.setForcedOffline(true);
+    const first = svc.flush();
+    const second = svc.flush();
+    finish();
+    await Promise.all([first, second]);
+    await Promise.all([svc.flush(), svc.flush()]);
+    expect(writer).toHaveBeenCalledExactlyOnceWith(true);
+    svc.scheduler.dispose();
+  });
+
+  it('rejects a flush when browser reset takes ownership during its grant drain', async () => {
+    adapters.fetch = await realBroker();
+    const svc = new KeysService(adapters);
+    await svc.login('tester');
+    const put = adapters.kv.put;
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    adapters.kv.put = async (key, value) => { await gate; await put(key, value); };
+    svc.release();
+    const saving = svc.flush();
+    await svc.flushOfflinePreference();
+    const resetting = svc.suspendForReset();
+    finish();
+    await expect(saving).rejects.toThrow('suspended for browser reset');
+    (await resetting)();
+    svc.scheduler.dispose();
+  });
+
+  it('flush rejects an unsaved preference when storage is unavailable and permits an explicit retry', async () => {
+    const svc = new KeysService(adapters);
+    svc.setForcedOffline(true);
+    await expect(svc.flush()).rejects.toThrow('offline preference has not been saved');
+    const failure = new Error('EACCES: locked');
+    svc.setOfflineWriter(async () => { throw failure; });
+    await expect(svc.flush()).rejects.toBe(failure);
+    svc.setOfflineWriter(async () => {});
+    await svc.flush();
+    svc.scheduler.dispose();
+  });
+
   it('patchedFetch attaches the lease to /api/pods and retries once on 401', async () => {
     const broker = await realBroker();
     const seenLeases: (string | null)[] = [];

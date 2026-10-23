@@ -53,7 +53,7 @@ export default function Page() {
           return;
         }
         initRouting();
-        setBoot({ phase: 'ready', memoryOnly: (info as { memoryOnly?: boolean } | null)?.memoryOnly, message: recovery?.warning });
+        setBoot({ phase: 'ready', memoryOnly: info?.memoryOnly, message: recovery?.warning ?? info?.recoveryWarning });
       } catch (error) {
         if (cancelled || attempt !== generation) return;
         setBoot({ phase: 'error', message: error instanceof Error ? error.message : String(error), canRecover: fileSystemNeedsRecovery() });
