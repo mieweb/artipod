@@ -22,6 +22,8 @@ import { nextDraftRef } from '../boot';
 import { createBrowserRuntime, type BrowserRuntime } from '@artipod/core/apps';
 import { catalogInventory } from './inventory';
 import { disposeSessionResources, SessionDisposalError, SessionLifecycle, type SessionOpening } from './pod-session-lifecycle';
+import { hostSave } from './host-save';
+import { workspaceAutoPush } from './workspace-auto-push';
 
 type Pod = Awaited<ReturnType<typeof import('@artipod/core').createZenFsPod>>;
 
@@ -62,8 +64,13 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   let cleanupRearm: (() => void) | undefined;
   let cleanupBroker: (() => void) | undefined;
   let stopPreview: (() => void) | undefined;
-  let probeTimer: ReturnType<typeof setTimeout> | null = null;
+  let releaseProbe: (() => void) | undefined;
   const offs: (() => void)[] = [];
+  const releaseSaveTasks: (() => void)[] = [];
+  const saveTask = (work: () => Promise<void>): (() => Promise<void>) => {
+    releaseSaveTasks.push(() => hostSave.forget(work));
+    return () => hostSave.run(work);
+  };
   let closed = false;
   let disposed = false;
   let pushTerminated = false;
@@ -76,8 +83,9 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       () => { if (stopPreview) window.removeEventListener('pagehide', stopPreview); },
       ...offs,
       () => cleanupBroker?.(),
+      () => { for (const release of releaseSaveTasks) release(); },
       () => cleanupRearm?.(),
-      () => { if (probeTimer) clearTimeout(probeTimer); },
+      () => releaseProbe?.(),
       () => cleanupSandbox?.dispose(),
       () => cleanupPod?.keyring.revokeAll(),
       () => cleanupPod?.dispose(),
@@ -254,7 +262,10 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       sync: {
         remote,
         actor,
-        ...(route.isRef ? { basis: { ref: route.id, upperConfig: cowUpper }, autoPush: route.mode === 'rw' } : {}),
+        // The host owns the same two-second edit debounce below, so its save
+        // boundary can await queued and in-flight automatic pushes.
+        autoPush: false,
+        ...(route.isRef ? { basis: { ref: route.id, upperConfig: cowUpper } } : {}),
       },
       hydration: {
         policy: { default: 'lazy' },
@@ -310,6 +321,12 @@ async function bootPodSession(route: Route): Promise<PodSession> {
     console.error('workspace persistence failed:', error);
     if (!closed) workspaceStore.setState({ sync: { kind: 'failed', at: Date.now(), error: error instanceof Error ? error.message : String(error) } });
   };
+  if (route.isRef && route.mode === 'rw') offs.push(workspaceAutoPush({
+    events,
+    push: () => pod.pushBasis(),
+    enabled: () => !pushTerminated,
+    onError: reportPersistenceFailure,
+  }));
   let needsPush = route.mode === 'rw' && ((await io.read()).workspaces.find((e) => e.id === route.id)?.unsynced ?? false);
   if (needsPush) syncState = reduceSync(syncState, { type: 'push-fail' });
   offs.push(
@@ -328,7 +345,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       workspaceStore.setState((s) => (s.sync.kind === 'failed' ? s : { ...s, sync: { kind: 'pending' } }));
     }),
   );
-  scheduler.register(PUSH_TASK, async () => {
+  scheduler.register(PUSH_TASK, saveTask(async () => {
     if (pushTerminated || !needsPush || route.mode !== 'rw' || svc.forcedOffline) return;
     dispatch({ type: 'push-start' });
     const result = await pod.pushBasis();
@@ -338,7 +355,7 @@ async function bootPodSession(route: Route): Promise<PodSession> {
       dispatch({ type: 'push-ok', at: Date.now() });
       await io.patch(route.id, { unsynced: false });
     }
-  });
+  }));
   // Boot retry (an offline session left work behind). The slow 15 s interval
   // is armed by `rearm` below once this run has COMPLETED — scheduling here
   // would flip the task to `scheduled` mid-run and let a second push overlap.
@@ -356,23 +373,30 @@ async function bootPodSession(route: Route): Promise<PodSession> {
   });
   cleanupRearm = rearm;
   // Reconnect + lease renewal: broker snapshots drive both retry and re-key.
-  const unsubBroker = brokerStore.subscribe(() => {
+  const updateBrokerLease = saveTask(async () => {
     const lease = svc.getLease();
     const key = svc.getKey();
     if (brokerStore.getState().status === 'locked') {
-      // The root is already locked, so audit persistence may fail. Revocation
-      // must happen first and must never depend on an audit write succeeding.
-      pod.keyring.revokeAll('kek:');
-      void pod.locker.lock().catch((error) => console.warn('workspace lock audit unavailable:', error));
+      await pod.locker.lock();
       return;
     }
-    if (lease && key) void (async () => {
+    if (lease && key) {
       // Authenticate the renewed key with the core root before touching even
       // cached pod metadata. A newer lease supersedes this completion.
       await initFileSystem();
       if (svc.getLease() !== lease || svc.getKey() !== key) return;
       await pod.locker.adoptLease(lease, { [pod.oci.store.getSuperblock().podId]: key });
-    })().catch(reportPersistenceFailure);
+    }
+  });
+  const unsubBroker = brokerStore.subscribe(() => {
+    if (brokerStore.getState().status === 'locked') {
+      // The root is already locked, so audit persistence may fail. Revocation
+      // must happen first and must never depend on an audit write succeeding.
+      pod.keyring.revokeAll('kek:');
+      void updateBrokerLease().catch((error) => console.warn('workspace lock audit unavailable:', error));
+      return;
+    }
+    void updateBrokerLease().catch(reportPersistenceFailure);
     if (!pushTerminated) void scheduler.run(PUSH_TASK);
   });
 
@@ -380,22 +404,21 @@ async function bootPodSession(route: Route): Promise<PodSession> {
 
   // Track unpushed work for the catalog: probe the upper after changes/pushes.
   const upperAt = route.isRef ? `/.artipod/upper/${encodeURIComponent(route.id)}` : blankRoot;
+  const updateProbe = async (): Promise<void> => {
+    // `artipod offline on|off` in this shell flips the chip live
+    try {
+      const { readPodSettings } = await import('@artipod/core/oci');
+      svc.reconcileOffline((await readPodSettings(fs as unknown as Parameters<typeof readPodSettings>[0])).offline === true);
+      dispatch({ type: svc.forcedOffline ? 'offline' : 'online' });
+    } catch {
+      // fs hiccup — mirror stands
+    }
+    const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
+    await io.patch(route.id, { hasChanges: entries.length > 0 });
+  };
+  releaseProbe = () => hostSave.forget(updateProbe);
   const probe = (): void => {
-    if (probeTimer) clearTimeout(probeTimer);
-    probeTimer = setTimeout(() => {
-      // `artipod offline on|off` in this shell flips the chip live
-      void (async () => {
-        try {
-          const { readPodSettings } = await import('@artipod/core/oci');
-          svc.reconcileOffline((await readPodSettings(fs as unknown as Parameters<typeof readPodSettings>[0])).offline === true);
-          dispatch({ type: svc.forcedOffline ? 'offline' : 'online' });
-        } catch {
-          // fs hiccup — mirror stands
-        }
-        const entries = (await fs.promises.readdir(upperAt).catch(() => [])) as string[];
-        await io.patch(route.id, { hasChanges: entries.length > 0 });
-      })().catch(reportPersistenceFailure);
-    }, 500);
+    hostSave.schedule(updateProbe, 500, reportPersistenceFailure);
   };
   offs.push(events.on('fs:changed', probe));
   offs.push(events.on('sync:push', probe));

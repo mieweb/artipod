@@ -250,6 +250,34 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 
 ## Worklog
 
+### Interrupted browser saves — issue #129 (2026-10-22)
+
+- Added `saveFileSystem()` / `window.__artipodSave()` as the host completion
+  boundary for intentional reloads. It drains registry mutations, debounced
+  probes, catalog refreshes through registry healing, automatic/retry pushes
+  and lease adoption, then key-service and filesystem persistence. Automatic
+  edit pushes retain their two-second debounce but are scheduled by the host
+  instead of the core pod's independent timer, making accepted work drainable.
+- Core key saves include active renewal principal lookup, authentication,
+  serialized device/grant writes and the latest offline preference. Failures
+  reject saves, and disposed producers release stale save obligations.
+- OPFS publishes closed encrypted stages through native file moves and
+  authenticates saved records before interrupted-stage cleanup. The existing
+  page alert displays the public session's warning when pending changes were
+  discarded. Empty numeric records and corrupt ciphertext still fail closed;
+  the broader ZenFS multi-block rollback limitation remains separate work.
+- The app harness uses the completion boundary, compares saved registry/grant
+  state after reload and exercises preference/registry overlap interrupted at
+  native create/write/close. CI requires both OPFS and IndexedDB app runs plus
+  the independent interruption harness. Dark-mode recovery reporting was
+  visually checked, with light text on the existing dark banner.
+- Verification: core `npm run lint`, `npm run build`, `npx tsc --noEmit` and
+  `npm test` pass (984 tests plus 35 checkpoint tests). SPA `npm run lint`,
+  `npm run typecheck` and `npm test` pass (96 tests). `npm run build:ui` passes
+  the version/struct-minifier assertions. Both actual-app backends, six native
+  interruption cases, migration checks and the packed native/browser consumer
+  pass, with zero private-marker leaks and no unhandled browser errors.
+
 ### Promotion review fixes — PR #83 (2026-10-21)
 
 - Workspace openings reserve teardown synchronously before a replacement boot,

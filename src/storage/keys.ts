@@ -86,6 +86,10 @@ export class KeysService implements StorageKeyProvider {
   private leaseGeneration = 0;
   private storageSuspended = false;
   private readonly storageOperations = new Set<Promise<unknown>>();
+  private readonly storageWrites = new Map<string, Promise<void>>();
+  private readonly keyOperations = new Set<Promise<unknown>>();
+  private readonly persistenceFailures = new Map<string, unknown>();
+  private saveRevision = 0;
   /** Authentication challenges contain no usable key material and may survive lock. */
   private readonly keyChecks = new Map<string, { iv: ArrayBuffer; ciphertext: ArrayBuffer }>();
   private installed = false;
@@ -104,9 +108,9 @@ export class KeysService implements StorageKeyProvider {
   ) {
     this.released = adapters.mirror.get(RELEASED_KEY) === '1';
     this.settings = { forcedOffline: adapters.mirror.get(OFFLINE_KEY) === '1' };
-    scheduler.register(RENEW_TASK, async () => {
+    scheduler.register(RENEW_TASK, () => this.trackKeys((async () => {
       if (this.principal) await this.login(await this.principal());
-    });
+    })()));
   }
 
   // ── snapshots ────────────────────────────────────────────────────────────
@@ -158,8 +162,48 @@ export class KeysService implements StorageKeyProvider {
     finally { this.storageOperations.delete(pending); }
   }
 
-  private persist(key: string, value: unknown): Promise<void> {
-    return this.stored(() => this.adapters.kv.put(key, value));
+  private async persist(key: string, value: unknown): Promise<void> {
+    this.saveRevision += 1;
+    const previous = this.storageWrites.get(key);
+    const write = async () => {
+      try {
+        await this.stored(() => this.adapters.kv.put(key, value));
+        this.persistenceFailures.delete(key);
+      } catch (error) {
+        this.persistenceFailures.set(key, error);
+        throw error;
+      }
+    };
+    const writing = previous ? previous.catch(() => {}).then(write) : write();
+    this.storageWrites.set(key, writing);
+    try { await writing; }
+    finally { if (this.storageWrites.get(key) === writing) this.storageWrites.delete(key); }
+  }
+
+  private trackKeys<T>(operation: Promise<T>): Promise<T> {
+    this.saveRevision += 1;
+    this.keyOperations.add(operation);
+    void operation.finally(() => this.keyOperations.delete(operation)).catch(() => {});
+    return operation;
+  }
+
+  /**
+   * Await authentication/device/grant IO and the latest offline preference.
+   * Hosts must await this before their filesystem flush and intentional reload;
+   * flushing storage alone cannot see writes a service has not submitted yet.
+   */
+  async flush(): Promise<void> {
+    if (this.storageSuspended) throw new Error('Key storage is suspended for browser reset; reload to resume');
+    for (;;) {
+      const revision = this.saveRevision;
+      while (this.keyOperations.size) await Promise.allSettled([...this.keyOperations]);
+      await this.flushOfflinePreference();
+      while (this.storageWrites.size) await Promise.allSettled([...this.storageWrites.values()]);
+      while (this.storageOperations.size) await Promise.allSettled([...this.storageOperations]);
+      if (this.pendingOffline) throw new Error('The offline preference has not been saved; open storage before reloading');
+      if (this.persistenceFailures.size) throw this.persistenceFailures.values().next().value;
+      if (revision === this.saveRevision && !this.keyOperations.size) return;
+    }
   }
 
   /** Drain device/grant IO before erasure, retaining the lease only for flush. */
@@ -169,6 +213,7 @@ export class KeysService implements StorageKeyProvider {
     this.scheduler.cancel(RENEW_TASK);
     if (this.expiryTimer) clearTimeout(this.expiryTimer);
     this.expiryTimer = null;
+    while (this.storageWrites.size) await Promise.allSettled([...this.storageWrites.values()]);
     while (this.storageOperations.size) await Promise.allSettled([...this.storageOperations]);
     return () => this.dropLease();
   }
@@ -241,6 +286,7 @@ export class KeysService implements StorageKeyProvider {
   }
 
   setForcedOffline(value: boolean): void {
+    this.saveRevision += 1;
     this.adapters.mirror.set(OFFLINE_KEY, value ? '1' : null);
     this.setSettings({ forcedOffline: value });
     this.pendingOffline = { value };
@@ -407,7 +453,11 @@ export class KeysService implements StorageKeyProvider {
   }
 
   /** Login uses an opaque profile identity and must never depend on the locked filesystem. */
-  async login(principal: string): Promise<boolean> {
+  login(principal: string): Promise<boolean> {
+    return this.trackKeys(this.loginWithPrincipal(principal));
+  }
+
+  private async loginWithPrincipal(principal: string): Promise<boolean> {
     if (this.storageSuspended) return false;
     // A background tab may not have run its expiry timer yet. Revoke the old
     // grant before capturing this fresh login's cancellation generation.
@@ -507,7 +557,11 @@ export class KeysService implements StorageKeyProvider {
    * The patch installs on EVERY serve (it carries the offline toggle); on
    * plaintext serves it is a passthrough. Idempotent.
    */
-  async install(principal: () => Promise<string>): Promise<BrokerSnapshot> {
+  install(principal: () => Promise<string>): Promise<BrokerSnapshot> {
+    return this.trackKeys(this.installWithPrincipal(principal));
+  }
+
+  private async installWithPrincipal(principal: () => Promise<string>): Promise<BrokerSnapshot> {
     if (this.storageSuspended) throw new Error('Key storage is suspended for browser reset; reload to resume');
     this.principal = principal;
     if (!this.installed) {

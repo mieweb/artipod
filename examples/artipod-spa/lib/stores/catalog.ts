@@ -5,6 +5,7 @@
  * changes. Actions live in services/catalog-refresh.
  */
 import { createStore } from 'zustand/vanilla';
+import { hostSave } from '../services/host-save';
 
 export const E2E_MEDIA_TYPE = 'application/vnd.artipod.encrypted-ref.v1+json';
 
@@ -42,7 +43,16 @@ export const catalogStore = createStore<CatalogSnapshot>()(() => ({
 }));
 
 /** Server list refresh (the UI artifact is infrastructure — filtered out). */
-export async function refreshServer(fetchImpl?: typeof fetch): Promise<void> {
+export function refreshServer(fetchImpl?: typeof fetch): Promise<void> {
+  return hostSave.run(async () => {
+    await loadServerRefs(fetchImpl);
+    // Registry healing is part of this producer's completion. A React effect
+    // reacting to serverRefs could otherwise start it after save returned.
+    await (await import('../services/catalog-refresh')).refreshVerdicts();
+  });
+}
+
+async function loadServerRefs(fetchImpl?: typeof fetch): Promise<void> {
   const doFetch = fetchImpl ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args));
   catalogStore.setState({ status: 'loading', error: undefined });
   try {

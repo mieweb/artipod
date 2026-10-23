@@ -15,7 +15,8 @@ import type { Sandbox } from '@artipod/core/sandbox';
 import { catalogStore, refreshServer, E2E_MEDIA_TYPE } from '@/lib/stores/catalog';
 import { registryStore } from '@/lib/stores/registry';
 import { brokerStore } from '@/lib/stores/broker';
-import { refreshLocal, refreshVerdicts } from '@/lib/services/catalog-refresh';
+import { refreshLocal } from '@/lib/services/catalog-refresh';
+import { hostSave } from '@/lib/services/host-save';
 import { OPEN_DRAFT_TIP, isOpenRef, nextDraftRef, setOpenTag, workspaceUrl, type OpenMode } from '@/lib/boot';
 import { navClick, navigateTo } from '@/lib/stores/route';
 import EncryptionBadge from '@/components/EncryptionBadge';
@@ -25,7 +26,7 @@ import { registerFileSystemTeardown } from '@/lib/filesystem';
 const Terminal = dynamicImport(() => import('@/components/Terminal'), { ssr: false });
 
 export default function Catalog({ actorId }: { actorId: () => Promise<string> }) {
-  const { serverRefs, localHeads, verdicts, changedRefs } = useStore(catalogStore);
+  const { serverRefs, verdicts, changedRefs } = useStore(catalogStore);
   const local = useStore(registryStore, (s) => s.entries);
   const applications = useStore(executableStore, (s) => s.applications);
   const brokerStatus = useStore(brokerStore, (s) => s.status);
@@ -96,13 +97,13 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
         });
         const consoleEvents = new Events();
         if (cancelled) return;
-        let timer: ReturnType<typeof setTimeout> | null = null;
+        let cancelRefresh: (() => void) | undefined;
+        const refreshCatalog = async () => { await refreshLocal(); };
         const offEvents = consoleEvents.on('fs:changed', () => {
           if (resettingStorage || cancelled) return;
-          if (timer) clearTimeout(timer);
-          timer = setTimeout(() => void refreshLocal().then(refreshVerdicts), 300);
+          cancelRefresh = hostSave.schedule(refreshCatalog, 300, error => console.error('catalog persistence failed:', error));
         });
-        disposeEvents = () => { offEvents(); if (timer) clearTimeout(timer); };
+        disposeEvents = () => { offEvents(); cancelRefresh?.(); hostSave.forget(refreshCatalog); };
         // A pod-less console (D18): its own small PID namespace (nothing runs
         // here but this shell), images / volumes / artipod over the page's rows.
         const rootConsole = openConsole({
@@ -119,11 +120,6 @@ export default function Catalog({ actorId }: { actorId: () => Promise<string> })
     })();
     return () => { void teardown().catch(error => console.error('catalog close failed:', error)); };
   }, []);
-
-  // Ancestry verdicts follow server refs + local heads.
-  useEffect(() => {
-    void refreshVerdicts();
-  }, [serverRefs, localHeads]);
 
   // ctrl+` opens the root console here too
   useEffect(() => {

@@ -17,6 +17,46 @@ import { decryptBlob, encryptBlob, isEncryptedBlob } from '../oci/cipher.js';
 type GetKey = () => CryptoKey | Promise<CryptoKey>;
 type TxCtor = new (store: Store & AsyncMap) => Transaction;
 
+// Only this exact namespace denotes an unpublished OPFS record. In particular,
+// an empty numeric record is still invalid and is never silently discarded.
+const OPFS_STAGE = /^\.artipod-stage-v1-(0|[1-9]\d*)-([a-f0-9]{32})$/;
+type MovableFileHandle = FileSystemFileHandle & {
+  move(destination: FileSystemDirectoryHandle, name: string): Promise<void>;
+};
+
+function atomicMoveUnavailable(): Error {
+  return new Error('EncryptedStore: OPFS requires atomic FileSystemFileHandle.move() support');
+}
+
+/** Refuse malformed envelopes before decryptBlob allocates or reads chunks. */
+function validateEnvelope(raw: Uint8Array): void {
+  try {
+    if (raw.length < 12) throw new Error();
+    const length = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(8, false);
+    if (!length || length > raw.length - 12) throw new Error();
+    const header = JSON.parse(new TextDecoder().decode(raw.subarray(12, 12 + length)));
+    if (!header || header.formatVersion !== 1 || header.cipher !== 'aes-256-gcm' ||
+        !Number.isSafeInteger(header.chunkSize) || header.chunkSize <= 0 ||
+        !Number.isSafeInteger(header.plaintextSize) || header.plaintextSize < 0 ||
+        !Array.isArray(header.nonces)) throw new Error();
+    const count = Math.max(1, Math.ceil(header.plaintextSize / header.chunkSize));
+    if (header.nonces.length !== count ||
+        !header.nonces.every((nonce: unknown) => typeof nonce === 'string' && /^[A-Za-z0-9+/]{16}$/.test(nonce)) ||
+        raw.length !== 12 + length + header.plaintextSize + 16 * count) throw new Error();
+  } catch {
+    throw new Error('EncryptedStore: corrupt encrypted backing block refused');
+  }
+}
+
+async function decodeBacking(raw: Uint8Array, getKey: GetKey, strict: boolean): Promise<Uint8Array> {
+  if (!isEncryptedBlob(raw)) {
+    if (strict) throw new Error('EncryptedStore: plaintext backing block refused');
+    return raw;
+  }
+  if (strict) validateEnvelope(raw);
+  return decryptBlob(raw, await getKey());
+}
+
 /** Not every transaction kind implements commit (e.g. sync map stores). */
 const commitIfAble = async (tx: Transaction): Promise<void> => {
   await (tx as { commit?: () => Promise<void> }).commit?.();
@@ -42,6 +82,8 @@ export interface EncryptedStoreMountOptions {
 }
 
 export interface EncryptedStoreFileSystem extends ZenFileSystem {
+  /** Unpublished OPFS stages discarded while opening this mount; contains no record IDs. */
+  readonly recoveredStages: number;
   /** Await queued encryption and backing I/O; rejects after any persistence failure. */
   flush(): Promise<void>;
 }
@@ -81,11 +123,7 @@ class EncryptedStore implements Store, AsyncMap {
   private async decode(raw: Uint8Array): Promise<Uint8Array> {
     this.assertAccess();
     // zero-byte and pre-encryption blocks pass through (adoption)
-    if (!isEncryptedBlob(raw)) {
-      if (this.options.strictCiphertext) throw new Error('EncryptedStore: plaintext backing block refused');
-      return raw;
-    }
-    return decryptBlob(raw, await this.getKey());
+    return decodeBacking(raw, this.getKey, !!this.options.strictCiphertext);
   }
 
   keys(): Iterable<number> {
@@ -235,19 +273,49 @@ class OpfsDirStore implements Store, AsyncMap {
   private constructor(
     private readonly dir: FileSystemDirectoryHandle,
     private readonly known: Set<number>,
+    private readonly stages: string[],
     private readonly txCtor: TxCtor,
   ) {}
 
   static async open(dir: FileSystemDirectoryHandle, txCtor: TxCtor, strict = false): Promise<OpfsDirStore> {
+    // Check the native capability before creating any files. Custom handles
+    // (including tests outside browsers) are checked again before writing.
+    const nativeHandle = (globalThis as unknown as {
+      FileSystemFileHandle?: { prototype: Partial<MovableFileHandle> };
+    }).FileSystemFileHandle;
+    if (nativeHandle && typeof nativeHandle.prototype.move !== 'function') throw atomicMoveUnavailable();
     const known = new Set<number>();
+    const stages: string[] = [];
     for await (const name of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) {
+      const stage = OPFS_STAGE.exec(name);
+      if (stage && Number.isSafeInteger(Number(stage[1]))) {
+        stages.push(name);
+        continue;
+      }
       const id = Number(name);
       if (strict && (!/^(0|[1-9]\d*)$/.test(name) || !Number.isSafeInteger(id))) {
         throw new Error('EncryptedStore: unexpected plaintext backing entry refused');
       }
       if (Number.isInteger(id)) known.add(id);
     }
-    return new OpfsDirStore(dir, known, txCtor);
+    return new OpfsDirStore(dir, known, stages, txCtor);
+  }
+
+  /** Validate all records first; never turn an invalid mount into data loss. */
+  async cleanupStages(getKey: GetKey, assertAccess?: () => void): Promise<number> {
+    for (const name of this.stages) {
+      assertAccess?.();
+      const handle = await this.dir.getFileHandle(name);
+      const raw = new Uint8Array(await (await handle.getFile()).arrayBuffer());
+      // createWritable publishes only on close: an interrupted stage is
+      // either the initial empty file or a complete authenticated envelope.
+      if (raw.length) await decodeBacking(raw, getKey, true);
+    }
+    for (const name of this.stages) {
+      assertAccess?.();
+      await this.dir.removeEntry(name);
+    }
+    return this.stages.length;
   }
 
   keys(): Iterable<number> {
@@ -270,6 +338,7 @@ class OpfsDirStore implements Store, AsyncMap {
   }
 
   async set(id: number, data: Uint8Array, offset = 0): Promise<void> {
+    if (!Number.isSafeInteger(id) || id < 0) throw new Error('EncryptedStore: invalid backing block identifier');
     let whole = data;
     if (offset !== 0) {
       const current = (await this.get(id)) ?? new Uint8Array();
@@ -277,15 +346,23 @@ class OpfsDirStore implements Store, AsyncMap {
       whole.set(current);
       whole.set(data, offset);
     }
-    const handle = await this.dir.getFileHandle(String(id), { create: true });
-    const writable = await handle.createWritable();
+    const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    const stageName = `.artipod-stage-v1-${id}-${nonce}`;
+    // A final numeric entry must never be observable before ciphertext close.
+    // Native OPFS move atomically replaces an existing destination as well.
+    const handle = await this.dir.getFileHandle(stageName, { create: true }) as MovableFileHandle;
+    let writable: FileSystemWritableFileStream | undefined;
     try {
+      if (typeof handle.move !== 'function') throw atomicMoveUnavailable();
+      writable = await handle.createWritable();
       await writable.write(whole as unknown as ArrayBufferView<ArrayBuffer>);
       await writable.close();
+      await handle.move(this.dir, String(id));
     } catch (error) {
-      // Release the stream's backing-file lock without replacing a previous
-      // valid ciphertext block. Keep the initiating write/close error.
-      await writable.abort().catch(() => {});
+      // Cleanup addresses the stage name, never the possibly promoted handle.
+      // A terminated context instead leaves this narrow recovery namespace.
+      await writable?.abort().catch(() => {});
+      await this.dir.removeEntry(stageName).catch(() => {});
       throw error;
     }
     this.known.add(id);
@@ -365,9 +442,10 @@ export async function encryptedStoreMount(options: EncryptedStoreMountOptions): 
   assertAccess?.();
   const txCtor = zen.AsyncMapTransaction as unknown as TxCtor;
   let inner: Store;
+  let opfs: OpfsDirStore | undefined;
   const backing = options.backing;
   if (backing.kind === 'opfs') {
-    inner = await OpfsDirStore.open(backing.dir, txCtor, options.strictCiphertext);
+    inner = opfs = await OpfsDirStore.open(backing.dir, txCtor, options.strictCiphertext);
   } else if (backing.kind === 'store') {
     inner = backing.store;
   } else {
@@ -379,7 +457,9 @@ export async function encryptedStoreMount(options: EncryptedStoreMountOptions): 
   }
   const store = new EncryptedStore(inner, options.getKey, txCtor, { ...options, assertAccess });
   await store.warm();
+  const recoveredStages = await opfs?.cleanupStages(options.getKey, assertAccess) ?? 0;
   class EncryptedFileSystem extends zen.StoreFS {
+    readonly recoveredStages = recoveredStages;
     flush(): Promise<void> { return store.sync(); }
     override sync(): Promise<void> { return this.flush(); }
     override syncSync(): void { store.syncSync(); }

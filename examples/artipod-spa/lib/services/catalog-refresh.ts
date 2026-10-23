@@ -13,6 +13,7 @@ import { upperDirName, type LocalEntry } from './ui-state';
 import { keys, uiState } from '../boot';
 import { initFileSystem } from '../filesystem';
 import { workspaceUpperPaths } from './workspace-storage';
+import { hostSave } from './host-save';
 
 /** Ids whose workspace tab is still alive (it holds a Web Lock for its lifetime). */
 export const wsLockName = (id: string): string => `artipod-ws-${id}`;
@@ -32,7 +33,14 @@ async function liveWorkspaceIds(): Promise<Set<string>> {
 }
 
 /** Rescan "on this machine" — at load and after every console command. */
-export async function refreshLocal(): Promise<void> {
+export function refreshLocal(): Promise<void> { return hostSave.run(refreshLocalAndVerdicts); }
+
+async function refreshLocalAndVerdicts(): Promise<void> {
+  await refreshLocalState();
+  await refreshVerdicts();
+}
+
+async function refreshLocalState(): Promise<void> {
   const { io, registry: actions } = await uiState();
   const registry = (await io.read()).workspaces;
   const onDisk: string[] = [];
@@ -165,7 +173,9 @@ export async function refreshLocal(): Promise<void> {
 }
 
 /** Ancestry verdicts + registry heal (runs after server refs and local heads exist). */
-export async function refreshVerdicts(): Promise<void> {
+export function refreshVerdicts(): Promise<void> { return hostSave.run(refreshVerdictState); }
+
+async function refreshVerdictState(): Promise<void> {
   const { serverRefs, localHeads } = catalogStore.getState();
   if (!serverRefs || Object.keys(localHeads).length === 0) return;
   try {

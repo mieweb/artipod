@@ -50,7 +50,16 @@ export function memoryStateMedium(initial: string | null = null): StateMedium {
 }
 
 export class UiStateIO {
+  private readonly mutations = new Set<Promise<unknown>>();
+  private failure: unknown = null;
+
   constructor(private readonly medium: StateMedium) {}
+
+  /** Drain accepted read/modify/write jobs, including jobs waiting for the mutex. */
+  async flush(): Promise<void> {
+    while (this.mutations.size) await Promise.allSettled([...this.mutations]);
+    if (this.failure) throw this.failure;
+  }
 
   async read(): Promise<UiState> {
     const text = await this.medium.read();
@@ -60,13 +69,17 @@ export class UiStateIO {
     return state;
   }
 
-  private async mutate<T>(fn: (state: UiState) => T | Promise<T>): Promise<T> {
-    return this.medium.withLock(async () => {
+  private mutate<T>(fn: (state: UiState) => T | Promise<T>): Promise<T> {
+    const operation = this.medium.withLock(async () => {
       const state = await this.read();
       const out = await fn(state);
       await this.medium.write(JSON.stringify(state, null, 2));
       return out;
     });
+    this.mutations.add(operation);
+    void operation.then(() => { this.failure = null; }, error => { this.failure = error; })
+      .finally(() => this.mutations.delete(operation));
+    return operation;
   }
 
   /** Stable per-profile LWW identity, minted on first use. */

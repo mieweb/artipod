@@ -82,6 +82,11 @@ export function uiState(): Promise<{ io: UiStateIO; registry: ReturnType<typeof 
   return ioSingleton;
 }
 
+/** Await the existing registry queue without opening storage as a side effect. */
+export async function flushUiState(): Promise<void> {
+  await (await ioSingleton)?.io.flush();
+}
+
 let bootstrapActor: string | null = null;
 /** Opaque login principal: obtaining a key must never open/write the registry. */
 export async function actorId(): Promise<string> {
