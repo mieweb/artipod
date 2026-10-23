@@ -173,8 +173,8 @@
     }
   },
   "dependencies": {
-    "core-js": "3.49.0",
-    "jose": "6.2.12"
+    "core-js": "3.51.0",
+    "jose": "6.2.13"
   },
   "overrides": {
     "minimatch@9": "^9.0.7",
