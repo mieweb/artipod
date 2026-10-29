@@ -203,6 +203,51 @@ export class StorageSession {
     return openWorkspaceUpper({ storage: info, ref, getKey: () => this.options.keys!.requireKey() });
   }
 
+  /**
+   * A trusted directory-rooted view for independent pod stores. The directory
+   * must already exist. Views share this session's key, persistence boundary,
+   * and lifetime; they never remount or independently own the backing store.
+   */
+  async openDirectory(path: string): Promise<StorageContext> {
+    if (typeof path !== 'string' || !path.startsWith('/') || path.includes('\\') || path.includes('\0') ||
+        (path !== '/' && path.slice(1).split('/').some(part => !part || part === '.' || part === '..'))) {
+      throw new Error('Storage directory requires a canonical absolute path');
+    }
+    const info = await this.open();
+    if (path === '/') return info;
+    let parent = '';
+    for (const name of path.slice(1).split('/')) {
+      parent += `/${name}`;
+      const stat = await info.zfs.promises.lstat(parent);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Storage directory paths must contain only real directories');
+    }
+    info.assertAccess();
+    const zen = await import('@zenfs/core');
+    info.assertAccess();
+    const bound = zen.bindContext({ root: path });
+    const release = () => {
+      for (const descriptor of bound.descriptors.values()) if (!descriptor.isClosed) {
+        (descriptor as unknown as { disposeSync(force: boolean): void }).disposeSync(true);
+      }
+      bound.descriptors.clear();
+      zen.boundContexts.delete(bound.id);
+    };
+    try {
+      const assertAccess = () => info.assertAccess();
+      const zfs = this.gatedFileSystem(bound.fs as unknown as ZenFsLike, assertAccess, () => info.flush());
+      const context: StorageContext = Object.freeze({ zfs, protection: info.protection, backend: info.backend,
+        generation: info.generation, assertAccess, flush: () => info.flush() });
+      registerStorageContext(context, { assertActive: assertAccess,
+        wrapFilesystem: (source, close) => {
+          assertAccess();
+          if (close) this.sourceReleases.add(close);
+          return this.gatedFileSystem(source, assertAccess, () => info.flush());
+        } });
+      this.sourceReleases.add(release);
+      return context;
+    } catch (error) { release(); throw error; }
+  }
+
   recover(): Promise<{ info: StorageSessionInfo; warning: string }> {
     if (this.resetting) return Promise.reject(new Error('Browser storage reset is in progress'));
     if (this.closing) return Promise.reject(new Error('Storage is closing'));
