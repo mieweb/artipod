@@ -97,6 +97,53 @@ afterEach(async () => {
 });
 
 describe('framework-free core storage session', () => {
+  it('opens independent pod stores through trusted directory contexts', async () => {
+    const adapters = new RawAdapters();
+    const { keys } = keyProvider(await generateBlobKey());
+    const owner = session({ adapters, keys });
+    const root = await owner.open();
+    await root.zfs.promises.mkdir('/pods/first', { recursive: true });
+    await root.zfs.promises.mkdir('/pods/second', { recursive: true });
+    const firstContext = await owner.openDirectory('/pods/first');
+    const secondContext = await owner.openDirectory('/pods/second');
+    const manifest = { mounts: [{ name: 'objects', path: '/objects', mode: 'rw' as const,
+      source: { kind: 'backend' as const, backend: 'memory' as const } }] };
+    const first = await createZenFsPod(manifest, { storage: firstContext, proc: false });
+    const second = await createZenFsPod(manifest, { storage: secondContext, proc: false });
+    owner.registerTeardown(async () => first.dispose());
+    owner.registerTeardown(async () => second.dispose());
+    expect(first.oci.store.getSuperblock().podId).not.toBe(second.oci.store.getSuperblock().podId);
+    await first.zfs.promises.writeFile('/objects/private.txt', BODY);
+    expect(await second.zfs.promises.exists('/objects/private.txt')).toBe(false);
+    expect(await first.zfs.promises.exists('/../../pods/second')).toBe(false);
+    await first.snapshots.commit('saved');
+    await owner.flush();
+    const read = first.zfs.promises.readFile;
+    await owner.close();
+    await expect(read('/objects/private.txt', 'utf8')).rejects.toThrow();
+    const reopened = session({ adapters, keys });
+    await reopened.open();
+    const restored = await reopened.openDirectory('/pods/first');
+    expect(await restored.zfs.promises.readFile('/objects/private.txt', 'utf8')).toBe(BODY);
+    adapters.assertCiphertext();
+  });
+
+  it('directory contexts enforce key loss and reject unsafe roots before binding', async () => {
+    const provider = keyProvider(await generateBlobKey());
+    const owner = session({ adapters: new RawAdapters(), keys: provider.keys });
+    const root = await owner.open();
+    await root.zfs.promises.mkdir('/pod');
+    await root.zfs.promises.symlink('/pod', '/alias');
+    for (const path of ['relative', '/pod/../pod', '/pod/', '/pod//child', '/pod\\child']) {
+      await expect(owner.openDirectory(path)).rejects.toThrow('canonical');
+    }
+    await expect(owner.openDirectory('/alias')).rejects.toThrow('real directories');
+    const child = await owner.openDirectory('/pod');
+    const write = child.zfs.promises.writeFile;
+    provider.setKey(null);
+    await expect(write('/private', BODY)).rejects.toThrow();
+  });
+
   it.each(['', '.', '..', 'invalid\0ref', null, undefined])('rejects invalid workspace ref %j before opening a closed session', async ref => {
     const adapters = new RawAdapters();
     const { keys } = keyProvider(await generateBlobKey());
