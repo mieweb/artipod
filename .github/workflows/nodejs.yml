@@ -14,7 +14,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [20.x, 22.x, 26.x]
+        node-version: [22.x, 26.x]
 
     steps:
     - uses: actions/checkout@v7
@@ -43,7 +43,7 @@ jobs:
     # Keep coverage available even when the external reporting service is down.
     - name: Save coverage report
       uses: actions/upload-artifact@v7
-      if: matrix.node-version == '20.x'
+      if: matrix.node-version == '22.x'
       with:
         name: core-coverage
         path: coverage/lcov.info
@@ -52,7 +52,7 @@ jobs:
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v7
-      if: matrix.node-version == '20.x'
+      if: matrix.node-version == '22.x'
       # Coverage reporting is advisory, including uploader startup/network errors.
       continue-on-error: true
       with:
@@ -75,10 +75,10 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
-    - name: Use Node.js 20.x
+    - name: Use Node.js 22.x
       uses: actions/setup-node@v7
       with:
-        node-version: 20.x
+        node-version: 22.x
 
     # file:../.. runs the core's prepare (tsc) — its devDeps must exist first
     - name: Install core dependencies

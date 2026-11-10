@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Node.js 22 or later is now required (`engines` `>=22.0.0`); Node 20 reached
+  end-of-life in April 2026. ZenFS 2.5 and its `utilium` 3 dependency need Node
+  22, and CI now tests Node 22 and 26.
 - The exact `@zenfs/core` peer dependency is now `2.5.7` (`@zenfs/dom` stays
   `1.2.5`). ZenFS 2.4.4 fails on import in newer Node releases (verified on
   Node 26.13.0) and in Electron's Node 24.21, which reject its `Object.assign`
