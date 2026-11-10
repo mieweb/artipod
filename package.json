@@ -145,7 +145,7 @@
     "@typescript-eslint/eslint-plugin": "^8.71.0",
     "@typescript-eslint/parser": "^8.71.0",
     "@vitest/coverage-v8": "^4.1.11",
-    "@zenfs/core": "2.4.4",
+    "@zenfs/core": "2.5.7",
     "@zenfs/dom": "1.2.5",
     "diff": "^8.0.2",
     "dockerode": "^5.0.1",
@@ -159,7 +159,7 @@
     "esbuild": "^0.28.2"
   },
   "peerDependencies": {
-    "@zenfs/core": "2.4.4",
+    "@zenfs/core": "2.5.7",
     "@zenfs/dom": "1.2.5",
     "diff": "^8.0.2",
     "dockerode": "^4.0.9 || ^5.0.0",

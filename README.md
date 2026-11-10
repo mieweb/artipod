@@ -220,10 +220,10 @@ Single package, ESM subpath exports (browser/node split via export conditions):
 ### Installing as a library
 
 ```sh
-npm install @artipod/core just-bash@3.4.2 @zenfs/core@2.4.4 @zenfs/dom@1.2.5 isomorphic-git fflate diff
+npm install @artipod/core just-bash@3.4.2 @zenfs/core@2.5.7 @zenfs/dom@1.2.5 isomorphic-git fflate diff
 ```
 
-The filesystem and shell peers are **exact pins** on purpose: `@zenfs/core` 2.4.4 and
+The filesystem and shell peers are **exact pins** on purpose: `@zenfs/core` 2.5.7 and
 `just-bash` 3.4.2 are the versions the encrypted mounts, `/proc` reconcile and shell session
 recovery are verified against, and both projects have shipped behavior changes in patch
 releases. pnpm users with strict peers must match them exactly; a caret range will be
