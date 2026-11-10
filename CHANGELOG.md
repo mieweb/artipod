@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The exact `@zenfs/core` peer dependency is now `2.5.7` (`@zenfs/dom` stays
+  `1.2.5`). ZenFS 2.4.4 fails on import in newer Node releases (verified on
+  Node 26.13.0) and in Electron's Node 24.21, which reject its `Object.assign`
+  through an ESM namespace prototype; 2.5.7 drops that assignment. Update
+  consumer peer pins together with the Artipod dependency.
+
+### Removed
+
+- The VS Code extension no longer patches the copied `@zenfs/core`: the
+  compatibility fix for that statement ships upstream in 2.5.7.
+
 ## [0.13.0] - 2026-10-22
 
 ### Added
