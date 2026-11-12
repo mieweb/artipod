@@ -4,7 +4,7 @@
   "bin": {
     "artipod": "dist/cli.js"
   },
-  "description": "A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize \u2014 in the browser and on Linux",
+  "description": "A pod for artifacts: a virtual filesystem your AI can reason in, your users can shell into, and your infrastructure can version, encrypt, and synchronize — in the browser and on Linux",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -141,25 +141,25 @@
     "@huggingface/transformers": "^4.2.0",
     "@types/diff": "^7.0.2",
     "@types/dockerode": "^3.3.47",
-    "@types/node": "^20.10.6",
+    "@types/node": "^22.20.5",
     "@typescript-eslint/eslint-plugin": "^8.71.0",
     "@typescript-eslint/parser": "^8.71.0",
     "@vitest/coverage-v8": "^4.1.11",
-    "@zenfs/core": "2.4.4",
+    "@zenfs/core": "2.5.7",
     "@zenfs/dom": "1.2.5",
     "diff": "^8.0.2",
     "dockerode": "^5.0.1",
+    "esbuild": "^0.28.2",
     "eslint": "^10.12.0",
     "fflate": "^0.8.3",
     "globals": "^17.13.0",
     "isomorphic-git": "^1.25.0",
     "just-bash": "3.4.2",
     "typescript": "^5.3.3",
-    "vitest": "^4.1.11",
-    "esbuild": "^0.28.2"
+    "vitest": "^4.1.11"
   },
   "peerDependencies": {
-    "@zenfs/core": "2.4.4",
+    "@zenfs/core": "2.5.7",
     "@zenfs/dom": "1.2.5",
     "diff": "^8.0.2",
     "dockerode": "^4.0.9 || ^5.0.0",
@@ -186,6 +186,6 @@
     }
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }

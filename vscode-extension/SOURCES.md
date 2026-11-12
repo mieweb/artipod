@@ -4,13 +4,7 @@ The extension source is https://github.com/mieweb/artipod/tree/main/vscode-exten
 
 ## Replaceable libraries
 
-`@zenfs/core`, `@zenfs/dom`, `utilium`, and `memium` retain their LGPL licenses. Their JavaScript is shipped as separate modules under `vendor/node_modules`, with the exact nested dependency versions from the root package-lock.json. They are not statically included in the worker bundles. You may inspect, modify, or replace those modules with interface-compatible versions in an unpacked VSIX and reload VS Code; no integrity check prevents replacement. Keep nested dependencies compatible. This distribution imposes no restriction on modification or reverse engineering for debugging changes to those libraries.
-
-## ZenFS compatibility modification
-
-Artipod changes @zenfs/core 2.4.4 dist/index.js on 2026-10-04. Electron Node 24.21 rejects Object.assign when its target inherits from an ESM module namespace. The change uses Object.defineProperty to define an own _version property while preserving the filesystem namespace prototype and writable/enumerable/configurable property behavior. The upstream npm package remains untouched in the source checkout; only the copied VSIX library is modified.
-
-The exact unified source patch is included at `vendor/patches/zenfs-core-2.4.4-module-version.patch`. Its reproducible patch specification is `scripts/patches/zenfs-core-2.4.4-module-version.json` in the extension source repository. Packaging checks the exact package version and original statement, and stops if either changes. The modified source retains its LGPL-3.0-or-later license and has a dated modification notice. Other copied libraries are unmodified.
+`@zenfs/core`, `@zenfs/dom`, `utilium`, and `memium` retain their LGPL licenses. Their JavaScript is shipped as separate, unmodified modules under `vendor/node_modules`, with the exact nested dependency versions from the root package-lock.json. They are not statically included in the worker bundles. You may inspect, modify, or replace those modules with interface-compatible versions in an unpacked VSIX and reload VS Code; no integrity check prevents replacement. Keep nested dependencies compatible. This distribution imposes no restriction on modification or reverse engineering for debugging changes to those libraries.
 
 ## Rebuild the extension
 
@@ -25,7 +19,7 @@ npm test
 npm run package:vsix
 ```
 
-The checked-in lockfiles pin the application and packaging dependencies. `prepare-backend` regenerates worker bundles, copies the replaceable library tree, applies the checked ZenFS compatibility patch, and writes these notices. `package:vsix` builds and packages only; it does not publish. Output is `dist/artipod-VERSION.vsix`, using the extension package.json version. Add `-- --pre-release` to package for the Marketplace pre-release channel.
+The checked-in lockfiles pin the application and packaging dependencies. `prepare-backend` regenerates worker bundles, copies the replaceable library tree, and writes these notices. `package:vsix` builds and packages only; it does not publish. Output is `dist/artipod-VERSION.vsix`, using the extension package.json version. Add `-- --pre-release` to package for the Marketplace pre-release channel.
 
 To rebuild against a modified library source, build that library using its upstream instructions, replace its installed package in the Artipod repository node_modules tree, then rerun `npm run prepare-backend` in vscode-extension. Then run `npm run package:vsix`; this rebuilds against the installed dependency tree and does not reinstall or replace your modified library.
 
@@ -45,8 +39,8 @@ These archives identify the versions included or whose notices accompany the pre
 | @nodable/entities@3.0.0 | MIT | [source](https://github.com/nodable/val-parsers) | [archive](https://registry.npmjs.org/@nodable/entities/-/entities-3.0.0.tgz) |
 | @tokenizer/inflate@0.4.1 | MIT | [source](https://github.com/Borewit/tokenizer-inflate) | [archive](https://registry.npmjs.org/@tokenizer/inflate/-/inflate-0.4.1.tgz) |
 | @tokenizer/token@0.3.0 | MIT | [source](https://github.com/Borewit/tokenizer-token) | [archive](https://registry.npmjs.org/@tokenizer/token/-/token-0.3.0.tgz) |
-| @types/node@24.13.3 | MIT | [source](https://github.com/DefinitelyTyped/DefinitelyTyped) | [archive](https://registry.npmjs.org/@types/node/-/node-24.13.3.tgz) |
-| @zenfs/core@2.4.4 | LGPL-3.0-or-later | [source](https://github.com/zen-fs/core) | [archive](https://registry.npmjs.org/@zenfs/core/-/core-2.4.4.tgz) |
+| @types/node@25.9.9 | MIT | [source](https://github.com/DefinitelyTyped/DefinitelyTyped) | [archive](https://registry.npmjs.org/@types/node/-/node-25.9.9.tgz) |
+| @zenfs/core@2.5.7 | LGPL-3.0-or-later | [source](https://github.com/zen-fs/core) | [archive](https://registry.npmjs.org/@zenfs/core/-/core-2.5.7.tgz) |
 | @zenfs/dom@1.2.5 | LGPL-3.0-or-later | [source](https://github.com/zen-fs/dom) | [archive](https://registry.npmjs.org/@zenfs/dom/-/dom-1.2.5.tgz) |
 | abort-controller@3.0.0 | MIT | [source](https://github.com/mysticatea/abort-controller) | [archive](https://registry.npmjs.org/abort-controller/-/abort-controller-3.0.0.tgz) |
 | anynum@1.0.1 | MIT | [source](https://github.com/NaturalIntelligence/anynum) | [archive](https://registry.npmjs.org/anynum/-/anynum-1.0.1.tgz) |
@@ -98,7 +92,7 @@ These archives identify the versions included or whose notices accompany the pre
 | just-bash@3.4.2 | Apache-2.0 | [source](https://github.com/vercel-labs/just-bash) | [archive](https://registry.npmjs.org/just-bash/-/just-bash-3.4.2.tgz) |
 | kerium@1.4.2 | MIT | [source](https://github.com/james-pre/kerium) | [archive](https://registry.npmjs.org/kerium/-/kerium-1.4.2.tgz) |
 | math-intrinsics@1.1.0 | MIT | [source](https://github.com/es-shims/math-intrinsics) | [archive](https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz) |
-| memium@0.3.11 | LGPL-3.0-or-later | [source](https://github.com/james-pre/memium) | [archive](https://registry.npmjs.org/memium/-/memium-0.3.11.tgz) |
+| memium@0.4.5 | LGPL-3.0-or-later | [source](https://github.com/james-pre/memium) | [archive](https://registry.npmjs.org/memium/-/memium-0.4.5.tgz) |
 | minimatch@10.2.6 | BlueOak-1.0.0 | [source](https://github.com/isaacs/minimatch) | [archive](https://registry.npmjs.org/minimatch/-/minimatch-10.2.6.tgz) |
 | modern-tar@0.7.7 | MIT | [source](https://github.com/ayuhito/modern-tar) | [archive](https://registry.npmjs.org/modern-tar/-/modern-tar-0.7.7.tgz) |
 | ms@2.1.3 | MIT | [source](https://github.com/vercel/ms) | [archive](https://registry.npmjs.org/ms/-/ms-2.1.3.tgz) |
@@ -128,8 +122,9 @@ These archives identify the versions included or whose notices accompany the pre
 | typed-array-buffer@1.0.3 | MIT | [source](https://github.com/inspect-js/typed-array-buffer) | [archive](https://registry.npmjs.org/typed-array-buffer/-/typed-array-buffer-1.0.3.tgz) |
 | uint8array-extras@1.5.0 | MIT | [source](https://github.com/sindresorhus/uint8array-extras) | [archive](https://registry.npmjs.org/uint8array-extras/-/uint8array-extras-1.5.0.tgz) |
 | undici@7.29.1 | MIT | [source](https://github.com/nodejs/undici) | [archive](https://registry.npmjs.org/undici/-/undici-7.29.1.tgz) |
-| undici-types@7.18.2 | MIT | [source](https://github.com/nodejs/undici) | [archive](https://registry.npmjs.org/undici-types/-/undici-types-7.18.2.tgz) |
+| undici-types@7.24.6 | MIT | [source](https://github.com/nodejs/undici) | [archive](https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz) |
 | utilium@2.8.8 | LGPL-3.0-or-later | [source](https://github.com/james-pre/utilium) | [archive](https://registry.npmjs.org/utilium/-/utilium-2.8.8.tgz) |
+| utilium@3.11.1 | LGPL-3.0-or-later | [source](https://github.com/james-pre/utilium) | [archive](https://registry.npmjs.org/utilium/-/utilium-3.11.1.tgz) |
 | utilium@3.5.1 | LGPL-3.0-or-later | [source](https://github.com/james-pre/utilium) | [archive](https://registry.npmjs.org/utilium/-/utilium-3.5.1.tgz) |
 | which-typed-array@1.1.22 | MIT | [source](https://github.com/inspect-js/which-typed-array) | [archive](https://registry.npmjs.org/which-typed-array/-/which-typed-array-1.1.22.tgz) |
 | xml-naming@0.3.0 | MIT | [source](https://github.com/NaturalIntelligence/xml-naming) | [archive](https://registry.npmjs.org/xml-naming/-/xml-naming-0.3.0.tgz) |
