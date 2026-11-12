@@ -11,3 +11,5 @@ export * from './directory-store.js';
 export { workspaceUpperPaths, upperDirName, openWorkspaceUpper } from './workspace.js';
 export { readStorageTextFile, writeStorageTextFile } from './text-file.js';
 export type { StorageTextFileOptions } from './text-file.js';
+export { ArtifactStorage, createArtifactStorage, DEFAULT_ARTIFACT_MAX_BYTES } from './artifact-storage.js';
+export type { ArtifactStorageReference, ArtifactBlobMetadata, ArtifactStorageOptions, ArtifactStorageReadOptions, ArtifactStorageSnapshot } from './artifact-storage.js';
