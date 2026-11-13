@@ -4,7 +4,7 @@
  * grouping, ignores, and the done-when: an index-level pull lists the
  * whole tree while moving ZERO layer blobs.
  */
-import { mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -21,6 +21,7 @@ import {
   ANNOTATION_MTIME,
   ANNOTATION_PARENTS,
   ANNOTATION_PATH,
+  materializeRef,
   publishDirectory,
 } from './folder.js';
 
@@ -183,6 +184,25 @@ describe('publishDirectory', () => {
     // The WAN meter: manifest/config/indexes moved; layer blobs did NOT.
     for (const [digest, reads] of remote.blobReads) {
       expect(layerDigests.has(digest as Digest), `layer blob ${digest} fetched during index pull (${reads}x)`).toBe(false);
+    }
+  });
+});
+
+describe('materializeRef', () => {
+  it('leaves a host directory the head replaced with a file in place, with a warning', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'publish-src-'));
+    try {
+      await writeFile(join(source, 'docs'), 'now a file\n');
+      const store = memStore();
+      await publishDirectory(store, source, 'folder/demo:latest', { actor: 'server:test' });
+
+      const result = await materializeRef(store, 'folder/demo:latest', dir);
+      expect(result.warnings).toEqual(['directory not replaced by file: /docs']);
+      expect(result.written).toBe(0);
+      expect((await lstat(join(dir, 'docs'))).isDirectory()).toBe(true);
+      expect(await readFile(join(dir, 'docs', 'a.md'), 'utf8')).toBe('alpha\n');
+    } finally {
+      await rm(source, { recursive: true, force: true });
     }
   });
 });
