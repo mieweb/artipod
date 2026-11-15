@@ -73,6 +73,56 @@ renewal versus changed-key rejection. Browser verification scripts intercept
 raw writes as well as inspecting final OPFS/IndexedDB contents, using synthetic
 markers only. Final command results are recorded with the pull request.
 
+### Interrupted OPFS publication — issue #129 (2026-10-22)
+
+- PR review follow-up (2026-10-23): fixed registry save error retention across
+  unrelated successful field updates. Matching retries, explicit deletion and
+  authenticated recovery acknowledge the covered failures; recovery preserves
+  its warning and newer failures. SPA lint/typecheck and 101 tests pass.
+- Automated review also identified renewal during the final storage drain and
+  stale failures from nested catalog producers. A trailing key drain and one
+  lifecycle-owned catalog scan producer close both gaps. SPA lint/typecheck and
+  108 tests pass, including held renewal and pending-rescan disposal regressions.
+- Further review closed an immediate remote-push retry loop and serialized
+  workspace probes so an older read cannot overwrite a newer edit. Catalog
+  inventory is observational: stale results cannot clear durable flags or
+  delete files/registry entries. SPA lint/typecheck and 122 tests pass, covering
+  persistent remote failure, reconnect retries and stale/overlapping scans.
+- Key-service drains check for newly accepted work before reporting pending
+  preferences or retained errors, so a toggle accepted during device/grant I/O
+  is awaited instead of being mistaken for unavailable storage. Six new cases
+  cover held writes, real failures, replacement writers, retries, concurrent
+  saves and reset ownership. Core lint/build/full typecheck, all 990 Vitest
+  tests and 35 checkpoint tests pass; all 122 SPA tests also pass.
+- Deterministically reproduced the original implementation in Chromium by
+  destroying a page immediately after creating numeric record `129129`.
+  Its backing length was zero with no envelope header; the existing root and
+  inode records retained `APODENC1`. Strict reopening reported
+  `EncryptedStore: plaintext backing block refused`. Diagnostics used only
+  synthetic record IDs, lengths and envelope headers.
+- Ciphertext now closes under `.artipod-stage-v1-<id>-<random token>` before
+  native OPFS file `move()` publishes the numeric name. The native capability
+  is required; unsupported OPFS cannot fall back to unsafe publication.
+  Reopening authenticates all canonical records and nonempty stages before
+  removing abandoned stages. Empty numeric records, unknown names and corrupt
+  stages still fail closed, retaining the originals. Recovered stages produce
+  a warning through the public session and SPA. This does not replay pending
+  transactions or repair the broader ZenFS multi-block rollback limitation.
+- `KeysService.flush()` drains authentication/device/grant persistence and the
+  latest offline preference. The SPA's `saveFileSystem()` also drains registry
+  mutations and debounced workspace/catalog probes before the final storage
+  flush, repeating when that flush admits additional host work.
+- CI runs deterministic interruption checks and actual-app save/reload checks
+  with explicit OPFS and IndexedDB backends. The interruption harness captures
+  only synthetic IDs, lengths and safe envelope fields, with no keys or payloads.
+- Verification: core lint/build/full typecheck pass, with 984 Vitest tests and
+  35 checkpoint tests. SPA lint/typecheck and 96 tests pass; static export
+  retains its version and struct-minifier assertions. Chromium 155 passes all
+  six native interruption cases, both complete app runs (including a held
+  automatic push), the 12 migration cases and the packed native/OPFS/IndexedDB
+  consumer. Raw scans report zero private-marker leaks and no unhandled browser
+  errors. The interrupted-stage warning is readable in dark mode.
+
 Reproduce the browser checks with Playwright and Chromium installed in the test
 environment (or provide `PLAYWRIGHT_MODULE_PATH` and
 `CHROMIUM_EXECUTABLE_PATH`):
@@ -82,9 +132,11 @@ environment (or provide `PLAYWRIGHT_MODULE_PATH` and
 ARTIPOD_UI_DIR="$PWD/dist-ui" node dist/cli.js serve --port 2786 --encrypt \
   --store /tmp/artipod-browser-test/store --authority /tmp/artipod-browser-test/authority --no-exec
 # In another terminal:
-BASE_URL=http://127.0.0.1:2786 node examples/artipod-spa/scripts/verify-encrypted-storage.mjs
-# Independent raw adapters: creates its own disposable localhost fixture server:
+TEST_STORAGE_BACKEND=opfs BASE_URL=http://127.0.0.1:2786 node examples/artipod-spa/scripts/verify-encrypted-storage.mjs
+TEST_STORAGE_BACKEND=indexeddb BASE_URL=http://127.0.0.1:2786 node examples/artipod-spa/scripts/verify-encrypted-storage.mjs
+# Independent raw adapters: each creates a disposable localhost fixture server:
 node examples/artipod-spa/scripts/verify-vault-migration.mjs
+node examples/artipod-spa/scripts/verify-encrypted-interruption.mjs
 ```
 
 Use an empty disposable server directory. The app check publishes unique

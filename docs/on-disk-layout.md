@@ -73,6 +73,7 @@ artipod-vault/
 └── <random generation>/
     ├── 0                       # encrypted root inode
     ├── <number>                # encrypted directories, inodes and file bytes
+    ├── .artipod-stage-v1-…      # temporary opaque ciphertext publication stage
     └── …
 artipod-models/                 # separate public runtime/model downloads
 ```
@@ -84,6 +85,16 @@ the generation. Its only fields are `formatVersion`, `cipher`,
 names, paths, refs or labels. Storage size, block count and timing remain visible.
 An opaque random browser principal and backend preference may remain in
 localStorage. Leased keys remain in memory.
+
+OPFS stages use a reserved versioned name containing only a numeric block ID
+and random token. Ciphertext is written and closed there before native file
+`move()` publishes the numeric name. After an interrupted write, opening
+authenticates saved blocks and nonempty stages before discarding abandoned
+stages. An empty numeric record or an unexpected name still fails closed;
+original records remain available when validation fails. This is per-block
+publication, with the broader ZenFS multi-block rollback limitation documented
+in [encryption.md](encryption.md). IndexedDB commits encrypted blocks directly
+through database transactions.
 
 Logical paths such as `/work/<id>`, `/.artipod/ui-state.json`, OCI indexes and
 `/.artipod/workspace-uppers/<ref>` exist only after decryption. The Root console

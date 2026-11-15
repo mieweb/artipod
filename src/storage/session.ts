@@ -24,6 +24,8 @@ export interface StorageSessionInfo extends StorageContext {
   readonly encrypted: boolean;
   readonly memoryOnly: boolean;
   readonly isPrimaryTab: true;
+  /** Reopening recovered an interrupted record; some pending changes may be absent. */
+  readonly recoveryWarning?: string;
 }
 export interface StorageSessionSnapshot {
   status: 'closed' | 'opening' | 'open' | 'locked' | 'recovering' | 'resetting' | 'failed';
@@ -172,6 +174,7 @@ export class StorageSession {
     };
     const zfs = this.gatedFileSystem(source, assertConsumerAccess, persist);
     const info: StorageSessionInfo = Object.freeze({ zfs, protection, backend, generation: vault?.generation, encrypted: !!vault,
+      ...(vault?.recoveryWarning ? { recoveryWarning: vault.recoveryWarning } : {}),
       memoryOnly: protection === 'volatile', isPrimaryTab: true as const, assertAccess: assertConsumerAccess,
       flush: async () => { assertAccess(); await persist(); } });
     registerStorageContext(info, {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Browser persistence regression for #116. Uses a fresh, disposable browser
+ * Browser persistence regressions for #116 and #129. Uses a fresh, disposable browser
  * context and synthetic data only. BASE_URL must be a disposable local
  * `artipod serve --encrypt` serving the freshly built SPA; this test publishes
  * a unique synthetic ref to that server.
@@ -11,6 +11,7 @@
  * directory/index.mjs. CHROMIUM_EXECUTABLE_PATH selects an existing browser;
  * otherwise Playwright's installed Chromium is used. STEP_TIMEOUT_MS defaults
  * to 30000. No persistent browser profile or existing browser tab is opened.
+ * TEST_STORAGE_BACKEND=opfs|indexeddb requires that actual persistent backend.
  */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -22,6 +23,8 @@ const base = new URL(process.env.BASE_URL ?? 'http://127.0.0.1:2786');
 assert(['localhost', '127.0.0.1', '[::1]'].includes(base.hostname), 'BASE_URL must identify a disposable local test server');
 const stepTimeout = Number(process.env.STEP_TIMEOUT_MS ?? 30_000);
 assert(Number.isFinite(stepTimeout) && stepTimeout > 0, 'STEP_TIMEOUT_MS must be positive');
+const backend = process.env.TEST_STORAGE_BACKEND ?? 'opfs';
+assert(['opfs', 'indexeddb'].includes(backend), 'TEST_STORAGE_BACKEND must be opfs or indexeddb');
 const require = createRequire(import.meta.url);
 const playwrightPath = process.env.PLAYWRIGHT_MODULE_PATH;
 let playwright;
@@ -42,6 +45,8 @@ const names = {
   label: `storage-probe-snapshot-${id}`,
   ref: `storage-probe-ref-${id}:_1`,
   overlay: `storage-probe-overlay-${id}.txt`,
+  queuedOverlay: `storage-probe-queued-overlay-${id}.txt`,
+  queuedPayload: `storage-probe-queued-payload-${id}`,
   editorFile: `storage-probe-editor-${id}.md`,
   editorSaved: `storage-probe-editor-saved-${id}`,
   editorDraft: `storage-probe-editor-unsaved-${id}`,
@@ -55,10 +60,19 @@ let context;
 let page;
 
 /** Runs before app scripts on every navigation, observing page persistence APIs. */
-function observePersistence({ markers, canary }) {
+function observePersistence({ markers, canary, backend }) {
+  localStorage.setItem('artipod-sync-storage-backend', backend);
   const handles = new WeakMap();
   const streams = new WeakMap();
   const pending = new Set();
+  let interruption;
+  window.__armOpfsInterruption = operation => { interruption = operation; };
+  async function hold(operation, location) {
+    if (interruption !== operation || !/\/\.artipod-stage-v1-\d+-[a-f0-9]{32}$/.test(location)) return;
+    interruption = undefined;
+    window.__opfsInterruption = { operation, location };
+    await new Promise(() => {});
+  }
   const variants = (text) => [...new Set([
     text, encodeURIComponent(text), encodeURIComponent(encodeURIComponent(text)),
     JSON.stringify(text).slice(1, -1), btoa(text),
@@ -113,6 +127,7 @@ function observePersistence({ markers, canary }) {
     text(location, 'opfs-filename', location);
     const handle = await original.call(this, name, options);
     handles.set(handle, location);
+    if (options?.create) await hold('created', location);
     return handle;
   });
   wrap(FileSystemFileHandle.prototype, 'createWritable', (original) => async function (...args) {
@@ -120,9 +135,17 @@ function observePersistence({ markers, canary }) {
     streams.set(stream, handles.get(this) ?? this.name);
     return stream;
   });
-  wrap(FileSystemWritableFileStream.prototype, 'write', (original) => function (value) {
-    inspect(value, 'opfs-write', streams.get(this) ?? 'unknown OPFS file');
-    return original.call(this, value);
+  wrap(FileSystemWritableFileStream.prototype, 'write', (original) => async function (value) {
+    const location = streams.get(this) ?? 'unknown OPFS file';
+    inspect(value, 'opfs-write', location);
+    const result = await original.call(this, value);
+    await hold('written', location);
+    return result;
+  });
+  wrap(FileSystemWritableFileStream.prototype, 'close', (original) => async function (...args) {
+    const result = await original.apply(this, args);
+    await hold('closed', streams.get(this) ?? 'unknown OPFS file');
+    return result;
   });
   wrap(FileSystemWritableFileStream.prototype, 'getWriter', (original) => function (...args) {
     const writer = original.apply(this, args);
@@ -154,7 +177,7 @@ function observePersistence({ markers, canary }) {
     while (pending.size) await Promise.all([...pending]);
   };
   window.__inspectRawPersistence = async () => {
-    const summary = { opfsFiles: 0, opfsBytes: 0, idbRecords: 0, vanishedEntries: 0, retriedReads: 0 };
+    const summary = { opfsFiles: 0, opfsBytes: 0, idbRecords: 0, vanishedEntries: 0, retriedReads: 0, vaultBackends: [], interruptedRecords: [] };
     async function readCurrentFile(handle) {
       for (let attempt = 0; ; attempt++) {
         try {
@@ -176,6 +199,11 @@ function observePersistence({ markers, canary }) {
           else {
             const bytes = await readCurrentFile(handle);
             inspect(bytes, 'raw-opfs-bytes', location);
+            if (window.__opfsInterruption && location.startsWith('/artipod-vault/') && name.startsWith('.artipod-stage-v1-')) {
+              const data = new Uint8Array(bytes);
+              const encrypted = new TextDecoder().decode(data.slice(0, 8)) === 'APODENC1';
+              summary.interruptedRecords.push({ id: name, length: data.length, header: encrypted ? 'APODENC1' : data.length ? 'not-envelope' : 'empty' });
+            }
             summary.opfsFiles++;
             summary.opfsBytes += bytes.byteLength;
           }
@@ -207,6 +235,7 @@ function observePersistence({ markers, canary }) {
               if (!cursor) { resolve(); return; }
               inspect(cursor.key, 'raw-idb-key', `${db.name}/${name}`);
               inspect(cursor.value, 'raw-idb-value', `${db.name}/${name}`);
+              if (name === 'control' && cursor.value?.encryptionRequired === true) summary.vaultBackends.push(cursor.value.backend);
               summary.idbRecords++;
               cursor.continue();
             };
@@ -240,6 +269,45 @@ async function ready(ref) {
     return !!pod && (ref ? pod.basis?.ref === ref : !pod.basis);
   }, ref, { timeout: stepTimeout });
   assert.equal(await page.getByText(/Memory-only workspace:/).count(), 0, 'Encrypted test must never fall back to volatile or plaintext storage');
+  const { vaultBackends } = await page.evaluate(() => window.__inspectRawPersistence());
+  assert.deepEqual(vaultBackends, [backend], 'The browser did not use the explicitly requested persistent backend');
+}
+
+async function save() {
+  await page.evaluate(async () => {
+    if (typeof window.__artipodSave !== 'function') throw new Error('The host save completion boundary is unavailable');
+    await window.__artipodSave();
+  });
+}
+
+async function savedMetadata(workspace = names.workspace) {
+  return page.evaluate(async ({ workspace }) => {
+    const p = window.__artipod.zfs.promises;
+    const registry = JSON.parse(await p.readFile('/.artipod/ui-state.json', 'utf8'));
+    // lastOpened changes when the workspace reopens; all durable identity and
+    // status fields must remain exact. The actor is private and stays in-page.
+    const entry = registry.workspaces.find(entry => entry.id === workspace);
+    const { lastOpened, ...metadata } = entry ?? {};
+    if (!lastOpened) throw new Error('Saved registry entry is missing');
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('artipod-keys');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    let grant;
+    try {
+      grant = await new Promise((resolve, reject) => {
+        const request = db.transaction('device').objectStore('device').get('session');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    } finally { db.close(); }
+    if (!grant) throw new Error('The device-wrapped offline grant was not saved');
+    // Compare opaque grant fingerprints, never serialize grant/key material to
+    // the report. The synthetic registry is safe to compare in this process.
+    const digest = async value => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    return { metadata, grantDigest: await digest(grant), actorDigest: await digest(registry.actor) };
+  }, { workspace });
 }
 
 async function readyAfterUnlock() {
@@ -273,10 +341,27 @@ async function checkFiles(ref) {
     if (!ref) {
       const target = await p.readlink(`${root}/${names.directory}/link`);
       if (target !== names.target) throw new Error('Persisted symlink target changed');
+      const filenames = await p.readdir(`${root}/${names.directory}`);
+      if (JSON.stringify(filenames.sort()) !== JSON.stringify([names.filename, names.target, 'link'].sort())) throw new Error('Persisted filenames changed');
     }
     const snapshots = await pod.snapshots.list();
     if (!snapshots.some((snapshot) => snapshot.label === names.label)) throw new Error('Snapshot label did not survive');
   }, { names, ref });
+}
+
+async function seed() {
+  await page.evaluate(async (names) => {
+    const pod = window.__artipod;
+    const p = pod.zfs.promises;
+    const root = `/work/${names.workspace}/${names.directory}`;
+    await p.mkdir(root, { recursive: true });
+    await p.writeFile(`${root}/${names.filename}`, names.payload);
+    await p.writeFile(`${root}/${names.target}`, 'synthetic symlink target');
+    await p.symlink(names.target, `${root}/link`);
+    await pod.snapshots.create({ label: names.label });
+    const registry = JSON.parse(await p.readFile('/.artipod/ui-state.json', 'utf8'));
+    if (!registry.workspaces.some((entry) => entry.id === names.workspace)) throw new Error('Scratch registry entry was not recorded');
+  }, names);
 }
 
 try {
@@ -284,7 +369,7 @@ try {
   context = await browser.newContext();
   context.setDefaultTimeout(stepTimeout);
   await context.exposeBinding('__reportPersistence', (_, event) => { events.push(event); });
-  await context.addInitScript(observePersistence, { markers: Object.values(names), canary });
+  await context.addInitScript(observePersistence, { markers: Object.values(names), canary, backend });
   page = await context.newPage();
   await page.clock.install({ time: new Date() });
   page.on('pageerror', (error) => diagnostics.push(`pageerror: ${error.message}`));
@@ -352,24 +437,17 @@ try {
     assert(events.some((event) => event.canary && event.operation === 'idb-write'), 'IndexedDB interception was not active');
   });
   await step('write names, payload, symlink, snapshot and registry metadata', async () => {
-    await page.evaluate(async (names) => {
-      const pod = window.__artipod;
-      const p = pod.zfs.promises;
-      const root = `/work/${names.workspace}/${names.directory}`;
-      await p.mkdir(root, { recursive: true });
-      await p.writeFile(`${root}/${names.filename}`, names.payload);
-      await p.writeFile(`${root}/${names.target}`, 'synthetic symlink target');
-      await p.symlink(names.target, `${root}/link`);
-      await pod.snapshots.create({ label: names.label });
-      const registry = JSON.parse(await p.readFile('/.artipod/ui-state.json', 'utf8'));
-      if (!registry.workspaces.some((entry) => entry.id === names.workspace)) throw new Error('Scratch registry entry was not recorded');
-    }, names);
+    await seed();
     await audit('scratch and snapshot');
   });
   await step('reload recovers exact scratch files and snapshot', async () => {
+    await save();
+    const metadata = await savedMetadata();
+    await save();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await ready();
     await checkFiles();
+    assert.deepEqual(await savedMetadata(), metadata, 'Saved registry metadata or wrapped grant changed after reload');
     await audit('scratch reload');
   });
   await step('a second tab cannot open the encrypted root concurrently', async () => {
@@ -384,24 +462,80 @@ try {
   });
   await step('offline reload restores the wrapped unexpired grant', async () => {
     await page.getByRole('button', { name: 'online', exact: true }).click();
-    // The toggle schedules its save. This checks grant restoration after a
-    // durable preference update, rather than interrupting a multi-block write.
-    await page.waitForFunction(async () => {
-      try {
-        return JSON.parse(await window.__artipod.zfs.promises.readFile('/.artipod/oci/settings.json', 'utf8')).offline === true;
-      } catch (error) {
-        if (error?.code === 'ENOENT') return false;
-        throw error;
-      }
-    });
-    // This existing directory is stable while settings replacement moves its
-    // primary name. Awaited managed mutations drain protected persistence.
-    await page.evaluate(() => window.__artipod.zfs.promises.mkdir('/.artipod', { recursive: true }));
+    // The preference writer and debounced registry probe overlap. This is the
+    // host's actual completion boundary; logical state plus a filesystem drain
+    // did not include future service writes in the original #129 failure.
+    await save();
+    const metadata = await savedMetadata();
+    const settings = await page.evaluate(() => window.__artipod.zfs.promises.readFile('/.artipod/oci/settings.json', 'utf8'));
+    assert.equal(JSON.parse(settings).offline, true, 'Save completed before the preference became durable');
+    await save();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await ready();
     await checkFiles();
+    assert.equal(await page.evaluate(() => window.__artipod.zfs.promises.readFile('/.artipod/oci/settings.json', 'utf8')), settings, 'Exact saved preference changed on reload');
+    assert.deepEqual(await savedMetadata(), metadata, 'Offline reload changed saved registry metadata or the wrapped grant');
     await page.getByRole('button', { name: 'offline (forced)', exact: true }).click();
+    await save();
     await audit('offline reload');
+  });
+  if (backend === 'opfs') for (const operation of ['created', 'written', 'closed']) await step(`interrupt overlapping preference and registry saves after OPFS ${operation}`, async () => {
+    const original = page;
+    const isolated = await browser.newContext();
+    isolated.setDefaultTimeout(stepTimeout);
+    await isolated.exposeBinding('__reportPersistence', (_, event) => { events.push(event); });
+    await isolated.addInitScript(observePersistence, { markers: Object.values(names), canary, backend });
+    try {
+      page = await isolated.newPage();
+      page.on('pageerror', error => diagnostics.push(`pageerror: ${error.message}`));
+      const url = new URL(base);
+      url.searchParams.set('artipod', names.workspace);
+      await page.goto(url.href, { waitUntil: 'domcontentloaded' });
+      await ready();
+      await seed();
+      await save();
+      await page.getByRole('button', { name: 'online', exact: true }).click();
+      await save();
+      await page.getByRole('button', { name: 'offline (forced)', exact: true }).click();
+      await save();
+      const metadata = await savedMetadata();
+      const settings = await page.evaluate(() => window.__artipod.zfs.promises.readFile('/.artipod/oci/settings.json', 'utf8'));
+      await save();
+      await page.evaluate(operation => window.__armOpfsInterruption(operation), operation);
+      // Queue both real producers before entering the host completion boundary.
+      await page.getByRole('button', { name: 'online', exact: true }).click();
+      await page.evaluate(() => {
+        window.__artipod.events.emit('fs:changed', { origin: 'exec' });
+        window.__interruptedSaveCompleted = false;
+        window.__interruptedSave = window.__artipodSave().then(() => { window.__interruptedSaveCompleted = true; }, () => {});
+      });
+      await page.waitForFunction(() => !!window.__opfsInterruption);
+      assert.equal(await page.evaluate(() => window.__interruptedSaveCompleted), false, 'Save completion resolved while native persistence was held');
+      const interrupted = await page.evaluate(() => window.__inspectRawPersistence());
+      assert(interrupted.interruptedRecords.length > 0, 'The deterministic native interruption did not leave observable stage evidence');
+      const record = interrupted.interruptedRecords.find(record => !record.id.endsWith('.crswap'));
+      assert.equal(record.length > 0, operation === 'closed', 'The held native operation did not match its raw ciphertext boundary');
+      reports.push({ stage: `overlapping host saves interrupted after ${operation}`, backend, interruptedRecords: interrupted.interruptedRecords });
+      await page.close();
+      page = await isolated.newPage();
+      await page.goto(url.href, { waitUntil: 'domcontentloaded' });
+      await ready();
+      await page.getByRole('alert').filter({ hasText: /interrupted.*write|unfinished.*write|interrupted.*storage/i }).waitFor();
+      if (operation === 'created' && process.env.RECOVERY_SCREENSHOT_PATH) {
+        const banner = page.getByRole('alert').filter({ hasText: /interrupted record write/ });
+        reports.push({ stage: 'dark mode recovery warning', colors: await banner.evaluate(element => {
+          const style = getComputedStyle(element);
+          return { foreground: style.color, background: style.backgroundColor, dark: document.documentElement.classList.contains('dark') };
+        }) });
+        await page.screenshot({ path: resolve(process.env.RECOVERY_SCREENSHOT_PATH), fullPage: true });
+      }
+      await checkFiles();
+      assert.deepEqual(await savedMetadata(), metadata, 'Interrupted host save changed saved registry metadata or the wrapped grant');
+      assert.equal(await page.evaluate(() => window.__artipod.zfs.promises.readFile('/.artipod/oci/settings.json', 'utf8')), settings, 'Interrupted host save changed the last saved preference');
+      await save();
+      await page.getByRole('button', { name: 'online', exact: true }).waitFor();
+      await audit(`reopened saved generation after OPFS ${operation}`);
+    } finally { await isolated.close(); page = original; }
   });
   await step('lease release blocks previously cached reads and login restores access', async () => {
     await page.evaluate(() => { window.__lockedProbeFs = window.__artipod.zfs; });
@@ -584,12 +718,41 @@ try {
     }, names);
     await audit('publish and overlay push');
   });
+  await step('save waits for scheduled RW push and its registry updates', async () => {
+    await save();
+    await page.evaluate(async names => {
+      const pod = window.__artipod;
+      const push = pod.pushBasis.bind(pod);
+      let resume;
+      const gate = new Promise(resolve => { resume = resolve; });
+      window.__resumeQueuedPush = () => { pod.pushBasis = push; resume(); };
+      pod.pushBasis = async (...args) => {
+        window.__queuedPushHeld = true;
+        await gate;
+        return push(...args);
+      };
+      await pod.zfs.promises.writeFile(`${pod.basis.at}/${names.queuedOverlay}`, names.queuedPayload);
+      pod.events.emit('fs:changed', { origin: 'exec' });
+      window.__queuedSaveCompleted = false;
+      window.__queuedSave = window.__artipodSave().then(() => { window.__queuedSaveCompleted = true; });
+    }, names);
+    try {
+      await page.waitForFunction(() => window.__queuedPushHeld === true);
+      assert.equal(await page.evaluate(() => window.__queuedSaveCompleted), false, 'Save completed before the queued RW push settled');
+    } finally { await page.evaluate(() => window.__resumeQueuedPush()); }
+    await page.evaluate(() => window.__queuedSave);
+    const metadata = await savedMetadata(names.ref);
+    assert.equal(metadata.metadata.unsynced, false, 'Save completed before the push outcome reached the registry');
+    await audit('scheduled push save completion');
+  });
   await step('reload ref, hydrate published files, and recover overlay contents', async () => {
+    await save();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await ready(names.ref);
     await checkFiles(names.ref);
     const text = await page.evaluate(async (names) => window.__artipod.zfs.promises.readFile(`${window.__artipod.basis.at}/${names.overlay}`, 'utf8'), names);
     assert.equal(text, names.payload, 'Published overlay did not survive reload');
+    assert.equal(await page.evaluate(async names => window.__artipod.zfs.promises.readFile(`${window.__artipod.basis.at}/${names.queuedOverlay}`, 'utf8'), names), names.queuedPayload, 'The scheduled push save did not survive reload');
     await audit('published reload and hydration');
   });
   await step('reload without a grant or key server remains locked', async () => {
@@ -617,7 +780,7 @@ try {
     const volatile = await browser.newContext();
     volatile.setDefaultTimeout(stepTimeout);
     await volatile.exposeBinding('__reportPersistence', (_, event) => { events.push(event); });
-    await volatile.addInitScript(observePersistence, { markers: Object.values(names), canary });
+    await volatile.addInitScript(observePersistence, { markers: Object.values(names), canary, backend });
     // Model the real non-broker contract without changing the encrypted test
     // server: a definitive keys 404 and an empty public catalog.
     await volatile.route('**/api/keys', (route) => route.fulfill({ status: 404, body: '{"error":"not found"}', contentType: 'application/json' }));
@@ -648,7 +811,7 @@ try {
     } finally { await volatile.close(); }
   });
   assert.deepEqual(diagnostics.filter((message) => message.startsWith('pageerror:')), [], 'Application produced unhandled browser errors');
-  process.stdout.write(`${JSON.stringify({ result: 'passed', browser: browser.version(), checks: reports, observedCanaryWrites: events.filter((event) => event.canary).length, plaintextLeaks: 0, unhandledBrowserErrors: 0 }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ result: 'passed', backend, browser: browser.version(), checks: reports, observedCanaryWrites: events.filter((event) => event.canary).length, plaintextLeaks: 0, unhandledBrowserErrors: 0 }, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`${error.stack ?? error}\n`);
   if (page) {

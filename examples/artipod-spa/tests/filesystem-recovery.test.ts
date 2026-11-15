@@ -16,11 +16,11 @@ const mocks = vi.hoisted(() => {
     getSnapshot: vi.fn(() => snapshot),
     subscribe: vi.fn((listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }),
   };
-  return { PersistenceError, initial, reopened, session, teardown, publish, listeners, create: vi.fn(() => session) };
+  return { PersistenceError, initial, reopened, session, teardown, publish, listeners, acknowledge: vi.fn(async () => {}), create: vi.fn(() => session) };
 });
 vi.mock('@artipod/core/storage', () => ({ createStorageSession: mocks.create, StorageClosePersistenceError: mocks.PersistenceError }));
 vi.mock('@artipod/core/sandbox', () => ({ loadBackendPref: () => null }));
-vi.mock('../lib/boot', () => ({ keys: () => ({}) }));
+vi.mock('../lib/boot', () => ({ keys: () => ({}), acknowledgeUiStateRecovery: mocks.acknowledge }));
 
 beforeEach(() => {
   vi.resetModules();
@@ -45,6 +45,7 @@ describe('SPA recovery bridge to the core storage session', () => {
     expect(mocks.create).not.toHaveBeenCalled();
     await filesystem.initFileSystem('indexeddb');
     expect(mocks.create).toHaveBeenCalledOnce();
+    expect(mocks.acknowledge).not.toHaveBeenCalled();
     expect(mocks.create.mock.calls[0]).toEqual([{ policy: 'broker', keys: {}, backend: 'indexeddb' }]);
     mocks.publish({ status: 'open', needsRecovery: false, protection: 'encrypted' });
     mocks.publish({ status: 'failed', needsRecovery: true, protection: 'encrypted' });
@@ -56,6 +57,7 @@ describe('SPA recovery bridge to the core storage session', () => {
       return { info: mocks.reopened, warning: 'Some changes could not be saved' };
     });
     await filesystem.recoverFileSystem();
+    expect(mocks.acknowledge).toHaveBeenCalledOnce();
     expect(observed.map(snapshot => snapshot.status)).toEqual(['open', 'failed', 'recovering', 'open']);
     expect(filesystem.getFileSystemSnapshot().needsRecovery).toBe(false);
     expect(filesystem.fs).toBe(mocks.reopened.zfs);
@@ -95,6 +97,7 @@ describe('SPA recovery bridge to the core storage session', () => {
     await expect(filesystem.recoverFileSystem()).rejects.toBe(failure);
     expect(filesystem.fs).toBe(mocks.initial.zfs);
     expect(filesystem.fsInfo).toBe(mocks.initial);
+    expect(mocks.acknowledge).not.toHaveBeenCalled();
   });
 
   it('routes workspace upper requests to the owning core session', async () => {

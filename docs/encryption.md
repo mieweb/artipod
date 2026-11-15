@@ -54,6 +54,21 @@ crash-atomic: the existing transaction rollback defect under backing failures
 remains, so a failed operation can require recovery. Migration uses its own
 verified generation protocol and preserves original sources until commit.
 
+OPFS block publication writes ciphertext to an opaque, reserved staging file,
+closes its stream, then moves it to the numeric block name. Native OPFS file
+`move()` is required; an unavailable capability fails without an unsafe write
+fallback. A tab interrupted before publication can leave an empty or encrypted
+stage, while the previous numeric record remains intact. Opening authenticates
+the saved numeric records and nonempty stages before removing abandoned stages.
+Unknown names, empty numeric records, plaintext and corrupt ciphertext still
+fail opening with the backing records preserved. Stages are discarded rather
+than replayed, so this protocol does not add a transaction across multiple blocks
+or repair numeric records stranded by older versions. IndexedDB publishes each
+encrypted block in its own transaction and needs no staging files.
+`StorageSessionInfo.recoveryWarning` reports discarded interrupted stages so
+hosts can show that pending changes may not have been saved; the SPA displays
+that warning after reopening. Low-level mounts expose `recoveredStages`.
+
 Reset stops key renewal and new filesystem writes, drains
 accepted operations, and retains writer ownership until private storage deletion
 finishes. An expired key or failed final flush is reported as a warning while
@@ -70,6 +85,11 @@ installing the replacement. Recovery uses that fallback
 only when the primary name is absent; malformed or inaccessible primary JSON
 still fails visibly. Failed writes are observed independently of the broker lease
 so saved storage can be recovered without discarding tab-only editor drafts.
+The SPA retains registry save errors for the affected workspace fields;
+unrelated successful updates cannot acknowledge a lost change. A successful
+retry, explicit entry removal or authenticated recovery acknowledges only the
+covered failures. Recovery keeps its potentially-unsaved-changes warning, and
+mutations accepted after acknowledgement begins retain their own failures.
 
 The managed vault currently encrypts its blocks directly with the supplied key
 (the leased broker KEK in the SPA); it does not introduce independent per-layer
@@ -186,6 +206,23 @@ authenticates that key against saved ciphertext; a locked context does not
 silently adopt it during a filesystem read.
 Key custody can outlive one storage session; when the host ends that custody,
 call `keys.release()` and dispose its scheduler.
+
+A host preparing to reload must also finish work that has not yet reached the
+filesystem: drain its queued registry/probe writes, await `keys.flush()` for
+offline preferences and wrapped grant/device persistence, then await
+`session.flush()`. Logical `forcedOffline` state alone does not acknowledge a
+save. The SPA exposes `saveFileSystem()` to compose these producers with the
+final filesystem flush, including pending debounced work. Save failures reject
+and keep the page available for recovery; a timer delay is not a save boundary.
+Hosts should finish their own application operations and stop admitting new
+edits while preparing a reload. Work started after save completion belongs to
+the next save.
+
+Catalog verdicts describe cached heads and do not clear durable `unsynced` or
+`hasChanges` flags. Workspace operations own those acknowledgements. Matching a
+published blank or finding an empty inactive blank filters the catalog view
+while retaining local bytes and registry entries; a stale catalog response
+cannot authorize their deletion.
 
 ### Explicit memory and plaintext choices
 

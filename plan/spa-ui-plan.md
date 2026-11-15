@@ -250,6 +250,63 @@ Question to answer: is `@yorm/*` the right engine for **multi-editor** — concu
 
 ## Worklog
 
+### Interrupted browser saves — issue #129 (2026-10-22)
+
+- PR review follow-up (2026-10-23): retained registry failures by workspace and
+  field so a successful unrelated update cannot hide a lost `unsynced` change.
+  Successful retries and explicit deletion supersede only covered fields/entries.
+  Authenticated recovery acknowledges prior failures while preserving its
+  warning and any newer failures. SPA lint/typecheck and all 101 tests pass;
+  independent review reran 21 focused regression tests successfully.
+- Automated PR review follow-up: drain keys again after registry/storage I/O
+  to include renewals that start before their broker notification. Give each
+  catalog mount one producer for its initial and debounced scans, retiring it
+  synchronously on disposal so late failures cannot block a later workspace.
+  SPA lint/typecheck and 108 tests pass, including a held-renewal save test and
+  six catalog ownership/disposal cases; both fixes passed independent review.
+- Added `saveFileSystem()` / `window.__artipodSave()` as the host completion
+  boundary for intentional reloads. It drains registry mutations, debounced
+  probes, catalog refreshes through ancestry verdict publication, automatic/retry pushes
+  and lease adoption, then key-service and filesystem persistence. Automatic
+  edit pushes retain their two-second debounce but are scheduled by the host
+  instead of the core pod's independent timer, making accepted work drainable.
+- Catalog refreshes preserve durable `unsynced` and `hasChanges` flags when
+  publishing cached-head verdicts. Server requests and local scans share the
+  catalog lifetime; superseded scans cannot publish or sweep after a newer
+  scan starts. Published-blank reconciliation filters the view and preserves
+  local workspaces. Empty inactive blanks are also hidden only in the view;
+  catalog scans retain all local bytes and registry entries. SPA lint,
+  typecheck and 122 tests pass, including stale-response, overlapping-scan and
+  workspace-retention regressions.
+- Workspace probes dispatch online/offline only on state transitions, allowing
+  local saves to finish with `unsynced: true` during persistent remote failure.
+  Probes run in order so held older reads cannot overwrite newer edit flags;
+  interval/reconnect retries and later retries after probe failures still work.
+- Key-service flush repeats its drain when new work arrives during device/grant
+  I/O before checking pending preference errors. A held preference writer must
+  finish before the save can resolve or report its actual failure. Six new
+  core regressions pass, along with core lint/build/full typecheck, 990 Vitest
+  tests, 35 checkpoint tests and all 122 SPA tests.
+- Core key saves include active renewal principal lookup, authentication,
+  serialized device/grant writes and the latest offline preference. Failures
+  reject saves, and disposed producers release stale save obligations.
+- OPFS publishes closed encrypted stages through native file moves and
+  authenticates saved records before interrupted-stage cleanup. The existing
+  page alert displays the public session's warning when pending changes were
+  discarded. Empty numeric records and corrupt ciphertext still fail closed;
+  the broader ZenFS multi-block rollback limitation remains separate work.
+- The app harness uses the completion boundary, compares saved registry/grant
+  state after reload and exercises preference/registry overlap interrupted at
+  native create/write/close. CI requires both OPFS and IndexedDB app runs plus
+  the independent interruption harness. Dark-mode recovery reporting was
+  visually checked, with light text on the existing dark banner.
+- Verification: core `npm run lint`, `npm run build`, `npx tsc --noEmit` and
+  `npm test` pass (984 tests plus 35 checkpoint tests). SPA `npm run lint`,
+  `npm run typecheck` and `npm test` pass (96 tests). `npm run build:ui` passes
+  the version/struct-minifier assertions. Both actual-app backends, six native
+  interruption cases, migration checks and the packed native/browser consumer
+  pass, with zero private-marker leaks and no unhandled browser errors.
+
 ### Promotion review fixes — PR #83 (2026-10-21)
 
 - Workspace openings reserve teardown synchronously before a replacement boot,

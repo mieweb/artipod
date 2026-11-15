@@ -2,7 +2,8 @@
 import { createStorageSession, StorageClosePersistenceError, type StorageSession, type StorageSessionInfo, type StorageSessionSnapshot } from '@artipod/core/storage';
 import type { StorageBackend, ZenFsLike } from '@artipod/core/sandbox';
 import { loadBackendPref } from '@artipod/core/sandbox';
-import { keys } from './boot';
+import { acknowledgeUiStateRecovery, flushUiState, keys } from './boot';
+import { hostSave } from './services/host-save';
 
 export type ZenFs = ZenFsLike;
 export let fs: ZenFs;
@@ -43,6 +44,7 @@ export function registerFileSystemTeardown(close: () => Promise<void>, source?: 
 export function fileSystemNeedsRecovery(): boolean { return session?.needsRecovery() ?? false; }
 export async function initFileSystem(pref?: StorageBackend): Promise<StorageSessionInfo | null> {
   if (typeof window === 'undefined') return null;
+  (window as unknown as { __artipodSave: () => Promise<void> }).__artipodSave = saveFileSystem;
   const info = await storage(pref).open();
   fs = info.zfs; fsInfo = info;
   return info;
@@ -50,9 +52,21 @@ export async function initFileSystem(pref?: StorageBackend): Promise<StorageSess
 export async function recoverFileSystem(pref?: StorageBackend): Promise<{ info: StorageSessionInfo; warning: string }> {
   const result = await storage(pref).recover();
   fs = result.info.zfs; fsInfo = result.info;
+  await acknowledgeUiStateRecovery();
   return result;
 }
 export async function flushFileSystem(): Promise<void> { await session?.flush(); }
+/** Await queued host/service work and durability before intentionally reloading. */
+export async function saveFileSystem(): Promise<void> {
+  await hostSave.save(async () => {
+    await keys().flush();
+    await flushUiState();
+    await session?.flush();
+    // Renewal can begin while either storage drain awaits, before publishing
+    // a broker snapshot. Await it too; its host callbacks trigger another pass.
+    await keys().flush();
+  });
+}
 export async function resetFileSystem() {
   try { return await storage().reset(); }
   finally { fsInfo = null; }

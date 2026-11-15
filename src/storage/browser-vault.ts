@@ -51,6 +51,8 @@ export interface BrowserVault {
   encrypted: true;
   backend: VaultBackend;
   generation: string;
+  /** An interrupted record was discarded while reopening the saved generation. */
+  readonly recoveryWarning?: string;
   /** Authenticate a renewed key object before allowing cached access or writes. */
   adoptKey(candidate?: CryptoKey): Promise<void>;
   /** Deny cached metadata access when closed, resetting or using an unauthenticated key. */
@@ -328,6 +330,9 @@ export async function openBrowserVault(options: {
     });
     registerStorageRoot(exposed, { protection: 'encrypted', isOwned: () => owned, assertAccess: () => { assertOpen(); assertAccess(); } });
     return { filesystem: exposed, encrypted: true, backend: control.backend, generation: control.generation!, flush,
+      ...(filesystem.recoveredStages ? {
+        recoveryWarning: 'Storage reopened after an interrupted record write. Some pending changes may not have been saved; review your workspace before continuing.',
+      } : {}),
       assertAccess() { assertOpen(); assertAccess(); },
       async adoptKey(candidate = options.getKey()) {
         assertOpen();
