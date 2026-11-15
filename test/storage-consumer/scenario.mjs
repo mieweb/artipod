@@ -1,6 +1,6 @@
 /** Shared Node/browser exercise. Every library import is a published entry. */
 import { createZenFsPod } from '@artipod/core';
-import { createStorageSession, readStorageTextFile, writeStorageTextFile } from '@artipod/core/storage';
+import { createStorageSession, createArtifactStorage, readStorageTextFile, writeStorageTextFile } from '@artipod/core/storage';
 import { generateBlobKey, OciStore, SnapshotManager } from '@artipod/core/oci';
 
 const check = (condition, message) => { if (!condition) throw new Error(message); };
@@ -20,12 +20,14 @@ export const markersFor = id => ({
 
 export function injectedKeys(initial) {
   let current = initial;
+  const listeners = new Set();
   return {
     getKey: () => current,
     requireKey() { if (!current) throw new Error('Test key lease is released'); return current; },
     storagePolicy: 'encrypted',
     async suspendForReset() { return () => {}; },
-    setKey(key) { current = key; },
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    setKey(key) { current = key; for (const listener of listeners) listener(); },
   };
 }
 
@@ -62,6 +64,9 @@ export async function writeScenario(adapters, key, markers) {
   const session = createStorageSession({ keys: provider, adapters });
   const storage = await session.open();
   equal(storage.protection, 'encrypted', 'Protected session must be encrypted');
+  const artifact = createArtifactStorage({ session, reference: { artipodId: markers.ref, artifactId: markers.metadata }, authorize() {} });
+  const attachment = await artifact.put(new TextEncoder().encode(markers.payload), { mediaType: 'text/plain', filename: markers.filename });
+  const artifactSnapshot = await artifact.saveSnapshot(new TextEncoder().encode(JSON.stringify({ attachment, subject: markers.label })), { mediaType: 'application/json' });
   rejectUnrelatedSnapshotStore(storage);
   const metadata = { zfs: storage.zfs, path: '/.artipod/consumer-state.json', previousPath: '/.artipod/.consumer-state.previous' };
   await writeStorageTextFile(metadata, JSON.stringify({ metadata: markers.metadata, saved: false }));
@@ -94,7 +99,7 @@ export async function writeScenario(adapters, key, markers) {
   equal(await p.readFile(`${directory}/${markers.filename}`, 'utf8'), markers.payload, 'Restore must recover exact payload');
   check(!(await p.exists(`${directory}/later.txt`)), 'Restore must remove later files');
   await session.flush();
-  const saved = { generation: storage.generation, snapshot: snapshot.id, manifest: committed.manifestDigest, backend: storage.backend };
+  const saved = { generation: storage.generation, snapshot: snapshot.id, manifest: committed.manifestDigest, backend: storage.backend, artifactSnapshot, attachment };
   pod.dispose();
   await session.close();
   let stale;
@@ -108,6 +113,12 @@ export async function reopenScenario(adapters, key, markers, saved) {
   const session = createStorageSession({ keys: provider, adapters });
   const storage = await session.open();
   equal(storage.generation, saved.generation, 'Reopen must retain the saved generation');
+  const artifact = createArtifactStorage({ session, reference: { artipodId: markers.ref, artifactId: markers.metadata }, authorize() {} });
+  const current = await artifact.loadSnapshot();
+  equal(current?.revision, saved.artifactSnapshot, 'Artifact current revision survived reopen');
+  equal(JSON.parse(await new Response(current.source).text()), { attachment: saved.attachment, subject: markers.label }, 'Artifact snapshot contents survived reopen');
+  equal(await new Response(await artifact.read(saved.attachment)).text(), markers.payload, 'Immutable attachment survived reopen');
+  const activeRead = (await artifact.read(saved.attachment)).getReader();
   const pod = await createZenFsPod(manifest, { storage, storagePolicy: 'protected', proc: false });
   const p = storage.zfs.promises;
   const directory = `/workspace/${markers.directory}`;
@@ -126,12 +137,15 @@ export async function reopenScenario(adapters, key, markers, saved) {
   const layerIndex = JSON.parse(new TextDecoder().decode(await pod.oci.store.getBlob(layerIndexDigest)));
   check(JSON.stringify(layerIndex).includes(markers.filename), 'Filename metadata was lost from the persisted layer index');
   provider.setKey(null);
+  let revoked;
+  try { await activeRead.read(); } catch (error) { revoked = error; }
+  check(revoked, 'Lease release did not revoke an active Artifact read');
   let locked;
   try { await p.readFile(`${directory}/${markers.filename}`, 'utf8'); } catch (error) { locked = error; }
   check(locked, 'Lease release allowed cached reads');
   pod.dispose();
   try { await session.close(); } catch { /* Close must still release ownership after revoked access. */ }
-  return { files: 3, snapshots: snapshots.length, refs: 1, releasedCachedRead: true };
+  return { files: 3, snapshots: snapshots.length, refs: 1, artifactSnapshotReopened: true, artifactReadRevoked: true, releasedCachedRead: true };
 }
 
 export async function rejectWrongKey(adapters) {
