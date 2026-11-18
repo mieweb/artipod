@@ -114,6 +114,17 @@ recovery warning about potentially unsaved changes. `reset()` is terminal for
 that session controller, including after an erase failure: use a new controller
 or reload after completing/resetting storage. It cannot resume normal opening.
 
+For multiple independent pod identities inside one vault, create each pod's
+directory through the root context, then call `session.openDirectory(path)`.
+It returns a trusted `StorageContext` accepted by `createZenFsPod({ mounts },
+{ storage: child })`, with a separate OCI root and the owner's key checks,
+durability boundary, and lifetime. Paths must be canonical absolute paths to
+existing real directories; symlink components are rejected. Directory views
+are application confinement, not a sandbox against hostile JavaScript in the
+same realm. The host must not rename their roots while consumers are active.
+Close consumers through `registerTeardown()`; session close/recovery/reset
+invalidates cached child filesystems and releases their descriptors too.
+
 `readStorageTextFile` and `writeStorageTextFile` provide recoverable metadata
 replacement for hosts too. Supply the filesystem, primary path and a reserved
 fallback path in the same directory. The helper serializes reads and replacements per
